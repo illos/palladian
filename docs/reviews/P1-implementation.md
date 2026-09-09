@@ -1,0 +1,131 @@
+# P1 implementation — identity, sessions, startup
+
+Date: 2026-09-09. **Review candidate; P1 acceptance is blocked by reproduced stale-response and automatic-resume failures. Do not begin P2 or adopt this transport for real data.** This is an implementation report, not independent approval.
+
+## Phase and base/head commits
+
+Assigned scope: P1 only. Base: `147a8834dc8e7a6b6e577b6bbd2f5dcf08d6bb68` (P0 correction acceptance). Implementation commits: `f61a6a21d0083cf3c7f6a92ea7ba351921d16b33` (P1 candidate) and head `970d94145f3b7b3a382fb75c0eee1c7bd9b03f8b` (strict declaration compatibility, configuration guards and final lifecycle evidence). This report is a subsequent documentation-only commit. Owner's pre-existing edits to AGENTS.md and the three handoff/spec documents are preserved and excluded from implementation staging. Read the current workspace specification as well as the committed diff.
+
+Read the full platform specification, execution plan, ADR 0001, P0 implementation evidence, original independent review and its correction acceptance before implementation. Used Convex/expert/deployment-guard skill guidance and pinned installed package sources. No independent-review file was written and no protected-core self-approval was made.
+
+## Outcome and user-visible behavior
+
+Implemented an actual root Convex backend, operator-only private owner provisioning, transactionally stable platform identity, official browser sign-in/out, paginated session list/revoke, auth readiness/retry UI, and redacted diagnostic export. The themed shell and app registry render independently of the auth region. Account/sign-in UI is lazy. Device-session expiry remains 365 days with daily sliding and 900-second JWTs. Every protected operation checks the live server session.
+
+The priority was proving the official browser lifecycle before account UI polish. That proof found two local lifecycle blockers:
+
+1. **High — A07 delayed successful renewal from account A can overwrite account B's credential after logout and switch.** The regression completes A's sliding renewal on the server, holds its response, signs A out and B in through the real browser UI, releases A's old response, then asserts the official client still resolves B. It fails. A's server session remains revoked; this does not demonstrate an authorization bypass or private-content leak, but it can destroy the newer local sign-in state. The pinned adapter writes response cookies into the current jar without guarding the request's session generation.
+2. **A03 — automatic resume failed in the corrected production desktop freeze probe.** After actual JWT expiry plus verifier tolerance, the old token was denied. The page resumed without navigation, but no token response was observed and no distinct unexpired token appeared during the full 30-second observation window. This proves the local automatic-resume gate failed; it does not isolate a library versus integration root cause or establish phone behavior. No custom refresh lifecycle was added.
+
+The A07 regression retains its success assertion and still fails. Strict declaration compatibility was corrected without runtime changes or weaker checks. No runtime auth patch, custom rotation, proxy, weaker acceptance assertion, forced OAuth dependency, wildcard origin or disabled CSRF was added to make the lifecycle gate pass. [ADR 0002](../decisions/0002-p1-identity-sessions-recovery.md) contains a concrete request-generation correction proposal for independent review. Existing P1 code must remain development-only until the protected lifecycle correction and automatic-resume failure are reviewed and retested.
+
+**Correction to the preliminary callback diagnosis:** the first origin probe failed the OTT-disabled-path assertion; its unformatted failure line was initially misinterpreted as callback acceptance. The final isolated run passes hostile callback rejection with the exact HTTP 403 / `INVALID_CALLBACK_URL` response, hostile credentialed preflight rejection, preserved original session and disabled OTT HTTP 404. No callback runtime fix was applied. There is no confirmed callback-acceptance defect in the final local setup. P0's Node-Origin observation and all hosted trust checks remain limitations.
+
+## Changed files and why
+
+| Paths | Purpose |
+|---|---|
+| `convex/schema.ts`, `convex/platform/identity.ts` | Stable platform user table/index, transactional first-login mapping and centralized live identity validation |
+| `convex/auth.ts`, `auth.config.ts`, `convex.config.ts`, `http.ts`, `platform/config.ts` | Pinned official integration, private public surface, exact origin configuration and unchanged long-session/short-JWT policy |
+| `convex/provision.ts`, `scripts/provision-owner.mjs`, `scripts/setup-local-auth.mjs` | Operator-only library credential provisioning; local utility suppresses sensitive CLI output |
+| `convex/platform/sessions.ts` | Scoped pagination and server-only token resolution for library revoke API |
+| `convex/_generated/*` | Actual Convex CLI-generated model/API/server files; never manually fabricated |
+| `apps/web/src/auth/` | Official client/provider, readiness/retry, private state disposal, sign-in/out/session UI, bounded allowlisted diagnostics |
+| `apps/web/src/main.tsx`, `config.d.ts`, Vite config | Shell independent of auth, lazy account UI and typed build-owned public URL configuration |
+| `patches/`, lock/workspace/package/typecheck config | Declaration-only compatibility corrections, separate Bun/auth and Vite/tooling type environments, reproducible strict checks |
+| `tests/auth/` | Actual browser/local-service scenarios, stale-response regression, real-time resume, production timing/export |
+| Boundary/bundle scripts and tests, CI metadata | Narrow host-only generated API/client imports; include required auth runtime in budget; retain all P0 protections |
+| ADR 0002, README, this report | Protected-core decisions/proposals, A08 design, reproduction instructions and evidence limits |
+
+No workspaces, instances, apps with persistence, files, R2, agent grants, OAuth provider, MCP endpoints, custom-host bindings, P2 features or production deployment were added. Deltos remained untouched.
+
+## Protected contracts touched
+
+Identity mapping, browser session startup/storage/disposal, live session authorization, private provisioning and session revocation. The implemented transport is a candidate, not an accepted change. Configuration explicitly rejects wildcard/credential-bearing/non-origin entries and non-HTTPS schemes except HTTP localhost; it requires a configured secret of at least 32 characters rather than allowing a library fallback. These enforce the existing exact-origin/explicit-secret policy and do not alter the valid local configuration. The lifecycle failures above block adoption. Session policy is exactly `expiresIn=31_536_000`, `updateAge=86_400`, `freshAge=86_400`, sliding enabled, cookie cache disabled, client session-data cache disabled, access JWT 900 seconds, with Convex's five-second custom-JWT verifier clock-skew tolerance. Credential storage is JavaScript-readable localStorage, not HttpOnly cookies: the official cross-domain jar holds the long `better-auth.session_token` and the adapter's 900-second `better-auth.convex_jwt` cookie. The provider also caches JWTs in memory; the JWT is not memory-only. Client session/profile-data caching remains disabled. Hosted origins still need a real proof.
+
+Explicit logout hides private state before network completion. The official adapter clears local credentials at signout request initialization; failed network signout therefore reports that server revocation is unconfirmed. It does not claim unrelated devices/grants were revoked. Transient startup/renewal errors retain credentials and present retry, never directly force sign-in. React client disposal waits until nested provider cleanup finishes; the initial implementation's premature close error was reproduced and corrected before the final short suite passed.
+
+Session list/revoke derive the live provider user and enforce same-user ownership; tokens never appear in platform API results. The identity helper maps verified subjects to platform IDs. P2 must consistently use this boundary for future workspace/resource ownership. No raw provider session is supplied to app host props.
+
+## Pinned dependencies and compatibility evidence
+
+Auth runtime unchanged: Better Auth **1.6.30**, Convex adapter **0.12.5**, Convex **1.45.0**. React/DOM 19.3.0, Vite 8.2.2, TypeScript 7.0.2, pnpm 11.5.3 and Node runtime 24.18.0 remain pinned. OAuth-provider 1.7.3 remains absent and incompatible; resolving it is P5 work.
+
+Browser imports uncovered declaration errors not exercised by P0's server spike. Three checked-in patched packages correct only declarations: adapter `AuthClient` tuple inference and a regenerated component schema declaration; Better Auth's generic `role` return declaration; Better Fetch 1.3.1's explicit-undefined support on optional option/hook fields. The adapter schema declaration was generated by the actual pinned TypeScript toolchain from unchanged packaged source, not fabricated or hand-edited Convex `_generated` files. Required property/value types remain enforced; `tests/auth/types.ts` rejects missing/non-string passwords, invalid cache modes and plain-string platform identities. Patches must be reviewed and removed when compatible upstream declarations pass these checks.
+
+Final typechecking retains strict mode, library checking and the original `exactOptionalPropertyTypes: true`. A diagnostic run disabling the latter isolated the declaration incompatibility, but that relaxation is **not retained**; the final full typecheck passes with declaration-only corrections. Vite/Bun conflicting ImportMeta globals are separated by typecheck projects. Node declaration support moves to the already-pinned spike's 26.4.0; runtime remains Node 24, and no Node 26 APIs are adopted. No `any` escape hatch, ignored error or `skipLibCheck` was added. ADR 0002 includes the declaration generation command and rationale. All 47 adapter, 257 Better Auth and two Better Fetch runtime JavaScript files were compared byte-for-byte across the patches and are unchanged; the installed component schema declaration exactly matches the pinned compiler's generated output.
+
+`pnpm install --frozen-lockfile --strict-peer-dependencies` passes with the patches. `pnpm audit --audit-level=moderate` reports no known vulnerabilities at this check; it is not a long-term maintenance guarantee. The P0 sharp override is retained.
+
+## Acceptance IDs → commands, observations and limits
+
+| ID | Test / result | Acceptance scope |
+|---|---|---|
+| A01 | `node tests/auth/p1.mjs`: eight simultaneous official-client token demands per page across two real shared-storage tabs, real provider subscriptions, stable mapping race | Local browser/service scenario passes. Actual PWA/iPhone independent installations remain pending; no grants exist |
+| A02 | Same: server completes daily sliding renewal, browser response is dropped before adapter processing, old credential is retained and retry gets the renewed session. Successful token response delayed over 4 seconds also survives | Local pass, stronger than P0's header-jar JWT discard. The separate old-account delayed response fails A07 |
+| A03 | `pnpm test:auth:resume`: production-build tab frozen until real 900-second JWT expiry, old JWT must fail on real server, then observe automatic provider token acquisition without reload or imperative token demand | **Blocked locally.** Old-token denial and no-navigation checks passed; no token response or distinct valid token appeared within 30 seconds after thaw. Chromium lifecycle control is not iPhone/PWA proof |
+| A04 | Short suite injects HTTP 429, HTTP 503, network timeout/abort during token acquisition and startup, plus a held startup request over 3 seconds; shell stays visible, no false sign-in, credential equality checked, retry restores protected UI | Local real integration with controlled transport faults passes; no actual provider outage or phone result claimed |
+| A05 | Short suite obtains positive protected access, revokes A from B, confirms JWT still unexpired, denies A's query/mutation, and confirms B's same stable identity survives. Cross-user revoke targets a live session and is denied while that owner's positive access survives | Device revocation local pass. Agent-grant independence remains P5, not faked by a dummy grant |
+| A06 | Short suite checks initial 365-day session/900-second JWT, immediately before/after daily update threshold, old creation timestamps without a hidden idle cutoff, just-before expiry sliding and just-after expiry denial | Real Better Auth/Convex calls with admin-only fixture timestamp changes pass. Production code contains no test clock or bypass |
+| A07 | Normal logout, account switch, private region disposal, cross-user session scope, shared-tab logout and failed-signout semantics pass in short suite. `node tests/auth/stale-response.mjs` **fails** the delayed old-account sliding response assertion | **Blocked.** No A07/full-P1 pass. Actual app titles/drafts/snippets do not exist yet; P2/P4 must extend the cleared boundary and recoverable draft behavior |
+| A08 | ADR 0002 proposes library reset + optional TOTP behavior and explicitly retains phrase-recovery review requirement | Design written; not independently reviewed or implemented. Carried to P9; real data blocked |
+| U01 | Short suite asserts shell visibility under delayed/failed auth. `node tests/auth/performance.mjs` measures real production browser FCP and authenticated account data separately; `tests/browser/shell.spec.ts` tests theme/storage/chunk faults | Local desktop evidence passes. Owner iPhone/network/cache budgets still pending |
+| Transport | `node tests/auth/origins.mjs`: registered authenticated client succeeds; hostile browser preflight blocks credentialed signout and preserves session; hostile callback returns HTTP 403 / `INVALID_CALLBACK_URL`; OTT returns 404 | Local browser pass. Hosted adoption remains pending and P0 Node-origin observation is retained |
+| Redaction | Production timing/export test parses the actual downloaded export and requires only version, known reason codes and numeric timings | Pass for implemented diagnostics; no resource/editor/file/agent diagnostics exist yet |
+
+## Real integrations, mocks and device evidence
+
+Actual anonymous root Convex backend on loopback 3214/3215, actual Better Auth component, actual CLI generation/push, official browser client/provider, real browser localStorage reloads and shared-context tabs. Fixtures use random credentials held in memory; privileged setup and session timestamps use local admin CLI calls with output suppressed. No fake auth/database implementation or identity injection is deployed. Provisioning is internal operator functionality, not a production test bypass.
+
+The short suite uses Vite development serving. Production timing and the clean real-expiry run use the built static assets served by Vite preview on the registered localhost:5173 origin. Production shell tests also use a separate local preview on 4173, whose auth origin is intentionally unregistered: those tests prove shell behavior, not successful auth at that origin. Chromium 153.0.8010.12 / Playwright 1.63.0 on Linux headless. Six P0 shell tests pass in desktop and Pixel 7 viewport emulation.
+
+Mock/fault boundaries: Playwright routes deliberately fulfill 429/503, abort network requests, hold responses or discard a response **after real server success**. Session-age tests modify disposable Better Auth component rows using deployment-admin access; server code and real hashing/JWT/session implementations are unchanged. P0 shell tests simulate unavailable localStorage and a failed app chunk. Import tests use source fixtures. These controlled faults are not real service outages. No browser trace, raw storage export, secret-bearing URL, password, session token, recovery material or private content is logged/committed.
+
+No Safari/WebKit, real iPhone, installed PWA, actual Cloudflare serving, hosted Convex HTTPS origins, DNS/custom hostname, R2, real MCP client, agent grant or recovery/TOTP check was performed. Hosted CI itself was not run. Early development resume attempts were cancelled while refining the observation test and while source changed. The first clean production run checked at encoded JWT expiry +2 seconds and did not throw; its harness did not distinguish a null denial from authorized data, so it stopped before resume without a valid negative result. Investigation of the official Convex verifier found its five-second clock-skew allowance, so the corrected final test waits until expiry +6 seconds and accepts the query's documented null denial as well as an expired-auth exception. An intervening rerun was cancelled before expiry to apply that timing correction. No runtime policy was changed. Those incomplete attempts are not resume acceptance evidence; only the final clean production-build run is eligible below.
+
+## Performance
+
+Production bundle: **104,296 bytes gzip** for shell + immediately requested required auth runtime (101.85 KiB), against 204,800 bytes. Login/account/app entries remain separate lazy chunks; no editor/voice/Deck/PDF/inactive app runtime enters this closure. Static shell-only cost is 70,692 bytes. The budget script now counts required auth even though it is asynchronously loaded; it does not exploit lazy loading to omit auth cost.
+
+Production timing conditions: six fresh Chromium contexts with persisted fixture credential copied **only in memory** (cold HTTP cache), each followed by one reload in the same context (warm cache). Linux headless, loopback network, no CPU/network throttling. Browser FCP is measured from PerformancePaintTiming; authenticated-data marker is emitted only after a positive protected identity query. The separate bootstrap rAF marker is not mislabeled as paint.
+
+| Production measurement | Median | p95 (nearest-rank, n=6) |
+|---|---:|---:|
+| Cold FCP | 58 ms | 72 ms |
+| Cold authenticated data | 550.5 ms | 921.2 ms |
+| Warm FCP | 26 ms | 36 ms |
+| Warm authenticated data | 476.55 ms | 481.7 ms |
+
+Cold FCP samples: 72, 60, 56, 60, 56, 56 ms. Warm: 20, 32, 36, 20, 20, 32 ms. Small local samples are not owner-device budget acceptance. First sign-in/password entry latency is excluded; these are persisted-session launches. No collaboration/save/file latency exists in P1. The short suite also reports dev-server timings; those are not substituted for these production figures.
+
+## Checks and carried P0 limitations
+
+Locally passed: the final strict typecheck (SDK/tooling, web including auth type regressions, and backend); import lint; six boundary tests and three pure auth-configuration tests; production build and auth-inclusive bundle gate; `pnpm format:check`; `pnpm test:browser` (six); `pnpm hosting:check` (Wrangler dry run only); `pnpm --filter @palladian/auth-spike typecheck`; strict frozen dependency install; advisory audit; `git diff --check`; the 11-scenario short real-auth suite; and production timing/export. The A07 stale-response regression still fails; the corrected A03 automatic-resume regression fails and is not a pass. The final origin probe passes. Static checks do not replace the separately documented actual-auth tests. The final strict typecheck, lint, nine tests and formatting checks were rerun successfully during the final freeze; served assets were not rebuilt.
+
+All P0 evidence limitations are carried: real iPhone/Safari/PWA install/background/storage behavior; hosted Cloudflare/Convex CORS/CSRF and hostname trust; social/OTT/OAuth callbacks before enabling them; final owner-device median/p95 budgets; recovery/phrase/TOTP; independent agent-grant lifecycles; P2 authorization/data, R2/files, collaboration, schedules, input/voice/Deck, exports/restore, custom domains, release operations and real MCP-client compatibility. Some local P1 auth evidence is now stronger, but none closes those external/device/downstream items. The prior P0 service probes were not rerun as though they were new evidence; the P0 spike remains intact and its typecheck passed.
+
+MCP remains SDK v2 / protocol 2026-07-28 only in the plan; no protocol package or legacy fallback was installed. The incompatible OAuth-provider dependency remains P5. No old migration/cutover plan was executed.
+
+## Spec deviations and review decisions needed
+
+Review the A07 protected-boundary correction proposal and A03 automatic-resume investigation in ADR 0002 before further lifecycle implementation. No session-policy relaxation is proposed. Review the declaration-only patches and their actual-toolchain generation evidence while retaining the original checks. A08 phrase recovery remains unresolved and must not be replaced silently with email or operator recovery. Diagnose the failed A03 automatic recovery with safe provider/connection timing evidence, then rerun the existing distinct-token and protected-data assertions before claiming recovery. Do not introduce a custom refresh lifecycle to make that probe green. No downstream phase may use the currently failing lifecycle as an accepted foundation.
+
+## Reproduce and revert
+
+Follow README's P1 setup with a fresh anonymous local deployment and fixture secret; do not use production or cloud overrides. Public auth configuration uses exactly localhost:5173. `pnpm dev` is needed for the short/direct-module probes; static Vite preview at the same registered port is needed for production timing and real-time expiry checks. Do not run both on that port. Run the short suite, origin probe and stale-response regression individually; the stale-response file fails. Run the long resume probe separately; its corrected full-window observation also fails. The real-expiry check takes roughly 16 minutes and must not be interrupted by source rebuilds/reloads. Fixtures remain in ignored local state; never import/adopt that state as real data.
+
+Revert this report commit, then `970d94145f3b7b3a382fb75c0eee1c7bd9b03f8b` and `f61a6a21d0083cf3c7f6a92ea7ba351921d16b33` in that order if needed, preserving the owner's specification edits. No external infrastructure rollback is necessary. Stop local processes before any separately authorized disposal of fixture state; do not remove shared Convex state or the read-only Deltos reference.
+
+## Next checkpoint
+
+Stop for the owner's independent P1 protected-core review. **P1 is not accepted, and P2 is not permitted on these failures.** The next implementation work should be a specifically reviewed P1 correction to the lifecycle/transport findings, followed by rerunning the same assertions and independent re-review. No production deployment is authorized.
+
+## Final validation addendum
+
+The corrected `pnpm test:auth:resume` completed at 19:52:58 UTC against unchanged production assets. Its safe diagnostic result was `{expiredJwtDenied:true,resumedWithoutNavigation:true,tokenResponseObserved:false,distinctUnexpiredTokenObserved:false}`. The original 900-second JWT was denied after encoded expiry +6 seconds, beyond the five-second verifier tolerance. After thaw, the observer waited the full 30 seconds for a token distinct from the original with a future expiry. None was observed. **A03 fails locally.** The positive post-resume protected-data assertion was not reached. A real iPhone/PWA remains pending regardless.
+
+The preceding probe could stop on any observed response, including a late initial response; that preliminary failure was ambiguous. The final probe corrects that observer without changing runtime behavior or weakening the success assertion. The final failure establishes the local gate result, not its root cause. Investigate the existing official provider's renewal scheduling/connection lifecycle and this integration, with redacted timing/status evidence; any protected lifecycle correction requires review before implementation. Do not introduce imperative token demands into this acceptance probe.
+
+The final freeze used unchanged production frontend assets. Declaration-only corrections and exact-origin/explicit-secret checks were complete before it started; all library runtime bytes and the valid localhost/secret/session policy remained unchanged. Actual-host/phone evidence is not implied. The final short suite also strengthens public-signup rejection to a previously nonexistent address with the exact disabled-signup code, checks both persisted credential lifetimes, and targets a live other-owner session in the negative revoke test.
+
+After the final freeze, the strengthened 11-scenario short suite passed in full. The production build and 104,296-byte auth-inclusive bundle gate passed again with unchanged asset hashes. Owned local frontend/backend processes were stopped after validation; ignored disposable fixture state was retained.
