@@ -40,9 +40,9 @@ For a private owner, create an ignored, owner-readable `.env.provision.local` wi
 With the local backend and Vite **development** server running:
 
 - `node tests/auth/p1.mjs`: real official-browser/session suite with controlled network faults and admin-only fixture timestamps.
-- `node tests/auth/origins.mjs`: real authenticated browser preflight and callback checks; **currently fails hostile callback rejection**. Port 5176 must be free for the untrusted-origin fixture.
+- `node tests/auth/origins.mjs`: real authenticated browser preflight and callback checks, including exact invalid-callback rejection and disabled OTT. Port 5176 must be free for the untrusted-origin fixture.
 - `node tests/auth/stale-response.mjs`: real delayed-sliding/account-switch regression; **currently fails**.
-- `pnpm test:auth:p1`: aggregate short gate; intentionally exits nonzero while the transport findings remain unresolved. Run individual files to see both failures because the aggregate stops at the first.
+- `pnpm test:auth:p1`: aggregate short gate; intentionally exits nonzero while the transport findings remain unresolved. Run the long resume check separately; the corrected desktop automatic-resume gate also fails.
 
 For the production-build desktop resume/timing checks, stop the Vite development server, run `pnpm build`, then `pnpm exec vite preview --config apps/web/vite.config.ts --port 5173` while keeping the same local Convex backend running:
 

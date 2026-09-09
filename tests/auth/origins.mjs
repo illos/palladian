@@ -92,7 +92,10 @@ try {
       ...user,
       callbackURL: "https://attacker.invalid/callback",
     });
-    return !!response.error && response.error.status >= 400;
+    return (
+      response.error?.status === 403 &&
+      response.error?.code === "INVALID_CALLBACK_URL"
+    );
   }, user);
   assert(callbackRejected);
 

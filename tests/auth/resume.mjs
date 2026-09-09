@@ -1,4 +1,4 @@
-// Actual 900-second JWT expiry; no shortened session/JWT policy or fake clock.
+// Actual 900-second JWT expiry plus the Convex verifier's five-second clock-skew tolerance; no shortened policy or fake clock.
 import { chromium } from "@playwright/test";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api.js";
@@ -68,9 +68,9 @@ try {
   // Freeze the actual tab's JS lifecycle while its access credential expires on the real server.
   const cdp = await context.newCDPSession(page);
   await cdp.send("Page.setWebLifecycleState", { state: "frozen" });
-  while (Date.now() < expires + 2000) {
+  while (Date.now() < expires + 6000) {
     await new Promise((r) =>
-      setTimeout(r, Math.min(30000, expires + 2000 - Date.now())),
+      setTimeout(r, Math.min(30000, expires + 6000 - Date.now())),
     );
     console.log(
       "Waiting for real 900-second access JWT expiry; page remains frozen.",
@@ -78,19 +78,39 @@ try {
   }
   let denied = false;
   try {
-    await client.query(api.platform.identity.current, {});
+    denied = (await client.query(api.platform.identity.current, {})) === null;
   } catch {
     denied = true;
   }
   assert(denied, "Expired JWT must fail on real server");
   await cdp.send("Page.setWebLifecycleState", { state: "active" });
   await page.bringToFront();
+  function hasFreshToken() {
+    if (typeof automaticToken !== "string" || automaticToken === token)
+      return false;
+    try {
+      const claims = JSON.parse(
+        Buffer.from(automaticToken.split(".")[1], "base64url").toString(),
+      );
+      return typeof claims.exp === "number" && claims.exp * 1000 > Date.now();
+    } catch {
+      return false;
+    }
+  }
   const deadline = Date.now() + 30000;
-  while (Date.now() < deadline && !automaticToken)
+  while (Date.now() < deadline && !hasFreshToken())
     await new Promise((r) => setTimeout(r, 500));
+  console.log(
+    JSON.stringify({
+      expiredJwtDenied: denied,
+      resumedWithoutNavigation: !navigated,
+      tokenResponseObserved: automaticToken !== null,
+      distinctUnexpiredTokenObserved: hasFreshToken(),
+    }),
+  );
   assert(!navigated, "Resume must not reload the document");
   assert(
-    typeof automaticToken === "string" && automaticToken !== token,
+    hasFreshToken(),
     "Official provider must automatically renew on resume without a direct token demand",
   );
   client.setAuth(automaticToken);

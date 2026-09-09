@@ -113,15 +113,39 @@ try {
       "content-type": "application/json",
       origin: "http://localhost:5173",
     },
-    body: JSON.stringify(owner),
+    body: JSON.stringify({
+      ...owner,
+      email: `public-${randomBytes(8).toString("hex")}@example.invalid`,
+    }),
   });
-  assert(signup.status >= 400);
+  assert(signup.status === 400);
+  assert((await signup.json()).code === "EMAIL_PASSWORD_SIGN_UP_DISABLED");
   pass(scenario);
   scenario = "official client sign-in, stable identity and reload";
   await login(page, owner);
   let { c, token } = await http(page);
   const original = await c.query(api.platform.identity.current, {});
   assert(original?.id);
+  const persisted = await page.evaluate(() => {
+    const jar = JSON.parse(localStorage.getItem("palladian_cookie") ?? "{}");
+    const names = Object.keys(jar);
+    const long = names.find((key) => key.endsWith(".session_token"));
+    const short = names.find((key) => key.endsWith(".convex_jwt"));
+    return {
+      longSession:
+        !!long &&
+        typeof jar[long].value === "string" &&
+        new Date(jar[long].expires).getTime() > Date.now() + 360 * 86400000,
+      shortJwt:
+        !!short &&
+        typeof jar[short].value === "string" &&
+        new Date(jar[short].expires).getTime() <= Date.now() + 901000,
+    };
+  });
+  assert(
+    persisted.longSession && persisted.shortJwt,
+    "Record both officially persisted credential lifetimes",
+  );
   const ids = await Promise.all(
     Array.from({ length: 8 }, () =>
       c.mutation(api.platform.identity.ensure, {}),
@@ -294,6 +318,16 @@ try {
   const owned = await ownerHttp.query(api.platform.sessions.list, {
     cursor: null,
   });
+  // Keep a live A session while switching the first browser to B; a deleted target
+  // cannot prove that the per-user ownership check actually rejects access.
+  await login(second, owner);
+  const liveOwnerHttp = (await http(second)).c;
+  const liveOwnerSessions = await liveOwnerHttp.query(
+    api.platform.sessions.list,
+    { cursor: null },
+  );
+  const liveOwnerSession = liveOwnerSessions.page.find((s) => s.current);
+  assert(liveOwnerSession);
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   assert((await page.getByTestId("private-account").count()) === 0);
   await page.getByLabel("Email", { exact: true }).waitFor();
@@ -305,12 +339,16 @@ try {
   let forbidden = false;
   try {
     await otherHttp.action(api.platform.sessions.revoke, {
-      id: owned.page[0].id,
+      id: liveOwnerSession.id,
     });
   } catch {
     forbidden = true;
   }
   assert(forbidden);
+  assert(
+    (await liveOwnerHttp.query(api.platform.identity.current, {}))?.id ===
+      original.id,
+  );
   assert(
     (
       await otherHttp.query(api.platform.sessions.list, { cursor: null })
@@ -358,6 +396,7 @@ try {
   });
   await peer.close();
   pass(scenario);
+  await second.getByRole("button", { name: "Sign out", exact: true }).click();
   await secondContext.close();
   await context.close();
   console.log(

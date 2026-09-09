@@ -1,0 +1,65 @@
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index 8ec3ffeab4634993e94132ad367870c6f894a963..bb19ba39b424357cb62089c0945c6d3eeafcf79d 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -1,3 +1,6 @@
++type WithOptionalUndefined<T> = {
++    [K in keyof T]: T[K] | ({} extends Pick<T, K> ? undefined : never);
++};
+ type RetryCondition = (response: Response | null) => boolean | Promise<boolean>;
+ type LinearRetry = {
+     type: "linear";
+@@ -120,7 +123,7 @@ type Schema = {
+     config: SchemaConfig;
+ };
+ 
+-type CreateFetchOption = BetterFetchOption & {
++type CreateFetchOption = WithOptionalUndefined<BetterFetchOption & {
+     schema?: Schema;
+     /**
+      * Catch all error including non api errors. Like schema validation, etc.
+@@ -129,7 +132,7 @@ type CreateFetchOption = BetterFetchOption & {
+     catchAllError?: boolean;
+     defaultOutput?: StandardSchemaV1;
+     defaultError?: StandardSchemaV1;
+-};
++}>;
+ type WithRequired<T, K extends keyof T | never> = T & {
+     [P in K]-?: T[P];
+ };
+@@ -346,7 +349,7 @@ type ErrorContext = {
+     request: RequestContext;
+     error: BetterFetchError & Record<string, any>;
+ };
+-interface FetchHooks<Res = any> {
++type FetchHooks<Res = any> = WithOptionalUndefined<{
+     /**
+      * a callback function that will be called when a
+      * request is made.
+@@ -389,7 +392,7 @@ interface FetchHooks<Res = any> {
+          */
+         cloneResponse?: boolean;
+     };
+-}
++}>;
+ /**
+  * A plugin that returns an id and hooks
+  */
+@@ -516,7 +519,7 @@ type FetchEsque = (input: string | URL | globalThis.Request, init?: RequestInit)
+ type PayloadMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+ type NonPayloadMethod = "GET" | "HEAD" | "OPTIONS";
+ type Method = PayloadMethod | NonPayloadMethod;
+-type BetterFetchOption<Body = any, Query extends Record<string, any> = any, Params extends Record<string, any> | Array<string> | undefined = any, Res = any, ExtraOptions extends Record<string, any> = {}, Headers extends Record<string, string> = {}> = Prettify<ExtraOptions & Omit<RequestInit, "body" | "headers"> & FetchHooks<Res> & {
++type BetterFetchOption<Body = any, Query extends Record<string, any> = any, Params extends Record<string, any> | Array<string> | undefined = any, Res = any, ExtraOptions extends Record<string, any> = {}, Headers extends Record<string, string> = {}> = Prettify<WithOptionalUndefined<ExtraOptions & Omit<RequestInit, "body" | "headers"> & FetchHooks<Res> & {
+     /**
+      * a timeout that will be used to abort the
+      * request. Should be in milliseconds.
+@@ -621,7 +624,7 @@ type BetterFetchOption<Body = any, Query extends Record<string, any> = any, Para
+      * Abort signal
+      */
+     signal?: AbortSignal | null;
+-}>;
++}>>;
+ type Data<T> = {
+     data: T;
+     error: null;

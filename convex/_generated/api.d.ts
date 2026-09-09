@@ -10,6 +10,7 @@
 
 import type * as auth from "../auth.js";
 import type * as http from "../http.js";
+import type * as platform_config from "../platform/config.js";
 import type * as platform_identity from "../platform/identity.js";
 import type * as platform_sessions from "../platform/sessions.js";
 import type * as provision from "../provision.js";
@@ -23,6 +24,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   http: typeof http;
+  "platform/config": typeof platform_config;
   "platform/identity": typeof platform_identity;
   "platform/sessions": typeof platform_sessions;
   provision: typeof provision;

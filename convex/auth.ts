@@ -4,23 +4,15 @@ import { betterAuth, type BetterAuthOptions } from "better-auth/minimal";
 import { components } from "./_generated/api";
 import type { DataModel } from "./_generated/dataModel";
 import authConfig from "./auth.config";
+import { requireAuthSecret, requireFrontendOrigin } from "./platform/config";
 export const authComponent = createClient<DataModel>(components.betterAuth);
 export function authOptions(ctx: GenericCtx<DataModel>) {
-  const siteUrl = process.env.SITE_URL;
+  const siteUrl = requireFrontendOrigin(process.env.SITE_URL);
   const baseURL = process.env.CONVEX_SITE_URL;
-  if (!siteUrl || !baseURL)
-    throw new Error("Auth origin configuration missing");
-  const origin = new URL(siteUrl);
-  if (
-    origin.origin !== siteUrl ||
-    (origin.protocol !== "https:" && origin.hostname !== "localhost")
-  ) {
-    throw new Error(
-      "Auth requires an exact HTTPS frontend origin (localhost development allowed)",
-    );
-  }
+  if (!baseURL) throw new Error("Auth HTTP origin configuration missing");
   return {
     baseURL,
+    secret: requireAuthSecret(process.env.BETTER_AUTH_SECRET),
     trustedOrigins: [siteUrl],
     database: authComponent.adapter(ctx),
     logger: { disabled: true },

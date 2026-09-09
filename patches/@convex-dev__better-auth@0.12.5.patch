@@ -1,3 +1,532 @@
+diff --git a/dist/component/schema.d.ts b/dist/component/schema.d.ts
+index 2666ea19ac94ad0255380392fb4930c7c7d22a93..5923012a21a61f8aa7c652237b7a4fb8ed1e0e02 100644
+--- a/dist/component/schema.d.ts
++++ b/dist/component/schema.d.ts
+@@ -10,19 +10,19 @@
+  */
+ export declare const tables: {
+     user: import("convex/server").TableDefinition<import("convex/values").VObject<{
+-        image?: string | null | undefined;
+-        userId?: string | null | undefined;
+-        twoFactorEnabled?: boolean | null | undefined;
+-        isAnonymous?: boolean | null | undefined;
+-        username?: string | null | undefined;
+-        displayUsername?: string | null | undefined;
+-        phoneNumber?: string | null | undefined;
+-        phoneNumberVerified?: boolean | null | undefined;
+         createdAt: number;
+-        updatedAt: number;
++        displayUsername?: string | null;
+         email: string;
+         emailVerified: boolean;
++        image?: string | null;
++        isAnonymous?: boolean | null;
+         name: string;
++        phoneNumber?: string | null;
++        phoneNumberVerified?: boolean | null;
++        twoFactorEnabled?: boolean | null;
++        updatedAt: number;
++        userId?: string | null;
++        username?: string | null;
+     }, {
+         name: import("convex/values").VString<string, "required">;
+         email: import("convex/values").VString<string, "required">;
+@@ -37,21 +37,21 @@ export declare const tables: {
+         phoneNumber: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+         phoneNumberVerified: import("convex/values").VUnion<boolean | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VBoolean<boolean, "required">], "optional", never>;
+         userId: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+-    }, "required", "createdAt" | "updatedAt" | "email" | "emailVerified" | "name" | "image" | "userId" | "twoFactorEnabled" | "isAnonymous" | "username" | "displayUsername" | "phoneNumber" | "phoneNumberVerified">, {
++    }, "required", "createdAt" | "displayUsername" | "email" | "emailVerified" | "image" | "isAnonymous" | "name" | "phoneNumber" | "phoneNumberVerified" | "twoFactorEnabled" | "updatedAt" | "userId" | "username">, {
+         email_name: ["email", "name", "_creationTime"];
+         name: ["name", "_creationTime"];
++        phoneNumber: ["phoneNumber", "_creationTime"];
+         userId: ["userId", "_creationTime"];
+         username: ["username", "_creationTime"];
+-        phoneNumber: ["phoneNumber", "_creationTime"];
+     }, {}, {}>;
+     session: import("convex/server").TableDefinition<import("convex/values").VObject<{
+-        ipAddress?: string | null | undefined;
+-        userAgent?: string | null | undefined;
+         createdAt: number;
+-        updatedAt: number;
+-        userId: string;
+         expiresAt: number;
++        ipAddress?: string | null;
+         token: string;
++        updatedAt: number;
++        userAgent?: string | null;
++        userId: string;
+     }, {
+         expiresAt: import("convex/values").VFloat64<number, "required">;
+         token: import("convex/values").VString<string, "required">;
+@@ -60,25 +60,25 @@ export declare const tables: {
+         ipAddress: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+         userAgent: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+         userId: import("convex/values").VString<string, "required">;
+-    }, "required", "createdAt" | "updatedAt" | "userId" | "expiresAt" | "token" | "ipAddress" | "userAgent">, {
++    }, "required", "createdAt" | "expiresAt" | "ipAddress" | "token" | "updatedAt" | "userAgent" | "userId">, {
+         expiresAt: ["expiresAt", "_creationTime"];
+         expiresAt_userId: ["expiresAt", "userId", "_creationTime"];
+         token: ["token", "_creationTime"];
+         userId: ["userId", "_creationTime"];
+     }, {}, {}>;
+     account: import("convex/server").TableDefinition<import("convex/values").VObject<{
+-        password?: string | null | undefined;
+-        accessToken?: string | null | undefined;
+-        refreshToken?: string | null | undefined;
+-        idToken?: string | null | undefined;
+-        accessTokenExpiresAt?: number | null | undefined;
+-        refreshTokenExpiresAt?: number | null | undefined;
+-        scope?: string | null | undefined;
++        accessToken?: string | null;
++        accessTokenExpiresAt?: number | null;
++        accountId: string;
+         createdAt: number;
++        idToken?: string | null;
++        password?: string | null;
++        providerId: string;
++        refreshToken?: string | null;
++        refreshTokenExpiresAt?: number | null;
++        scope?: string | null;
+         updatedAt: number;
+         userId: string;
+-        accountId: string;
+-        providerId: string;
+     }, {
+         accountId: import("convex/values").VString<string, "required">;
+         providerId: import("convex/values").VString<string, "required">;
+@@ -92,7 +92,7 @@ export declare const tables: {
+         password: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+         createdAt: import("convex/values").VFloat64<number, "required">;
+         updatedAt: import("convex/values").VFloat64<number, "required">;
+-    }, "required", "createdAt" | "updatedAt" | "userId" | "password" | "accountId" | "providerId" | "accessToken" | "refreshToken" | "idToken" | "accessTokenExpiresAt" | "refreshTokenExpiresAt" | "scope">, {
++    }, "required", "accessToken" | "accessTokenExpiresAt" | "accountId" | "createdAt" | "idToken" | "password" | "providerId" | "refreshToken" | "refreshTokenExpiresAt" | "scope" | "updatedAt" | "userId">, {
+         accountId: ["accountId", "_creationTime"];
+         accountId_providerId: ["accountId", "providerId", "_creationTime"];
+         providerId_userId: ["providerId", "userId", "_creationTime"];
+@@ -100,45 +100,45 @@ export declare const tables: {
+     }, {}, {}>;
+     verification: import("convex/server").TableDefinition<import("convex/values").VObject<{
+         createdAt: number;
+-        updatedAt: number;
+         expiresAt: number;
+-        value: string;
+         identifier: string;
++        updatedAt: number;
++        value: string;
+     }, {
+         identifier: import("convex/values").VString<string, "required">;
+         value: import("convex/values").VString<string, "required">;
+         expiresAt: import("convex/values").VFloat64<number, "required">;
+         createdAt: import("convex/values").VFloat64<number, "required">;
+         updatedAt: import("convex/values").VFloat64<number, "required">;
+-    }, "required", "createdAt" | "updatedAt" | "expiresAt" | "value" | "identifier">, {
++    }, "required", "createdAt" | "expiresAt" | "identifier" | "updatedAt" | "value">, {
+         expiresAt: ["expiresAt", "_creationTime"];
+         identifier: ["identifier", "_creationTime"];
+     }, {}, {}>;
+     twoFactor: import("convex/server").TableDefinition<import("convex/values").VObject<{
+-        verified?: boolean | null | undefined;
+-        userId: string;
+-        secret: string;
+         backupCodes: string;
++        secret: string;
++        userId: string;
++        verified?: boolean | null;
+     }, {
+         secret: import("convex/values").VString<string, "required">;
+         backupCodes: import("convex/values").VString<string, "required">;
+         userId: import("convex/values").VString<string, "required">;
+         verified: import("convex/values").VUnion<boolean | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VBoolean<boolean, "required">], "optional", never>;
+-    }, "required", "userId" | "secret" | "backupCodes" | "verified">, {
++    }, "required", "backupCodes" | "secret" | "userId" | "verified">, {
+         userId: ["userId", "_creationTime"];
+     }, {}, {}>;
+     oauthApplication: import("convex/server").TableDefinition<import("convex/values").VObject<{
+-        type?: string | null | undefined;
+-        metadata?: string | null | undefined;
+-        createdAt?: number | null | undefined;
+-        updatedAt?: number | null | undefined;
+-        name?: string | null | undefined;
+-        userId?: string | null | undefined;
+-        icon?: string | null | undefined;
+-        clientId?: string | null | undefined;
+-        clientSecret?: string | null | undefined;
+-        redirectUrls?: string | null | undefined;
+-        disabled?: boolean | null | undefined;
++        clientId?: string | null;
++        clientSecret?: string | null;
++        createdAt?: number | null;
++        disabled?: boolean | null;
++        icon?: string | null;
++        metadata?: string | null;
++        name?: string | null;
++        redirectUrls?: string | null;
++        type?: string | null;
++        updatedAt?: number | null;
++        userId?: string | null;
+     }, {
+         name: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+         icon: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+@@ -151,20 +151,20 @@ export declare const tables: {
+         userId: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+         createdAt: import("convex/values").VUnion<number | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VFloat64<number, "required">], "optional", never>;
+         updatedAt: import("convex/values").VUnion<number | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VFloat64<number, "required">], "optional", never>;
+-    }, "required", "type" | "metadata" | "createdAt" | "updatedAt" | "name" | "userId" | "icon" | "clientId" | "clientSecret" | "redirectUrls" | "disabled">, {
++    }, "required", "clientId" | "clientSecret" | "createdAt" | "disabled" | "icon" | "metadata" | "name" | "redirectUrls" | "type" | "updatedAt" | "userId">, {
+         clientId: ["clientId", "_creationTime"];
+         userId: ["userId", "_creationTime"];
+     }, {}, {}>;
+     oauthAccessToken: import("convex/server").TableDefinition<import("convex/values").VObject<{
+-        createdAt?: number | null | undefined;
+-        updatedAt?: number | null | undefined;
+-        userId?: string | null | undefined;
+-        accessToken?: string | null | undefined;
+-        refreshToken?: string | null | undefined;
+-        accessTokenExpiresAt?: number | null | undefined;
+-        refreshTokenExpiresAt?: number | null | undefined;
+-        clientId?: string | null | undefined;
+-        scopes?: string | null | undefined;
++        accessToken?: string | null;
++        accessTokenExpiresAt?: number | null;
++        clientId?: string | null;
++        createdAt?: number | null;
++        refreshToken?: string | null;
++        refreshTokenExpiresAt?: number | null;
++        scopes?: string | null;
++        updatedAt?: number | null;
++        userId?: string | null;
+     }, {
+         accessToken: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+         refreshToken: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+@@ -175,19 +175,19 @@ export declare const tables: {
+         scopes: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+         createdAt: import("convex/values").VUnion<number | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VFloat64<number, "required">], "optional", never>;
+         updatedAt: import("convex/values").VUnion<number | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VFloat64<number, "required">], "optional", never>;
+-    }, "required", "createdAt" | "updatedAt" | "userId" | "accessToken" | "refreshToken" | "accessTokenExpiresAt" | "refreshTokenExpiresAt" | "clientId" | "scopes">, {
++    }, "required", "accessToken" | "accessTokenExpiresAt" | "clientId" | "createdAt" | "refreshToken" | "refreshTokenExpiresAt" | "scopes" | "updatedAt" | "userId">, {
+         accessToken: ["accessToken", "_creationTime"];
+-        refreshToken: ["refreshToken", "_creationTime"];
+         clientId: ["clientId", "_creationTime"];
++        refreshToken: ["refreshToken", "_creationTime"];
+         userId: ["userId", "_creationTime"];
+     }, {}, {}>;
+     oauthConsent: import("convex/server").TableDefinition<import("convex/values").VObject<{
+-        createdAt?: number | null | undefined;
+-        updatedAt?: number | null | undefined;
+-        userId?: string | null | undefined;
+-        clientId?: string | null | undefined;
+-        scopes?: string | null | undefined;
+-        consentGiven?: boolean | null | undefined;
++        clientId?: string | null;
++        consentGiven?: boolean | null;
++        createdAt?: number | null;
++        scopes?: string | null;
++        updatedAt?: number | null;
++        userId?: string | null;
+     }, {
+         clientId: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+         userId: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+@@ -195,48 +195,48 @@ export declare const tables: {
+         createdAt: import("convex/values").VUnion<number | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VFloat64<number, "required">], "optional", never>;
+         updatedAt: import("convex/values").VUnion<number | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VFloat64<number, "required">], "optional", never>;
+         consentGiven: import("convex/values").VUnion<boolean | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VBoolean<boolean, "required">], "optional", never>;
+-    }, "required", "createdAt" | "updatedAt" | "userId" | "clientId" | "scopes" | "consentGiven">, {
++    }, "required", "clientId" | "consentGiven" | "createdAt" | "scopes" | "updatedAt" | "userId">, {
+         clientId_userId: ["clientId", "userId", "_creationTime"];
+         userId: ["userId", "_creationTime"];
+     }, {}, {}>;
+     jwks: import("convex/server").TableDefinition<import("convex/values").VObject<{
+-        expiresAt?: number | null | undefined;
+         createdAt: number;
+-        publicKey: string;
++        expiresAt?: number | null;
+         privateKey: string;
++        publicKey: string;
+     }, {
+         publicKey: import("convex/values").VString<string, "required">;
+         privateKey: import("convex/values").VString<string, "required">;
+         createdAt: import("convex/values").VFloat64<number, "required">;
+         expiresAt: import("convex/values").VUnion<number | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VFloat64<number, "required">], "optional", never>;
+-    }, "required", "createdAt" | "expiresAt" | "publicKey" | "privateKey">, {}, {}, {}>;
++    }, "required", "createdAt" | "expiresAt" | "privateKey" | "publicKey">, {}, {}, {}>;
+     rateLimit: import("convex/server").TableDefinition<import("convex/values").VObject<{
+-        key: string;
+         count: number;
++        key: string;
+         lastRequest: number;
+     }, {
+         key: import("convex/values").VString<string, "required">;
+         count: import("convex/values").VFloat64<number, "required">;
+         lastRequest: import("convex/values").VFloat64<number, "required">;
+-    }, "required", "key" | "count" | "lastRequest">, {
++    }, "required", "count" | "key" | "lastRequest">, {
+         key: ["key", "_creationTime"];
+     }, {}, {}>;
+ };
+ declare const schema: import("convex/server").SchemaDefinition<{
+     user: import("convex/server").TableDefinition<import("convex/values").VObject<{
+-        image?: string | null | undefined;
+-        userId?: string | null | undefined;
+-        twoFactorEnabled?: boolean | null | undefined;
+-        isAnonymous?: boolean | null | undefined;
+-        username?: string | null | undefined;
+-        displayUsername?: string | null | undefined;
+-        phoneNumber?: string | null | undefined;
+-        phoneNumberVerified?: boolean | null | undefined;
+         createdAt: number;
+-        updatedAt: number;
++        displayUsername?: string | null;
+         email: string;
+         emailVerified: boolean;
++        image?: string | null;
++        isAnonymous?: boolean | null;
+         name: string;
++        phoneNumber?: string | null;
++        phoneNumberVerified?: boolean | null;
++        twoFactorEnabled?: boolean | null;
++        updatedAt: number;
++        userId?: string | null;
++        username?: string | null;
+     }, {
+         name: import("convex/values").VString<string, "required">;
+         email: import("convex/values").VString<string, "required">;
+@@ -251,21 +251,21 @@ declare const schema: import("convex/server").SchemaDefinition<{
+         phoneNumber: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+         phoneNumberVerified: import("convex/values").VUnion<boolean | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VBoolean<boolean, "required">], "optional", never>;
+         userId: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+-    }, "required", "createdAt" | "updatedAt" | "email" | "emailVerified" | "name" | "image" | "userId" | "twoFactorEnabled" | "isAnonymous" | "username" | "displayUsername" | "phoneNumber" | "phoneNumberVerified">, {
++    }, "required", "createdAt" | "displayUsername" | "email" | "emailVerified" | "image" | "isAnonymous" | "name" | "phoneNumber" | "phoneNumberVerified" | "twoFactorEnabled" | "updatedAt" | "userId" | "username">, {
+         email_name: ["email", "name", "_creationTime"];
+         name: ["name", "_creationTime"];
++        phoneNumber: ["phoneNumber", "_creationTime"];
+         userId: ["userId", "_creationTime"];
+         username: ["username", "_creationTime"];
+-        phoneNumber: ["phoneNumber", "_creationTime"];
+     }, {}, {}>;
+     session: import("convex/server").TableDefinition<import("convex/values").VObject<{
+-        ipAddress?: string | null | undefined;
+-        userAgent?: string | null | undefined;
+         createdAt: number;
+-        updatedAt: number;
+-        userId: string;
+         expiresAt: number;
++        ipAddress?: string | null;
+         token: string;
++        updatedAt: number;
++        userAgent?: string | null;
++        userId: string;
+     }, {
+         expiresAt: import("convex/values").VFloat64<number, "required">;
+         token: import("convex/values").VString<string, "required">;
+@@ -274,25 +274,25 @@ declare const schema: import("convex/server").SchemaDefinition<{
+         ipAddress: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+         userAgent: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+         userId: import("convex/values").VString<string, "required">;
+-    }, "required", "createdAt" | "updatedAt" | "userId" | "expiresAt" | "token" | "ipAddress" | "userAgent">, {
++    }, "required", "createdAt" | "expiresAt" | "ipAddress" | "token" | "updatedAt" | "userAgent" | "userId">, {
+         expiresAt: ["expiresAt", "_creationTime"];
+         expiresAt_userId: ["expiresAt", "userId", "_creationTime"];
+         token: ["token", "_creationTime"];
+         userId: ["userId", "_creationTime"];
+     }, {}, {}>;
+     account: import("convex/server").TableDefinition<import("convex/values").VObject<{
+-        password?: string | null | undefined;
+-        accessToken?: string | null | undefined;
+-        refreshToken?: string | null | undefined;
+-        idToken?: string | null | undefined;
+-        accessTokenExpiresAt?: number | null | undefined;
+-        refreshTokenExpiresAt?: number | null | undefined;
+-        scope?: string | null | undefined;
++        accessToken?: string | null;
++        accessTokenExpiresAt?: number | null;
++        accountId: string;
+         createdAt: number;
++        idToken?: string | null;
++        password?: string | null;
++        providerId: string;
++        refreshToken?: string | null;
++        refreshTokenExpiresAt?: number | null;
++        scope?: string | null;
+         updatedAt: number;
+         userId: string;
+-        accountId: string;
+-        providerId: string;
+     }, {
+         accountId: import("convex/values").VString<string, "required">;
+         providerId: import("convex/values").VString<string, "required">;
+@@ -306,7 +306,7 @@ declare const schema: import("convex/server").SchemaDefinition<{
+         password: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+         createdAt: import("convex/values").VFloat64<number, "required">;
+         updatedAt: import("convex/values").VFloat64<number, "required">;
+-    }, "required", "createdAt" | "updatedAt" | "userId" | "password" | "accountId" | "providerId" | "accessToken" | "refreshToken" | "idToken" | "accessTokenExpiresAt" | "refreshTokenExpiresAt" | "scope">, {
++    }, "required", "accessToken" | "accessTokenExpiresAt" | "accountId" | "createdAt" | "idToken" | "password" | "providerId" | "refreshToken" | "refreshTokenExpiresAt" | "scope" | "updatedAt" | "userId">, {
+         accountId: ["accountId", "_creationTime"];
+         accountId_providerId: ["accountId", "providerId", "_creationTime"];
+         providerId_userId: ["providerId", "userId", "_creationTime"];
+@@ -314,45 +314,45 @@ declare const schema: import("convex/server").SchemaDefinition<{
+     }, {}, {}>;
+     verification: import("convex/server").TableDefinition<import("convex/values").VObject<{
+         createdAt: number;
+-        updatedAt: number;
+         expiresAt: number;
+-        value: string;
+         identifier: string;
++        updatedAt: number;
++        value: string;
+     }, {
+         identifier: import("convex/values").VString<string, "required">;
+         value: import("convex/values").VString<string, "required">;
+         expiresAt: import("convex/values").VFloat64<number, "required">;
+         createdAt: import("convex/values").VFloat64<number, "required">;
+         updatedAt: import("convex/values").VFloat64<number, "required">;
+-    }, "required", "createdAt" | "updatedAt" | "expiresAt" | "value" | "identifier">, {
++    }, "required", "createdAt" | "expiresAt" | "identifier" | "updatedAt" | "value">, {
+         expiresAt: ["expiresAt", "_creationTime"];
+         identifier: ["identifier", "_creationTime"];
+     }, {}, {}>;
+     twoFactor: import("convex/server").TableDefinition<import("convex/values").VObject<{
+-        verified?: boolean | null | undefined;
+-        userId: string;
+-        secret: string;
+         backupCodes: string;
++        secret: string;
++        userId: string;
++        verified?: boolean | null;
+     }, {
+         secret: import("convex/values").VString<string, "required">;
+         backupCodes: import("convex/values").VString<string, "required">;
+         userId: import("convex/values").VString<string, "required">;
+         verified: import("convex/values").VUnion<boolean | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VBoolean<boolean, "required">], "optional", never>;
+-    }, "required", "userId" | "secret" | "backupCodes" | "verified">, {
++    }, "required", "backupCodes" | "secret" | "userId" | "verified">, {
+         userId: ["userId", "_creationTime"];
+     }, {}, {}>;
+     oauthApplication: import("convex/server").TableDefinition<import("convex/values").VObject<{
+-        type?: string | null | undefined;
+-        metadata?: string | null | undefined;
+-        createdAt?: number | null | undefined;
+-        updatedAt?: number | null | undefined;
+-        name?: string | null | undefined;
+-        userId?: string | null | undefined;
+-        icon?: string | null | undefined;
+-        clientId?: string | null | undefined;
+-        clientSecret?: string | null | undefined;
+-        redirectUrls?: string | null | undefined;
+-        disabled?: boolean | null | undefined;
++        clientId?: string | null;
++        clientSecret?: string | null;
++        createdAt?: number | null;
++        disabled?: boolean | null;
++        icon?: string | null;
++        metadata?: string | null;
++        name?: string | null;
++        redirectUrls?: string | null;
++        type?: string | null;
++        updatedAt?: number | null;
++        userId?: string | null;
+     }, {
+         name: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+         icon: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+@@ -365,20 +365,20 @@ declare const schema: import("convex/server").SchemaDefinition<{
+         userId: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+         createdAt: import("convex/values").VUnion<number | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VFloat64<number, "required">], "optional", never>;
+         updatedAt: import("convex/values").VUnion<number | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VFloat64<number, "required">], "optional", never>;
+-    }, "required", "type" | "metadata" | "createdAt" | "updatedAt" | "name" | "userId" | "icon" | "clientId" | "clientSecret" | "redirectUrls" | "disabled">, {
++    }, "required", "clientId" | "clientSecret" | "createdAt" | "disabled" | "icon" | "metadata" | "name" | "redirectUrls" | "type" | "updatedAt" | "userId">, {
+         clientId: ["clientId", "_creationTime"];
+         userId: ["userId", "_creationTime"];
+     }, {}, {}>;
+     oauthAccessToken: import("convex/server").TableDefinition<import("convex/values").VObject<{
+-        createdAt?: number | null | undefined;
+-        updatedAt?: number | null | undefined;
+-        userId?: string | null | undefined;
+-        accessToken?: string | null | undefined;
+-        refreshToken?: string | null | undefined;
+-        accessTokenExpiresAt?: number | null | undefined;
+-        refreshTokenExpiresAt?: number | null | undefined;
+-        clientId?: string | null | undefined;
+-        scopes?: string | null | undefined;
++        accessToken?: string | null;
++        accessTokenExpiresAt?: number | null;
++        clientId?: string | null;
++        createdAt?: number | null;
++        refreshToken?: string | null;
++        refreshTokenExpiresAt?: number | null;
++        scopes?: string | null;
++        updatedAt?: number | null;
++        userId?: string | null;
+     }, {
+         accessToken: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+         refreshToken: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+@@ -389,19 +389,19 @@ declare const schema: import("convex/server").SchemaDefinition<{
+         scopes: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+         createdAt: import("convex/values").VUnion<number | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VFloat64<number, "required">], "optional", never>;
+         updatedAt: import("convex/values").VUnion<number | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VFloat64<number, "required">], "optional", never>;
+-    }, "required", "createdAt" | "updatedAt" | "userId" | "accessToken" | "refreshToken" | "accessTokenExpiresAt" | "refreshTokenExpiresAt" | "clientId" | "scopes">, {
++    }, "required", "accessToken" | "accessTokenExpiresAt" | "clientId" | "createdAt" | "refreshToken" | "refreshTokenExpiresAt" | "scopes" | "updatedAt" | "userId">, {
+         accessToken: ["accessToken", "_creationTime"];
+-        refreshToken: ["refreshToken", "_creationTime"];
+         clientId: ["clientId", "_creationTime"];
++        refreshToken: ["refreshToken", "_creationTime"];
+         userId: ["userId", "_creationTime"];
+     }, {}, {}>;
+     oauthConsent: import("convex/server").TableDefinition<import("convex/values").VObject<{
+-        createdAt?: number | null | undefined;
+-        updatedAt?: number | null | undefined;
+-        userId?: string | null | undefined;
+-        clientId?: string | null | undefined;
+-        scopes?: string | null | undefined;
+-        consentGiven?: boolean | null | undefined;
++        clientId?: string | null;
++        consentGiven?: boolean | null;
++        createdAt?: number | null;
++        scopes?: string | null;
++        updatedAt?: number | null;
++        userId?: string | null;
+     }, {
+         clientId: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+         userId: import("convex/values").VUnion<string | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VString<string, "required">], "optional", never>;
+@@ -409,32 +409,31 @@ declare const schema: import("convex/server").SchemaDefinition<{
+         createdAt: import("convex/values").VUnion<number | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VFloat64<number, "required">], "optional", never>;
+         updatedAt: import("convex/values").VUnion<number | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VFloat64<number, "required">], "optional", never>;
+         consentGiven: import("convex/values").VUnion<boolean | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VBoolean<boolean, "required">], "optional", never>;
+-    }, "required", "createdAt" | "updatedAt" | "userId" | "clientId" | "scopes" | "consentGiven">, {
++    }, "required", "clientId" | "consentGiven" | "createdAt" | "scopes" | "updatedAt" | "userId">, {
+         clientId_userId: ["clientId", "userId", "_creationTime"];
+         userId: ["userId", "_creationTime"];
+     }, {}, {}>;
+     jwks: import("convex/server").TableDefinition<import("convex/values").VObject<{
+-        expiresAt?: number | null | undefined;
+         createdAt: number;
+-        publicKey: string;
++        expiresAt?: number | null;
+         privateKey: string;
++        publicKey: string;
+     }, {
+         publicKey: import("convex/values").VString<string, "required">;
+         privateKey: import("convex/values").VString<string, "required">;
+         createdAt: import("convex/values").VFloat64<number, "required">;
+         expiresAt: import("convex/values").VUnion<number | null | undefined, [import("convex/values").VNull<null, "required">, import("convex/values").VFloat64<number, "required">], "optional", never>;
+-    }, "required", "createdAt" | "expiresAt" | "publicKey" | "privateKey">, {}, {}, {}>;
++    }, "required", "createdAt" | "expiresAt" | "privateKey" | "publicKey">, {}, {}, {}>;
+     rateLimit: import("convex/server").TableDefinition<import("convex/values").VObject<{
+-        key: string;
+         count: number;
++        key: string;
+         lastRequest: number;
+     }, {
+         key: import("convex/values").VString<string, "required">;
+         count: import("convex/values").VFloat64<number, "required">;
+         lastRequest: import("convex/values").VFloat64<number, "required">;
+-    }, "required", "key" | "count" | "lastRequest">, {
++    }, "required", "count" | "key" | "lastRequest">, {
+         key: ["key", "_creationTime"];
+     }, {}, {}>;
+ }, true>;
+ export default schema;
+-//# sourceMappingURL=schema.d.ts.map
+\ No newline at end of file
 diff --git a/dist/react/index.d.ts b/dist/react/index.d.ts
 index 652857c519c97b92f4819cbb8f25bea33be20982..6de89da4ba9a683524feeadd3fd671e130d6b626 100644
 --- a/dist/react/index.d.ts

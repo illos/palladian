@@ -7,6 +7,7 @@
     "apps/web/src/**/*.ts",
     "apps/web/src/**/*.tsx",
     "packages/**/*.ts",
-    "packages/**/*.tsx"
+    "packages/**/*.tsx",
+    "tests/auth/types.ts"
   ]
 }
