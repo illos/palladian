@@ -1,0 +1,15 @@
+packages:
+  - apps/*
+  - packages/*
+  - spikes/*
+allowBuilds:
+  esbuild: true
+  workerd: true
+minimumReleaseAgeExclude:
+  - react-dom@19.3.0
+  - react@19.3.0
+  - scheduler@0.28.0
+strictPeerDependencies: true
+# Patch miniflare's image decoder for GHSA-rgj7-g3m4-5g8c.
+overrides:
+  "miniflare>sharp": 0.35.4

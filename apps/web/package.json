@@ -1,0 +1,5 @@
+{
+  "name": "@palladian/web",
+  "private": true,
+  "type": "module"
+}

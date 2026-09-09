@@ -1,0 +1,6 @@
+{
+  "name": "@palladian/app-sdk",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts"
+}

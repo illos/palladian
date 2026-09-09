@@ -1,0 +1,18 @@
+{
+  "name": "@palladian/auth-spike",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "CONVEX_AGENT_MODE=anonymous convex dev",
+    "typecheck": "tsc --noEmit",
+    "probe": "node probe.mjs"
+  },
+  "dependencies": {
+    "@convex-dev/better-auth": "0.12.5",
+    "better-auth": "1.6.30",
+    "convex": "1.45.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.4.0"
+  }
+}
