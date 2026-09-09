@@ -47,6 +47,9 @@ export function violations(file, source) {
         normalized.startsWith("packages/");
       const authPackage =
         /^(?:better-auth|@convex-dev\/better-auth)(?:\/|$)/.test(spec);
+      const hostConvexClient =
+        normalized.startsWith("apps/web/src/auth/") &&
+        (spec === "convex/react" || target === "convex/_generated/api");
       const allowedAuthClient =
         normalized.startsWith("apps/web/src/auth/") &&
         authClientEntries.has(spec);
@@ -54,7 +57,8 @@ export function violations(file, source) {
         client &&
         (isBuiltin(spec) ||
           spec.startsWith("node:") ||
-          /(^|\/)convex(\/|$)|(^|\/)spikes\/|(^|\/)infra\//.test(target) ||
+          (/(^|\/)convex(\/|$)|(^|\/)spikes\/|(^|\/)infra\//.test(target) &&
+            !hostConvexClient) ||
           (authPackage && !allowedAuthClient))
       )
         errors.push(

@@ -1,0 +1,13 @@
+diff --git a/dist/plugins/organization/routes/crud-members.d.mts b/dist/plugins/organization/routes/crud-members.d.mts
+index 79703c758b8b415ee6bbcfe91ed37b39dbbeabd5..58f16108472cd0f2cb8db938c49829ee6a5f08e5 100644
+--- a/dist/plugins/organization/routes/crud-members.d.mts
++++ b/dist/plugins/organization/routes/crud-members.d.mts
+@@ -1050,7 +1050,7 @@ declare const getActiveMemberRole: <O extends OrganizationOptions>(options: O) =
+       name: string;
+       image?: string | null | undefined;
+     };
+-  })["role"];
++  }) extends { role: infer Role } ? Role : never;
+ }>;
+ //#endregion
+ export { addMember, getActiveMember, getActiveMemberRole, leaveOrganization, listMembers, removeMember, updateMemberRole };

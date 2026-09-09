@@ -13,3 +13,6 @@ strictPeerDependencies: true
 # Patch miniflare's image decoder for GHSA-rgj7-g3m4-5g8c.
 overrides:
   "miniflare>sharp": 0.35.4
+patchedDependencies:
+  "@convex-dev/better-auth@0.12.5": patches/@convex-dev__better-auth@0.12.5.patch
+  better-auth@1.6.30: patches/better-auth@1.6.30.patch

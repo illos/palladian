@@ -5,6 +5,7 @@ import type { ThemePreference } from "../../../packages/contracts/src/index";
 import { definitions } from "./registry";
 import "../../../packages/ui/src/tokens.css";
 import "./shell.css";
+const AuthRuntime = lazy(() => import("./auth/Runtime"));
 const previews = definitions.map((def) => ({
   ...def,
   View: lazy(async () => ({ default: (await def.loadUI()).Preview })),
@@ -81,7 +82,7 @@ function Shell() {
           </nav>
           <div className="sidebar-bottom">
             <span className="status-dot" /> Foundation preview
-            <p>Authentication is not connected.</p>
+            <p>Private owner pilot · P1</p>
           </div>
         </aside>
         <div className="workspace">
@@ -105,6 +106,16 @@ function Shell() {
             </label>
           </header>
           <main id="main" tabIndex={-1}>
+            <AppBoundary>
+              <Suspense fallback={<p role="status">Connecting account…</p>}>
+                {__PALLADIAN_CONFIG__.dataUrl &&
+                __PALLADIAN_CONFIG__.authUrl ? (
+                  <AuthRuntime />
+                ) : (
+                  <p>Auth deployment is not configured.</p>
+                )}
+              </Suspense>
+            </AppBoundary>
             {entry ? (
               <>
                 <button className="back" onClick={() => setSelected(null)}>
@@ -136,7 +147,7 @@ function Shell() {
                 <section aria-labelledby="apps-heading">
                   <div className="section-heading">
                     <h2 id="apps-heading">Your apps</h2>
-                    <span>Foundation · P0</span>
+                    <span>Foundation · P1</span>
                   </div>
                   <div className="app-grid">
                     {previews.map((def) => (
@@ -173,9 +184,9 @@ function Shell() {
                   <div>
                     <h2 id="foundation-title">A foundation to build on.</h2>
                     <p>
-                      These are app previews. Sign-in and private workspaces are
-                      not available yet. Nothing you see here is saved personal
-                      data.
+                      These are app previews. Private owner sign-in is available
+                      in the development pilot. App data and workspaces arrive
+                      in later phases.
                     </p>
                   </div>
                 </section>
@@ -193,3 +204,5 @@ function Shell() {
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing shell root");
 createRoot(root).render(<Shell />);
+
+requestAnimationFrame(() => performance.mark("palladian-shell"));

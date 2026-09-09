@@ -22,6 +22,19 @@ for (const app of apps)
     !html.includes(manifest[app].file),
     "Inactive app preloaded from HTML",
   );
+const required = new Set(eager);
+const auth = "src/auth/Runtime.tsx";
+assert(
+  manifest[auth]?.isDynamicEntry,
+  "Auth runtime must not block static shell loading",
+);
+walk(auth);
+for (const entry of ["src/auth/SignIn.tsx", "src/auth/Account.tsx"]) {
+  assert(
+    manifest[entry]?.isDynamicEntry && !eager.has(entry),
+    "Account UI must stay lazy",
+  );
+}
 let bytes = gzipSync(readFileSync(root + "theme-init.js")).length;
 for (const key of eager)
   if (manifest[key].file.endsWith(".js"))
@@ -30,12 +43,13 @@ assert(bytes <= 200 * 1024, `Eager JavaScript ${bytes} exceeds 200KiB`);
 console.log(
   JSON.stringify(
     {
-      eager: [...eager],
+      shell: [...required],
+      shellAndRequiredAuth: [...eager],
       lazy: apps.map((key) => ({ entry: key, file: manifest[key].file })),
-      eagerJavaScriptGzipBytes: bytes,
+      shellAndAuthJavaScriptGzipBytes: bytes,
       budgetBytes: 200 * 1024,
       limitation:
-        "P0 shell only; auth client cost must be added and remeasured in P1",
+        "Includes immediately requested auth runtime; optional account/sign-in and app UI stay lazy. Device timings are separate.",
     },
     null,
     2,

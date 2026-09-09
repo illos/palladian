@@ -18,7 +18,13 @@ test("shell loads without backend and loads only requested app", async ({
     requested.some((url) => url.includes(notes) || url.includes(recipes)),
   ).toBe(false);
   expect(
-    requested.every((url) => new URL(url).origin === "http://127.0.0.1:4173"),
+    requested.every((url) =>
+      [
+        "http://127.0.0.1:4173",
+        "http://127.0.0.1:3214",
+        "http://127.0.0.1:3215",
+      ].includes(new URL(url).origin),
+    ),
   ).toBe(true);
   await page
     .getByRole("button", { name: /Notes.*Explore empty preview/ })

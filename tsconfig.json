@@ -19,8 +19,7 @@
     "types": ["node", "vite/client"]
   },
   "include": [
-    "apps/**/*.ts",
-    "apps/**/*.tsx",
+    "apps/web/vite.config.ts",
     "packages/**/*.ts",
     "packages/**/*.tsx",
     "playwright.config.ts",

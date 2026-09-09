@@ -1,4 +1,4 @@
-name: P0 checks
+name: Palladian static and browser checks
 on: [push, pull_request]
 permissions:
   contents: read

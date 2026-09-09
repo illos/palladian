@@ -109,3 +109,33 @@ test("allow only explicit client auth entry points within host auth integration"
     ).length > 0,
   );
 });
+
+test("host auth may import generated API and browser client, never server code", () => {
+  for (const spec of ["convex/react", "../../../../convex/_generated/api"]) {
+    assert.deepEqual(
+      violations(
+        "apps/web/src/auth/Runtime.tsx",
+        `import { api } from "${spec}";`,
+      ),
+      [],
+    );
+    assert(
+      violations(
+        "apps/web/src/apps/notes/entry.tsx",
+        `import { api } from "${spec}";`,
+      ).length > 0,
+    );
+  }
+  for (const spec of [
+    "convex/server",
+    "../../../../convex/auth",
+    "../../../../convex/_generated/server",
+  ]) {
+    assert(
+      violations(
+        "apps/web/src/auth/Runtime.tsx",
+        `import { query } from "${spec}";`,
+      ).length > 0,
+    );
+  }
+});
