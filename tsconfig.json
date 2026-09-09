@@ -24,6 +24,7 @@
     "packages/**/*.ts",
     "packages/**/*.tsx",
     "playwright.config.ts",
-    "tests/browser/**/*.ts"
+    "tests/browser/**/*.ts",
+    "tests/types/**/*.ts"
   ]
 }

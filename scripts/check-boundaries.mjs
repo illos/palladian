@@ -1,6 +1,16 @@
 import { parse } from "@babel/parser";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { isBuiltin } from "node:module";
+
+// Only the host auth integration may own credential/client lifecycles.
+const authClientEntries = new Set([
+  "better-auth/react",
+  "better-auth/client",
+  "better-auth/client/plugins",
+  "@convex-dev/better-auth/react",
+  "@convex-dev/better-auth/client/plugins",
+]);
 import { fileURLToPath } from "node:url";
 export function violations(file, source) {
   const errors = [];
@@ -35,13 +45,21 @@ export function violations(file, source) {
       const client =
         normalized.startsWith("apps/web/src/") ||
         normalized.startsWith("packages/");
+      const authPackage =
+        /^(?:better-auth|@convex-dev\/better-auth)(?:\/|$)/.test(spec);
+      const allowedAuthClient =
+        normalized.startsWith("apps/web/src/auth/") &&
+        authClientEntries.has(spec);
       if (
         client &&
-        /(^|\/)convex(\/|$)|(^|\/)spikes\/|(^|\/)infra\/|^node:|better-auth\/(minimal|plugins)|@convex-dev\/better-auth(\/|$)/.test(
-          target,
-        )
+        (isBuiltin(spec) ||
+          spec.startsWith("node:") ||
+          /(^|\/)convex(\/|$)|(^|\/)spikes\/|(^|\/)infra\//.test(target) ||
+          (authPackage && !allowedAuthClient))
       )
-        errors.push(`Server dependency in client-safe source: ${spec}`);
+        errors.push(
+          `Server or non-host auth dependency in client-safe source: ${spec}`,
+        );
       if (
         normalized.startsWith("packages/") &&
         !target.startsWith("packages/") &&

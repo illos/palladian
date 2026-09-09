@@ -1,5 +1,5 @@
 import type { AppHostProps } from "../../../../../packages/app-sdk/src/index";
-export function Root(_props: AppHostProps) {
+export function Root(_props: AppHostProps<"recipes">) {
   return <Preview />;
 }
 export function Preview() {

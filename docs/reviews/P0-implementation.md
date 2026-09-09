@@ -104,3 +104,14 @@ Review `git diff f691c1d f3ce322` plus this report and the separately modified c
 ## Next permitted phase after acceptance
 
 P1 only after independent P0 architecture/compatibility review and a new phase assignment. Reviewer writes a separate `P0-review.md` with an explicit decision. This implementation report is not that review.
+
+## P0 correction pass — independent-review findings 1 and 2
+
+Base: `55bf2fd` (independent review). Scope is limited to the two medium findings in `P0-review.md`; no P1/auth backend behavior changed. The correction commit is identified by `git log --oneline --grep='fix: close P0 import and app typing review findings'`.
+
+- `scripts/check-boundaries.mjs` uses Node's `isBuiltin` classification for bare and prefixed builtin imports. All Better Auth package paths are rejected by default; a small list of existing client-safe exports is allowed only under `apps/web/src/auth/`, preserving a host-owned future client lifecycle. Imports, re-exports, and fixed dynamic imports share the same check. This is trusted-code mistake prevention, not sandboxing.
+- `tests/boundaries.test.mjs` adds both rejected and allowed regression cases, including the installed Node builtin list, bare Better Auth, server/plugin paths, client paths outside host auth, and unreviewed client subpaths.
+- `AppUIModule<D>` now preserves the definition type through `AppDefinition<D>.loadUI`. Notes and Recipes export their specific `AppHostProps<D>` Root signatures; the instance-free Preview is retained.
+- `tests/types/app-sdk.ts`, included by the normal strict typecheck, verifies matching Roots/loaders compile and mismatched instance/Root/loader assignability is false. No casts or error suppressions are used.
+
+Validation: `pnpm check` passes (strict types, five boundary tests, production build and bundle graph), `pnpm test:browser` passes all six desktop/mobile-emulation Chromium tests, and `pnpm format:check` passes. Eager gzip bytes remain 70,202 and build chunk hashes are unchanged. Installed package export maps were checked for the client allowlist. No dependency pins changed. No actual auth-service probes were rerun because neither backend nor auth runtime changed; original independently reproduced service evidence and every pending hosted/iPhone/full-session check remain as recorded above. No production or external changes. Independent correction review is required; the implementer does not self-approve this revision. Revert the bounded correction commit to undo it while preserving owner spec edits.

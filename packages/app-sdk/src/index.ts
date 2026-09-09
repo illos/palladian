@@ -25,8 +25,8 @@ export interface AppHostProps<D extends DefinitionId = DefinitionId> {
   readonly services: HostServices;
 }
 /** P0 catalog previews have no instance or data services; they cannot pose as installations. */
-export interface AppUIModule {
-  readonly Root: ComponentType<AppHostProps>;
+export interface AppUIModule<D extends DefinitionId> {
+  readonly Root: ComponentType<AppHostProps<D>>;
   readonly Preview: ComponentType;
 }
 export interface AppDefinition<D extends DefinitionId> {
@@ -39,7 +39,7 @@ export interface AppDefinition<D extends DefinitionId> {
   readonly capabilities: readonly (
     "files" | "search" | "voice" | "deck" | "schedules"
   )[];
-  readonly loadUI: () => Promise<AppUIModule>;
+  readonly loadUI: () => Promise<AppUIModule<D>>;
 }
 export type RegisteredDefinition = {
   [D in DefinitionId]: AppDefinition<D>;
