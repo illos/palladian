@@ -93,3 +93,27 @@ P0-required build/type/peer/lazy evidence is demonstrated, subject to fixing the
 - Actual hosted Cloudflare/Convex CORS/CSRF, hostile callbacks, custom-host trust, Safari/WebKit, real iPhone/install behavior, R2 and downstream application/MCP/operational acceptance remain unperformed in their assigned phases.
 
 Required next work is a bounded P0 correction for findings 1 and 2 with regression evidence, then independent review of that revision. This review does not fix code, approve the auth transport, begin P1, or authorize deployment. Owner MCP specification changes remain untouched.
+
+## Correction review — 2026-09-09
+
+**Current P0 decision: accepted.** Independently reviewed correction commit `0912774` against review baseline `55bf2fd`, including the appended implementation evidence. Both medium findings above are resolved. This decision supersedes the original P0 changes-required decision while preserving its evidence history. No new P0-blocking defect was found in the bounded correction.
+
+**Finding 1 closed:** `scripts/check-boundaries.mjs` now uses `isBuiltin` for bare/prefixed Node imports, rejects unrecognized `node:` imports, and denies Better Auth package entry points except five explicit client exports inside the host's `src/auth/` boundary. Re-ran the original bare `better-auth` and `fs` reproductions; both now produce violations. Inspected the expanded tests: they exercise static imports, re-exports, and fixed dynamic imports across the builtin list and server auth entries, and assert both allowed host-client imports and rejected app/shared/outside-host imports. Checked installed package export maps: all five allowed paths resolve to actual client/React exports. The guard remains a trusted-code import discipline, not a sandbox or authorization mechanism.
+
+**Finding 2 closed:** `AppUIModule<D>` now carries the same definition parameter through its Root and `AppDefinition<D>.loadUI`; Notes and Recipes Roots accept their specific instance types. Re-ran the original Notes-registration compiler reproduction using the same strict CLI options: exit 0, no diagnostics. Inspected `tests/types/app-sdk.ts`: positive loaders use actual app exports; negative assertions check mismatched instances, Roots, and loaders with `AssertFalse`, not ignored compiler errors or casts. Confirmed `tsc --listFilesOnly` includes that file. The Preview export remains instance-free. The production registry still compiles, so heterogeneous lazy registration has not been broken by the specialization.
+
+Independently reproduced for this correction:
+
+| Check | Result |
+|---|---|
+| `pnpm check` | Pass: strict typecheck including type regressions, lint, all 5 boundary tests, production build, lazy graph and budget |
+| `pnpm format:check` | Pass |
+| `pnpm test:browser` | All 6 passed in desktop/Pixel 7-emulated Chromium |
+| Original finding 1 import snippets | Both now rejected |
+| Original finding 2 strict compiler snippet | Now compiles successfully; temporary source removed |
+| `pnpm exec tsc --listFilesOnly` | New SDK type-test file included |
+| `git diff --check` | Pass |
+
+The eager gzip total remains 70,202 bytes and emitted app/shell hashes match the initial review. No dependencies, backend auth runtime, hosting configuration, or protected lifecycle behavior changed. The actual Convex/Better Auth and CORS service probes were **not rerun** for this correction; the original independent local-service evidence remains applicable with its original limits. Dependency installation/audit and hosting dry-run evidence are also carried from the initial review, not represented as new runs. No implementation file was changed during re-review, no commit was made, and the owner's pending MCP specification changes were preserved.
+
+**Acceptance scope remains P0 only.** The architecture and compatibility investigation are sufficient for this phase's checkpoint; production/browser auth transport adoption is still blocked by missing hosted/browser lifecycle evidence. A01–A08 limitations, real iPhone/Safari/PWA checks, recovery/TOTP, hosted CORS/CSRF and callbacks, final auth-inclusive bundle/performance evidence, and real MCP-client checks remain exactly as carried above. No auth proxy, weaker session/origin policy, production deployment, or P1 implementation is approved by this decision. P1 requires a new phase assignment and its own protected-core review.
