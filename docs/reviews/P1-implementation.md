@@ -1,6 +1,6 @@
 # P1 implementation — identity, sessions, startup
 
-Initial report: 2026-09-09. Correction update: 2026-09-10. **A07 corrections now pass local and independent browser regressions. P1 acceptance awaits the corrected full-duration A03 test and independent final decision; P2 and real-data adoption remain gated.** The original findings below are historical evidence; read the correction addendum and separate `P1-review.md` for current status. This is an implementation report, not independent approval.
+Initial report: 2026-09-09. Correction update: 2026-09-10. **P1 is independently accepted as the local foundation for P2 (`351cac3`). A07 corrections and the corrected full-duration A03 test pass. Hosted adoption, physical-device evidence, recovery and real-data use remain pending.** The original findings below are historical evidence; read the correction addendum and separate `P1-review.md` for current status. This is an implementation report, not independent approval.
 
 ## Phase and base/head commits
 
@@ -126,7 +126,13 @@ The corrected `pnpm test:auth:resume` completed at 19:52:58 UTC against unchange
 
 The preceding probe could stop on any observed response, including a late initial response; that preliminary failure was ambiguous. The final probe corrects that observer without changing runtime behavior or weakening the success assertion. The final failure establishes the local gate result, not its root cause. Investigate the existing official provider's renewal scheduling/connection lifecycle and this integration, with redacted timing/status evidence; any protected lifecycle correction requires review before implementation. Do not introduce imperative token demands into this acceptance probe.
 
-## Roadmap correction session — 2026-09-10 (in progress)
+### Historical 2026-09-09 closeout (superseded by correction evidence below)
+
+The final freeze used unchanged production frontend assets. Declaration-only corrections and exact-origin/explicit-secret checks were complete before it started; all library runtime bytes and the valid localhost/secret/session policy remained unchanged. Actual-host/phone evidence is not implied. The final short suite also strengthens public-signup rejection to a previously nonexistent address with the exact disabled-signup code, checks both persisted credential lifetimes, and targets a live other-owner session in the negative revoke test.
+
+After the final freeze, the strengthened 11-scenario short suite passed in full. The production build and 104,296-byte auth-inclusive bundle gate passed again with unchanged asset hashes. Owned local frontend/backend processes were stopped after validation; ignored disposable fixture state was retained.
+
+## Roadmap correction session — 2026-09-10 (accepted locally)
 
 The owner assigned ongoing backend-first roadmap execution with subagents and independent adversarial review. Base remains `b315159`; independent P1 review is now recorded separately in `P1-review.md`. P1 is not accepted while correction work and real regression evidence are incomplete.
 
@@ -161,6 +167,14 @@ Runtime patch design and removal conditions are in ADR 0003. Package versions an
 
 The final local production assets contain 105,057 bytes of required shell/auth JavaScript gzip (budget 204,800). The 10-file immutable asset digest for the independent full-expiry run is SHA-256 `2acde5215469cb1d13d33cc6077b61070ac68e67750e383f38bd6c6d19a941ac`, computed over sorted relative paths, a NUL separator per path, and file bytes. Production preview uses localhost:5183 and the same anonymous 3214/3215 backend. No rebuild or runtime edit is permitted during that run. Outcome remains pending until recorded by the independent reviewer.
 
-The final freeze used unchanged production frontend assets. Declaration-only corrections and exact-origin/explicit-secret checks were complete before it started; all library runtime bytes and the valid localhost/secret/session policy remained unchanged. Actual-host/phone evidence is not implied. The final short suite also strengthens public-signup rejection to a previously nonexistent address with the exact disabled-signup code, checks both persisted credential lifetimes, and targets a live other-owner session in the negative revoke test.
+Correction implementation commit: `14c0134`, following planning-only `a269ecb`, with original implementation/report baseline `b315159`. The owner's existing specification/AGENTS/handoff edits were preserved and not included in these commits.
 
-After the final freeze, the strengthened 11-scenario short suite passed in full. The production build and 104,296-byte auth-inclusive bundle gate passed again with unchanged asset hashes. Owned local frontend/backend processes were stopped after validation; ignored disposable fixture state was retained.
+While the independent expiry run held its own page suspended, `PALLADIAN_TEST_FRONTEND_ORIGIN=http://localhost:5183 node tests/auth/performance.mjs` passed against the same immutable production assets. Conditions: Chromium 153.0.8010.12, Linux headless, loopback, no network throttling, disposable persisted credentials transferred in memory, six cold browser contexts and six warm reloads. Cold FCP median/p95: 64/68 ms; cold authenticated-data median/p95: 513.8/536.3 ms. Warm FCP median/p95: 32/40 ms; warm authenticated-data median/p95: 447.5/553.8 ms. Allowlisted diagnostic export passed. These are local desktop measurements, not hosted-network or iPhone budget compliance.
+
+`pnpm audit --audit-level=moderate` on 2026-09-10 reported no known vulnerabilities for the pinned dependency graph. This is a point-in-time advisory result, not a substitute for source or runtime review.
+
+### Independent full-duration A03 result — 2026-09-10
+
+The independent reviewer ran `PALLADIAN_TEST_FRONTEND_ORIGIN=http://localhost:5183 node tests/auth/resume.mjs` against correction `14c0134`. It exited 0 after the real 900-second JWT lifetime plus verifier tolerance. Actual hidden/freeze/resume observations and deferred timer execution passed; the old JWT was denied by the real server; the official client obtained a distinct, unexpired token after thaw without navigation or a direct token demand; the original positive platform identity and restored private UI assertions passed. Safe result: `expiredJwtDenied=true`, `resumedWithoutNavigation=true`, `tokenResponseObserved=true`, `distinctUnexpiredTokenObserved=true`.
+
+The reviewer verified all 10 production files unchanged before/after the run. Their independently serialized path/hash manifest digest is `0d8effde292268212aa3ee2637237334ac372b56f1c02184a542fa0ece78c66f`; the differently serialized parent aggregate above identifies the same asset set. This closes the corrected local desktop A03 gate. It does not close hosted or physical iPhone/PWA behavior. Final acceptance is recorded by the reviewer in `P1-review.md`; no implementation report self-approval is implied.

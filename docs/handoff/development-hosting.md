@@ -1,6 +1,41 @@
 # Dedicated hosted development environment
 
-Prepared 2026-09-10. This document records read-only discovery and a proposed deployment procedure. No cloud resource was created, deployed, modified, or deleted during preparation. P1 lifecycle acceptance remains the prerequisite for exposing the usable pilot.
+Prepared 2026-09-10. Dedicated development code and frontend are published, and the corrected nine-group hosted auth smoke passes. Hosted real-expiry verification remains pending. The current publication is an auth shell; the usable Notes/Recipes prototype still requires P2–P4.
+
+## Authorized resource setup — 2026-09-10
+
+After the owner explicitly authorized hosted development and the parent authorized this bounded resource setup, a fresh metadata check confirmed the proposed reference did not exist. The isolated detached checkout `/srv/presidium/projects/palladian/hosted-dev` was created at correction commit `14c01341de205f5014c50156261d0415c72b0793`; only explicit owner instruction and hosting-plan files were copied from the main tree. `pnpm install --frozen-lockfile --strict-peer-dependencies` completed, and the installed auth patch source check passed. No `.env.local`, credentials, local backend state, or object data was copied.
+
+The new cloud deployment was then created using the exact reviewed command below, without `--select` or `--default`. Live metadata readback confirms:
+
+| Field | Actual value |
+| --- | --- |
+| Team/project | `jim-pringle` / `palladian` |
+| Reference | `dev/hosted-pilot` |
+| Deployment | `necessary-lynx-217` |
+| Type/default | `dev` / `false` |
+| Region | `aws-us-east-1` |
+| Canonical data URL | `https://necessary-lynx-217.convex.cloud` |
+| Canonical auth URL | `https://necessary-lynx-217.convex.site` |
+| Planned frontend | `https://palladian-development.rdxx.workers.dev` |
+
+The canonical auth URL was independently obtained through the managed `CONVEX_SITE_URL` variable. `SITE_URL` now equals the planned exact HTTPS frontend origin. A fresh 48-byte random `BETTER_AUTH_SECRET` was configured through a restrictive temporary file, verified without printing its value, and the temporary file was deleted. No paid-plan upgrade was requested by provisioning. The isolated `.env.local` contains only the explicit `dev:necessary-lynx-217` target and public frontend build URLs. Additional non-secret identity metadata is recorded in `.wrangler/palladian-development/identity.json` in the isolated checkout.
+
+At the end of resource preparation, no Convex application code or Worker had been published, and no hosted auth fixture or R2 bucket had been created. Publication followed the independent local P1 acceptance signal as recorded below. The main tree's running anonymous backend, production preview, source, and environment were not modified by this setup.
+
+## Development publication after independent local acceptance
+
+The parent subsequently supplied independent local P1 acceptance at `351cac3`, including the complete real-expiry test against immutable runtime `14c0134`, and authorized publication of that runtime to the dedicated development environment. A fresh control-plane check reconfirmed `necessary-lynx-217` as type `dev`, reference `dev/hosted-pilot`, nondefault. Official `convex dev --once --typecheck enable --tail-logs disable --env-file .env.local` succeeded from the isolated checkout. Generated/runtime files remained unchanged from `14c0134`.
+
+Full strict typechecking, the explicit hosted-URL production build, and the separate Wrangler configuration dry run passed. The build contains only the intended configured backend URLs. A naive URL scan also found the official Convex client's inert validation-error example `happy-otter-123.convex.cloud`; its exact diagnostic string was traced to installed `convex/src/react/client.ts`, not treated as a configured endpoint.
+
+The new Worker `palladian-development` was published in the uniquely matched Cloudflare account after reconfirming its name was unused and subdomain was `rdxx`. Actual URL: `https://palladian-development.rdxx.workers.dev`. Version: `abe16bb8-c0c3-45e9-a3f9-62ca0e89d142`. Aggregate build digest (sorted relative path plus bytes, including build manifest): `3e938be94b5fa8c10ed03e5afc24d4d0402b4a3a5ee157dcf93b3e3944b57060`. All nine served static files were fetched over the actual HTTPS origin and matched the reviewed local build bytes. The tenth local build file is the internal Vite manifest. No production deployment, DNS change, R2 resource, or application runtime change occurred.
+
+The first hosted smoke runs passed target agreement, disabled signup, actual sign-in/reload/shared-tab identity, injected 429/503/network recovery with retained credentials, independent device revocation with an unexpired JWT, and cross-account revoke denial. They then failed the strict hostile-origin session-preservation assertion. Bounded investigation found the hostile page's Playwright route interception remained active: pinned Playwright's `coreBundle.js` automatically fulfills intercepted preflights with the caller's allowed origin. That test bypassed the browser CORS barrier, so the synthetic request could revoke the supplied fixture credential even though the final response was unreadable.
+
+Controls with interception removed after synthetic-page navigation, and separately with an actual `https://example.com` page using no interception, both observed the hosted endpoint's real HTTP 204 preflight without an allowed origin, rejected browser fetch, and preserved the positive fixture identity. The fixture correction preserves the original session-survival assertion and removes only the demonstrated preflight simulation. This is not a server runtime fix or a claim that CORS replaces authentication; the existing Node/custom-header limitation remains recorded. The corrected full smoke result follows; hosted real-expiry evidence remains pending.
+
+The independent reviewer approved that bounded fixture correction, and the corrected full `node tests/auth/hosted.mjs --target jim-pringle:palladian:dev/hosted-pilot` run subsequently passed all nine scenario groups with exit 0. This includes positive hosted sign-in/reload/shared-tab identity, deliberately injected temporary errors and recovery, actual server revocation before JWT expiry, cross-account denial, actual browser hostile-origin blocking with original session preserved, callback HTTP 403/`INVALID_CALLBACK_URL`, OTT HTTP 404, and explicit UI logout with server revocation. Only the temporary-error scenarios deliberately replaced auth responses; positive flows, protected queries/actions, and final hostile-origin auth traffic used actual hosted services. The browser's high-level Playwright preflight request event was not exposed in the full run; actual passive CDP preflight response evidence was captured separately in both successful controls. The runtime and published asset version did not change during these runs. Hosted real-expiry, real iPhone/PWA, and remaining pilot phases are still pending; this publication is an auth shell, not yet the usable Notes/Recipes prototype.
 
 ## Concrete target
 
