@@ -527,6 +527,194 @@ index 2666ea19ac94ad0255380392fb4930c7c7d22a93..5923012a21a61f8aa7c652237b7a4fb8
  export default schema;
 -//# sourceMappingURL=schema.d.ts.map
 \ No newline at end of file
+diff --git a/dist/plugins/cross-domain/client.js b/dist/plugins/cross-domain/client.js
+index 7b8fd8732bd6d7f7d3d273c77243ead7f9f2199f..61b8c2ec9d142a7a74a458ab769834b3c355ea89 100644
+--- a/dist/plugins/cross-domain/client.js
++++ b/dist/plugins/cross-domain/client.js
+@@ -48,6 +48,57 @@ export const crossDomainClient = (opts = {}) => {
+     const cookieName = `${opts?.storagePrefix || "better-auth"}_cookie`;
+     const localCacheName = `${opts?.storagePrefix || "better-auth"}_session_data`;
+     const storage = opts?.storage || (typeof window !== "undefined" ? localStorage : undefined);
++    // A generation is local request ordering, never a server credential/lifetime.
++    // Persist auth intents separately so empty -> sign-in -> sign-out is not ABA.
++    const generationName = `${opts?.storagePrefix || "better-auth"}_session_generation`;
++    const guards = new WeakMap();
++    const active = new Set();
++    const generation = () => {
++        const cookie = getCookie(storage?.getItem(cookieName) || "{}");
++        const credential = cookie
++            .split("; ")
++            .find((part) => part.slice(0, part.indexOf("=")).endsWith(".session_token")) || "";
++        return JSON.stringify([storage?.getItem(generationName) || "", credential]);
++    };
++    const check = (guard) => {
++        if (guard.generation !== generation()) {
++            guard.controller.abort(new DOMException("Authentication request superseded", "AbortError"));
++        }
++        guard.controller.signal.throwIfAborted();
++    };
++    const invalidate = () => {
++        for (const ref of active) {
++            const guard = ref.deref();
++            if (!guard) {
++                active.delete(ref);
++                continue;
++            }
++            if (guard.generation !== generation()) {
++                guard.controller.abort(new DOMException("Authentication request superseded", "AbortError"));
++                active.delete(ref);
++            }
++        }
++    };
++    if (typeof window !== "undefined") {
++        window.addEventListener("storage", (event) => {
++            if (event.key === cookieName ||
++                event.key === generationName ||
++                event.key === null)
++                invalidate();
++        });
++    }
++    const withStorageLock = (operation) => {
++        if (typeof navigator === "undefined" || !navigator.locks) {
++            throw new Error("Cross-domain authentication requires Web Locks");
++        }
++        return navigator.locks.request(`${cookieName}:session`, operation);
++    };
++    const requestGuard = (signal) => {
++        const guard = guards.get(signal);
++        if (guard)
++            check(guard);
++        return guard;
++    };
+     return {
+         id: "cross-domain",
+         version: VERSION,
+@@ -120,15 +171,26 @@ export const crossDomainClient = (opts = {}) => {
+                 id: "cross-domain",
+                 name: "Cross Domain",
+                 hooks: {
++                    onResponse(context) {
++                        requestGuard(context.request.signal);
++                    },
++                    onError(context) {
++                        requestGuard(context.request.signal);
++                    },
+                     async onSuccess(context) {
+-                        if (!storage) {
++                        if (!storage)
+                             return;
+-                        }
++                        return withStorageLock(async () => {
++                            const guard = requestGuard(context.request.signal);
+                         const setCookie = context.response.headers.get("set-better-auth-cookie");
+                         if (setCookie) {
+                             const prevCookie = storage.getItem(cookieName);
+                             const toSetCookie = getSetCookie(setCookie || "", prevCookie ?? undefined);
+                             await storage.setItem(cookieName, toSetCookie);
++                                // This response may establish the current intentional sign-in.
++                                if (guard)
++                                    guard.generation = generation();
++                                invalidate();
+                             // Only notify when the session token value actually changed.
+                             // max-age recalculation with Date.now() causes the stored
+                             // cookie JSON to always differ, so comparing values directly
+@@ -152,7 +214,7 @@ export const crossDomainClient = (opts = {}) => {
+                         if (context.request.url.toString().includes("/get-session") &&
+                             !opts?.disableCache) {
+                             const data = context.data;
+-                            storage.setItem(localCacheName, JSON.stringify(data));
++                                await storage.setItem(localCacheName, JSON.stringify(data));
+                             if (data === null) {
+                                 // Preserve non-session cookies (e.g. two_factor) when
+                                 // get-session returns null during 2FA pending state.
+@@ -170,13 +232,17 @@ export const crossDomainClient = (opts = {}) => {
+                                             preserved[key] = val;
+                                         }
+                                     }
+-                                    storage.setItem(cookieName, JSON.stringify(preserved));
++                                        await storage.setItem(cookieName, JSON.stringify(preserved));
+                                 }
+                                 catch {
+-                                    storage.setItem(cookieName, "{}");
++                                        await storage.setItem(cookieName, "{}");
++                                    }
++                                    if (guard)
++                                        guard.generation = generation();
++                                    invalidate();
+                                 }
+                             }
+-                        }
++                        });
+                     },
+                 },
+                 async init(url, options) {
+@@ -187,6 +253,18 @@ export const crossDomainClient = (opts = {}) => {
+                         };
+                     }
+                     options = options || {};
++                    // Retry the original logical request, preserving its identity intent.
++                    if (options.signal && guards.has(options.signal)) {
++                        requestGuard(options.signal);
++                        return { url, options: options };
++                    }
++                    return withStorageLock(async () => {
++                        options = options || {};
++                        if (url.includes("/sign-in/") || url.includes("/sign-out")) {
++                            await storage.setItem(generationName, crypto.randomUUID());
++                            invalidate();
++                            store?.notify("$sessionSignal");
++                        }
+                     const storedCookie = storage.getItem(cookieName);
+                     const cookie = getCookie(storedCookie || "{}");
+                     options.credentials = "omit";
+@@ -203,13 +281,45 @@ export const crossDomainClient = (opts = {}) => {
+                         });
+                         await storage.setItem(localCacheName, "{}");
+                     }
++                        const guard = {
++                            generation: generation(),
++                            controller: new AbortController(),
++                        };
++                        const originalSignal = options.signal;
++                const signal = guard.controller.signal;
++                if (originalSignal?.aborted) {
++                    guard.controller.abort(originalSignal.reason);
++                } else if (originalSignal) {
++                    const weakGuard = new WeakRef(guard);
++                    originalSignal.addEventListener("abort", () => {
++                        weakGuard.deref()?.controller.abort(originalSignal.reason);
++                    }, { once: true });
++                }
++                options.signal = signal;
++                        options.assertRequestCurrent = () => check(guard);
++                        guards.set(signal, guard);
++                        active.add(new WeakRef(guard));
++                        invalidate();
++                        const fetchImpl = options.customFetchImpl || fetch;
++                        options.customFetchImpl = async (input, init) => {
++                            check(guard);
++                            try {
++                                const response = await fetchImpl(input, init);
++                                check(guard);
++                                return response;
++                            }
++                            catch (error) {
++                                check(guard);
++                                throw error;
++                            }
++                        };
+                     return {
+                         url,
+                         options: options,
+                     };
++                    });
+                 },
+             },
+         ],
+     };
+ };
+-//# sourceMappingURL=client.js.map
+\ No newline at end of file
 diff --git a/dist/react/index.d.ts b/dist/react/index.d.ts
 index 652857c519c97b92f4819cbb8f25bea33be20982..6de89da4ba9a683524feeadd3fd671e130d6b626 100644
 --- a/dist/react/index.d.ts
@@ -540,3 +728,416 @@ index 652857c519c97b92f4819cbb8f25bea33be20982..6de89da4ba9a683524feeadd3fd671e1
  type IConvexReactClient = {
      setAuth(fetchToken: AuthTokenFetcher): void;
      clearAuth(): void;
+diff --git a/dist/react/index.js b/dist/react/index.js
+index a90d81c765fa0c1dd929a58425e73d1f35094fe8..fedc16db4ddaee077f9ea3692ae93c979107b119 100644
+--- a/dist/react/index.js
++++ b/dist/react/index.js
+@@ -1,5 +1,5 @@
+ import { Fragment as _Fragment, jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+-import { Component, useCallback, useEffect, useMemo, useRef, useState } from "react";
++import { Component, useCallback, useEffect, useMemo, useRef, useState, } from "react";
+ import { Authenticated, ConvexProviderWithAuth, useConvexAuth, useQuery, } from "convex/react";
+ /**
+  * A wrapper React component which provides a {@link react.ConvexReactClient}
+@@ -43,6 +43,15 @@ let initialTokenUsed = false;
+ function useUseAuthFromBetterAuth(authClient, initialToken) {
+     const [cachedToken, setCachedToken] = useState(initialTokenUsed ? null : (initialToken ?? null));
+     const pendingTokenRef = useRef(null);
++    const tokenGenerationRef = useRef(undefined);
++    const mountedRef = useRef(true);
++    useEffect(() => {
++        mountedRef.current = true;
++        return () => {
++            mountedRef.current = false;
++        };
++    }, []);
++    const sessionIdRef = useRef(undefined);
+     useEffect(() => {
+         if (!initialTokenUsed) {
+             initialTokenUsed = true;
+@@ -51,33 +60,49 @@ function useUseAuthFromBetterAuth(authClient, initialToken) {
+     return useMemo(() => function useAuthFromBetterAuth() {
+         const { data: session, isPending: isSessionPending } = authClient.useSession();
+         const sessionId = session?.session?.id;
++        sessionIdRef.current = sessionId;
+         useEffect(() => {
+             if (!session && !isSessionPending && cachedToken) {
+                 setCachedToken(null);
+             }
+         }, [session, isSessionPending]);
+         const fetchAccessToken = useCallback(async ({ forceRefreshToken = false, } = {}) => {
+-            if (cachedToken && !forceRefreshToken) {
++            const generation = sessionId;
++            if (cachedToken &&
++                tokenGenerationRef.current === generation &&
++                !forceRefreshToken) {
+                 return cachedToken;
+             }
+-            if (!forceRefreshToken && pendingTokenRef.current) {
++            if (!forceRefreshToken &&
++                pendingTokenRef.current &&
++                tokenGenerationRef.current === generation) {
+                 return pendingTokenRef.current;
+             }
+-            pendingTokenRef.current = authClient.convex
++            tokenGenerationRef.current = generation;
++            const pending = authClient.convex
+                 .token({ fetchOptions: { throw: false } })
+                 .then(({ data }) => {
++                if (!mountedRef.current ||
++                    generation !== sessionIdRef.current ||
++                    pendingTokenRef.current !== pending)
++                    return null;
+                 const token = data?.token || null;
+                 setCachedToken(token);
+                 return token;
+             })
+                 .catch(() => {
++                if (mountedRef.current &&
++                    generation === sessionIdRef.current &&
++                    pendingTokenRef.current === pending)
+                 setCachedToken(null);
+                 return null;
+             })
+                 .finally(() => {
++                if (pendingTokenRef.current === pending)
+                 pendingTokenRef.current = null;
+             });
+-            return pendingTokenRef.current;
++            pendingTokenRef.current = pending;
++            return pending;
+         }, 
+         // Build a new fetchAccessToken to trigger setAuth() whenever the
+         // session changes.
+@@ -199,4 +224,3 @@ isAuthError, }) => {
+     }, [isLoading, isAuthenticated]);
+     return (_jsxs(ErrorBoundary, { onUnauth: handleUnauth, isAuthError: isAuthError, renderFallback: renderFallback, children: [_jsx(Authenticated, { children: _jsx(UserSubscription, { getAuthUserFn: getAuthUserFn }) }), children] }));
+ };
+-//# sourceMappingURL=index.js.map
+\ No newline at end of file
+diff --git a/src/plugins/cross-domain/client.ts b/src/plugins/cross-domain/client.ts
+index 381c07832ad6040f9debde3fe0c1e2c340289fb5..fe4107e9de463fc20c6c102e1d414893953c0c59 100644
+--- a/src/plugins/cross-domain/client.ts
++++ b/src/plugins/cross-domain/client.ts
+@@ -86,6 +86,67 @@ export const crossDomainClient = (
+   const storage =
+     opts?.storage || (typeof window !== "undefined" ? localStorage : undefined);
+ 
++  // A generation is local request ordering, never a server credential/lifetime.
++  // Persist auth intents separately so empty -> sign-in -> sign-out is not ABA.
++  const generationName = `${opts?.storagePrefix || "better-auth"}_session_generation`;
++  type Guard = { generation: string; controller: AbortController };
++  const guards = new WeakMap<AbortSignal, Guard>();
++  const active = new Set<WeakRef<Guard>>();
++  const generation = () => {
++    const cookie = getCookie(storage?.getItem(cookieName) || "{}");
++    const credential =
++      cookie
++        .split("; ")
++        .find((part) =>
++          part.slice(0, part.indexOf("=")).endsWith(".session_token"),
++        ) || "";
++    return JSON.stringify([storage?.getItem(generationName) || "", credential]);
++  };
++  const check = (guard: Guard) => {
++    if (guard.generation !== generation()) {
++      guard.controller.abort(
++        new DOMException("Authentication request superseded", "AbortError"),
++      );
++    }
++    guard.controller.signal.throwIfAborted();
++  };
++  const invalidate = () => {
++    for (const ref of active) {
++      const guard = ref.deref();
++      if (!guard) {
++        active.delete(ref);
++        continue;
++      }
++      if (guard.generation !== generation()) {
++        guard.controller.abort(
++          new DOMException("Authentication request superseded", "AbortError"),
++        );
++        active.delete(ref);
++      }
++    }
++  };
++  if (typeof window !== "undefined") {
++    window.addEventListener("storage", (event) => {
++      if (
++        event.key === cookieName ||
++        event.key === generationName ||
++        event.key === null
++      )
++        invalidate();
++    });
++  }
++  const withStorageLock = <T>(operation: () => Promise<T>) => {
++    if (typeof navigator === "undefined" || !navigator.locks) {
++      throw new Error("Cross-domain authentication requires Web Locks");
++    }
++    return navigator.locks.request(`${cookieName}:session`, operation);
++  };
++  const requestGuard = (signal: AbortSignal) => {
++    const guard = guards.get(signal);
++    if (guard) check(guard);
++    return guard;
++  };
++
+   return {
+     id: "cross-domain",
+     version: VERSION,
+@@ -158,10 +219,16 @@ export const crossDomainClient = (
+         id: "cross-domain",
+         name: "Cross Domain",
+         hooks: {
++          onResponse(context) {
++            requestGuard(context.request.signal);
++          },
++          onError(context) {
++            requestGuard(context.request.signal);
++          },
+           async onSuccess(context) {
+-            if (!storage) {
+-              return;
+-            }
++            if (!storage) return;
++            return withStorageLock(async () => {
++              const guard = requestGuard(context.request.signal);
+             const setCookie = context.response.headers.get(
+               "set-better-auth-cookie"
+             );
+@@ -172,6 +239,9 @@ export const crossDomainClient = (
+                 prevCookie ?? undefined
+               );
+               await storage.setItem(cookieName, toSetCookie);
++                // This response may establish the current intentional sign-in.
++                if (guard) guard.generation = generation();
++                invalidate();
+               // Only notify when the session token value actually changed.
+               // max-age recalculation with Date.now() causes the stored
+               // cookie JSON to always differ, so comparing values directly
+@@ -201,7 +271,7 @@ export const crossDomainClient = (
+               !opts?.disableCache
+             ) {
+               const data = context.data;
+-              storage.setItem(localCacheName, JSON.stringify(data));
++                await storage.setItem(localCacheName, JSON.stringify(data));
+               if (data === null) {
+                 // Preserve non-session cookies (e.g. two_factor) when
+                 // get-session returns null during 2FA pending state.
+@@ -224,12 +294,18 @@ export const crossDomainClient = (
+                       preserved[key] = val;
+                     }
+                   }
+-                  storage.setItem(cookieName, JSON.stringify(preserved));
++                    await storage.setItem(
++                      cookieName,
++                      JSON.stringify(preserved),
++                    );
+                 } catch {
+-                  storage.setItem(cookieName, "{}");
++                    await storage.setItem(cookieName, "{}");
++                  }
++                  if (guard) guard.generation = generation();
++                  invalidate();
+                 }
+               }
+-            }
++            });
+           },
+         },
+         async init(url, options) {
+@@ -240,6 +316,18 @@ export const crossDomainClient = (
+             };
+           }
+           options = options || {};
++          // Retry the original logical request, preserving its identity intent.
++          if (options.signal && guards.has(options.signal)) {
++            requestGuard(options.signal);
++            return { url, options: options as BetterFetchOption };
++          }
++          return withStorageLock(async () => {
++            options = options || {};
++            if (url.includes("/sign-in/") || url.includes("/sign-out")) {
++              await storage.setItem(generationName, crypto.randomUUID());
++              invalidate();
++              store?.notify("$sessionSignal");
++            }
+           const storedCookie = storage.getItem(cookieName);
+           const cookie = getCookie(storedCookie || "{}");
+           options.credentials = "omit";
+@@ -256,10 +344,42 @@ export const crossDomainClient = (
+             });
+             await storage.setItem(localCacheName, "{}");
+           }
++            const guard: Guard = {
++              generation: generation(),
++              controller: new AbortController(),
++            };
++            const originalSignal = options.signal;
++            const signal = guard.controller.signal;
++            if (originalSignal?.aborted) {
++              guard.controller.abort(originalSignal.reason);
++            } else if (originalSignal) {
++              const weakGuard = new WeakRef(guard);
++              originalSignal.addEventListener("abort", () => {
++                weakGuard.deref()?.controller.abort(originalSignal.reason);
++              }, { once: true });
++            }
++            options.signal = signal;
++            options.assertRequestCurrent = () => check(guard);
++            guards.set(signal, guard);
++            active.add(new WeakRef(guard));
++            invalidate();
++            const fetchImpl = options.customFetchImpl || fetch;
++            options.customFetchImpl = async (input, init) => {
++              check(guard);
++              try {
++                const response = await fetchImpl(input, init);
++                check(guard);
++                return response;
++              } catch (error) {
++                check(guard);
++                throw error;
++              }
++            };
+           return {
+             url,
+             options: options as BetterFetchOption,
+           };
++          });
+         },
+       },
+     ],
+diff --git a/src/react/index.tsx b/src/react/index.tsx
+index dc10909a67009570ca00ea399828cd2775f6a561..02ae68dde002fe26de18d39599ef96132c148267 100644
+--- a/src/react/index.tsx
++++ b/src/react/index.tsx
+@@ -1,5 +1,12 @@
+ import type { PropsWithChildren, ReactNode } from "react";
+-import { Component, useCallback, useEffect, useMemo, useRef, useState } from "react";
++import {
++  Component,
++  useCallback,
++  useEffect,
++  useMemo,
++  useRef,
++  useState,
++} from "react";
+ import type { AuthTokenFetcher } from "convex/browser";
+ import {
+   Authenticated,
+@@ -19,9 +26,7 @@ import type { EmptyObject } from "convex-helpers";
+ type CrossDomainClient = ReturnType<typeof crossDomainClient>;
+ type ConvexClient = ReturnType<typeof convexClient>;
+ type PluginsWithCrossDomain = (
+-  | CrossDomainClient
+-  | ConvexClient
+-  | BetterAuthClientPlugin
++  CrossDomainClient | ConvexClient | BetterAuthClientPlugin
+ )[];
+ type PluginsWithoutCrossDomain = (ConvexClient | BetterAuthClientPlugin)[];
+ type AuthClientWithPlugins<
+@@ -34,8 +39,8 @@ type AuthClientWithPlugins<
+   >
+ >;
+ export type AuthClient =
+-  | AuthClientWithPlugins<PluginsWithCrossDomain>
+-  | AuthClientWithPlugins<PluginsWithoutCrossDomain>;
++  | AuthClientWithPlugins<[ConvexClient, CrossDomainClient]>
++  | AuthClientWithPlugins<[ConvexClient]>;
+ 
+ // Until we can import from our own entry points (requires TypeScript 4.7),
+ // just describe the interface enough to help users pass the right type.
+@@ -70,8 +75,9 @@ export function ConvexBetterAuthProvider({
+       const url = new URL(window.location.href);
+       const token = url.searchParams.get("ott");
+       if (token) {
+-        const authClientWithCrossDomain =
+-          authClient as AuthClientWithPlugins<PluginsWithCrossDomain>;
++        const authClientWithCrossDomain = authClient as AuthClientWithPlugins<
++          [ConvexClient, CrossDomainClient]
++        >;
+         url.searchParams.delete("ott");
+         window.history.replaceState({}, "", url);
+         const result =
+@@ -109,6 +115,15 @@ function useUseAuthFromBetterAuth(
+     initialTokenUsed ? null : (initialToken ?? null)
+   );
+   const pendingTokenRef = useRef<Promise<string | null> | null>(null);
++  const tokenGenerationRef = useRef<string | undefined>(undefined);
++  const mountedRef = useRef(true);
++  useEffect(() => {
++    mountedRef.current = true;
++    return () => {
++      mountedRef.current = false;
++    };
++  }, []);
++  const sessionIdRef = useRef<string | undefined>(undefined);
+   useEffect(() => {
+     if (!initialTokenUsed) {
+       initialTokenUsed = true;
+@@ -121,6 +136,7 @@ function useUseAuthFromBetterAuth(
+         const { data: session, isPending: isSessionPending } =
+           authClient.useSession();
+         const sessionId = session?.session?.id;
++        sessionIdRef.current = sessionId;
+         useEffect(() => {
+           if (!session && !isSessionPending && cachedToken) {
+             setCachedToken(null);
+@@ -130,27 +146,50 @@ function useUseAuthFromBetterAuth(
+           async ({
+             forceRefreshToken = false,
+           }: { forceRefreshToken?: boolean } = {}) => {
+-            if (cachedToken && !forceRefreshToken) {
++            const generation = sessionId;
++            if (
++              cachedToken &&
++              tokenGenerationRef.current === generation &&
++              !forceRefreshToken
++            ) {
+               return cachedToken;
+             }
+-            if (!forceRefreshToken && pendingTokenRef.current) {
++            if (
++              !forceRefreshToken &&
++              pendingTokenRef.current &&
++              tokenGenerationRef.current === generation
++            ) {
+               return pendingTokenRef.current;
+             }
+-            pendingTokenRef.current = authClient.convex
++            tokenGenerationRef.current = generation;
++            const pending = authClient.convex
+               .token({ fetchOptions: { throw: false } })
+               .then(({ data }) => {
++                if (
++                  !mountedRef.current ||
++                  generation !== sessionIdRef.current ||
++                  pendingTokenRef.current !== pending
++                )
++                  return null;
+                 const token = data?.token || null;
+                 setCachedToken(token);
+                 return token;
+               })
+               .catch(() => {
++                if (
++                  mountedRef.current &&
++                  generation === sessionIdRef.current &&
++                  pendingTokenRef.current === pending
++                )
+                 setCachedToken(null);
+                 return null;
+               })
+               .finally(() => {
++                if (pendingTokenRef.current === pending)
+                 pendingTokenRef.current = null;
+               });
+-            return pendingTokenRef.current;
++            pendingTokenRef.current = pending;
++            return pending;
+           },
+           // Build a new fetchAccessToken to trigger setAuth() whenever the
+           // session changes.

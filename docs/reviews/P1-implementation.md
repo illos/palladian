@@ -1,6 +1,6 @@
 # P1 implementation — identity, sessions, startup
 
-Date: 2026-09-09. **Review candidate; P1 acceptance is blocked by reproduced stale-response and automatic-resume failures. Do not begin P2 or adopt this transport for real data.** This is an implementation report, not independent approval.
+Initial report: 2026-09-09. Correction update: 2026-09-10. **A07 corrections now pass local and independent browser regressions. P1 acceptance awaits the corrected full-duration A03 test and independent final decision; P2 and real-data adoption remain gated.** The original findings below are historical evidence; read the correction addendum and separate `P1-review.md` for current status. This is an implementation report, not independent approval.
 
 ## Phase and base/head commits
 
@@ -125,6 +125,41 @@ Stop for the owner's independent P1 protected-core review. **P1 is not accepted,
 The corrected `pnpm test:auth:resume` completed at 19:52:58 UTC against unchanged production assets. Its safe diagnostic result was `{expiredJwtDenied:true,resumedWithoutNavigation:true,tokenResponseObserved:false,distinctUnexpiredTokenObserved:false}`. The original 900-second JWT was denied after encoded expiry +6 seconds, beyond the five-second verifier tolerance. After thaw, the observer waited the full 30 seconds for a token distinct from the original with a future expiry. None was observed. **A03 fails locally.** The positive post-resume protected-data assertion was not reached. A real iPhone/PWA remains pending regardless.
 
 The preceding probe could stop on any observed response, including a late initial response; that preliminary failure was ambiguous. The final probe corrects that observer without changing runtime behavior or weakening the success assertion. The final failure establishes the local gate result, not its root cause. Investigate the existing official provider's renewal scheduling/connection lifecycle and this integration, with redacted timing/status evidence; any protected lifecycle correction requires review before implementation. Do not introduce imperative token demands into this acceptance probe.
+
+## Roadmap correction session — 2026-09-10 (in progress)
+
+The owner assigned ongoing backend-first roadmap execution with subagents and independent adversarial review. Base remains `b315159`; independent P1 review is now recorded separately in `P1-review.md`. P1 is not accepted while correction work and real regression evidence are incomplete.
+
+The initial browser rerun in this session selected port 5173, which was already occupied by an unrelated project's Vite process. Its disposable fixture sign-in failed and provides no Palladian acceptance evidence. No real owner credential was used. That process was left untouched. Started the existing anonymous Convex deployment on 3214/3215, selected free localhost port 5183 for Palladian, and changed only that anonymous deployment's exact `SITE_URL` accordingly; the secret and session/origin policy were preserved.
+
+`scripts/local-auth-origin.mjs` validates an explicit localhost test-origin override; setup and browser probes share it. `tests/auth/environment.mjs` checks the frontend's exact Palladian title before submitting even fixture credentials. This prevents ordinary wrong-target mistakes; it is not authentication of an untrusted local service. The default remains localhost:5173. The Account UI now states that the development account is disposable and recovery unavailable, correcting the misleading previous operator-reset claim without adding a reset path.
+
+Subsequent correction evidence and the actual package runtime changes will be recorded here after completion. Prior declaration-only patch descriptions above describe the historical baseline, not prospective runtime corrections.
+
+Fresh baseline on the correct frontend, before runtime correction: `PALLADIAN_TEST_FRONTEND_ORIGIN=http://localhost:5183 node tests/auth/p1.mjs` passed all 11 actual Chromium/local-service scenarios; `origins.mjs` passed authenticated registered-origin access, hostile browser preflight with session survival, disabled OTT and exact hostile callback rejection. The hostile-origin fixture now binds an ephemeral loopback port because 5176 was also occupied; its origin remains distinct and untrusted. Independent review accepted these harness changes. The original `stale-response.mjs` again failed the unchanged substantive assertion that delayed A renewal cannot replace B. Controlled network faults are test injections; auth/session/JWT/Convex operations are actual services. No iPhone, hosted service, R2 or production evidence is claimed.
+
+The independent A03 investigation (`P1-resume-investigation.md`) and review supersede the earlier claim of a physically frozen Chromium tab: the old Playwright setup kept the page visible and its timers running. The replacement harness proves actual hidden/freeze/resume events and timer suspension, discriminates auth denial from network errors, and counts only token requests dispatched after thaw. Actual startup inspection observed two identical JWT responses, reaching Convex's `notRefetching` branch. The independently reviewed `initialAuthTokenReuse: true` option now schedules the official renewal lifecycle from the server-confirmed initial JWT; a fresh local startup observed one JWT response and working private account. This is an existing experimental Convex option, not a custom token timer. Full real-expiry proof remains pending until the immutable production run completes.
+
+Independent review also found stale application callbacks beyond the package boundary. `Runtime.tsx` now binds startup/signout completions and descendant callbacks to the current connection generation; old success or failure cannot reset/hide/sign out a newer connection. Global storage/online handlers still initiate current resets. `Account.tsx` ignores a completed current-session revocation after that Account has unmounted, preventing its old callback from signing out a later account. These restore the existing A07 contract; independent browser regressions and final code acceptance remain pending.
+
+### Corrected candidate evidence before the full expiry run
+
+Runtime patch design and removal conditions are in ADR 0003. Package versions and session lifetimes are unchanged. Source/emitted adapter and provider fixes, Better Fetch cancellation checkpoints, and exact superseded-session cancellation handling are now runtime patches, with strict source checks included in `pnpm check`. Web Locks cover shared storage transitions only; unavailable locks retain credentials and fail closed. The final implementation avoids `AbortSignal.any` to retain the documented Safari 16.4 browser baseline.
+
+| Check | Latest result and scope |
+| --- | --- |
+| `pnpm check` | Pass: strict application/backend types and patched runtime TS sources, import boundaries, 20 local tests (11 use mock transport/storage), production build and bundle budget |
+| `pnpm format:check`; `git diff --check` | Pass; patch artifacts preserve upstream context whitespace through a narrowly scoped `.gitattributes` rule |
+| Frozen strict dependency install | Pass during correction; final patch installation/source validation also passed through the pinned toolchain |
+| `tests/auth/p1.mjs` at localhost:5183 | All 11 actual Chromium/local-service scenarios passed with the corrected runtime; controlled network faults remain injections |
+| `tests/auth/origins.mjs` | Registered authenticated access, hostile preflight/session survival, disabled OTT and exact invalid callback passed locally; hosted proof pending |
+| `tests/auth/stale-response.mjs` | Parent and independent reviewer each passed original delayed A→B response and actual separate-tab A→B response with B UI/session/positive backend identity in both tabs |
+| `tests/auth/stale-ui.mjs` | Parent and reviewer each passed delayed real signout and delayed continuation after real self-revocation; current B UI/access survive and A is denied. Revoke continuation delay is test-only browser module instrumentation after the actual server operation |
+| `tests/auth/lifecycle-preflight.mjs` | Independent actual Chromium freeze/resume/timer-suppression proof passed, including browser-profile cleanup |
+| `pnpm test:browser` | Six production shell tests passed on desktop and mobile-emulated Chromium during correction; emulation is not an iPhone |
+| `pnpm hosting:check` | Workers Static Assets dry run passed; no publication |
+
+The final local production assets contain 105,057 bytes of required shell/auth JavaScript gzip (budget 204,800). The 10-file immutable asset digest for the independent full-expiry run is SHA-256 `2acde5215469cb1d13d33cc6077b61070ac68e67750e383f38bd6c6d19a941ac`, computed over sorted relative paths, a NUL separator per path, and file bytes. Production preview uses localhost:5183 and the same anonymous 3214/3215 backend. No rebuild or runtime edit is permitted during that run. Outcome remains pending until recorded by the independent reviewer.
 
 The final freeze used unchanged production frontend assets. Declaration-only corrections and exact-origin/explicit-secret checks were complete before it started; all library runtime bytes and the valid localhost/secret/session policy remained unchanged. Actual-host/phone evidence is not implied. The final short suite also strengthens public-signup rejection to a previously nonexistent address with the exact disabled-signup code, checks both persisted credential lifetimes, and targets a live other-owner session in the negative revoke test.
 

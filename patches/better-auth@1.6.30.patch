@@ -1,3 +1,16 @@
+diff --git a/dist/client/session-atom.mjs b/dist/client/session-atom.mjs
+index 426db185fba860f7388c86289493b85b95855bac..3aeff37f512e3431b3276e46c6ff59e547629df0 100644
+--- a/dist/client/session-atom.mjs
++++ b/dist/client/session-atom.mjs
+@@ -95,7 +95,7 @@ function getSessionAtom($fetch, options) {
+ 			});
+ 			return outcome;
+ 		} catch (fetchError) {
+-			if (signal.aborted) return "aborted";
++			if (signal.aborted || (fetchError instanceof DOMException && fetchError.name === "AbortError" && fetchError.message === "Authentication request superseded")) return "aborted";
+ 			const latest = session.value;
+ 			session.set({
+ 				data: latest.data,
 diff --git a/dist/plugins/organization/routes/crud-members.d.mts b/dist/plugins/organization/routes/crud-members.d.mts
 index 79703c758b8b415ee6bbcfe91ed37b39dbbeabd5..58f16108472cd0f2cb8db938c49829ee6a5f08e5 100644
 --- a/dist/plugins/organization/routes/crud-members.d.mts

@@ -16,10 +16,11 @@
     "test:browser": "playwright test",
     "check:bundle": "node scripts/check-bundle.mjs",
     "check:versions": "pnpm list --depth 0 && pnpm install --frozen-lockfile --strict-peer-dependencies",
-    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm check:bundle",
+    "check:auth-patches": "node scripts/check-auth-patch-source.mjs",
+    "check": "pnpm typecheck && pnpm check:auth-patches && pnpm lint && pnpm test && pnpm build && pnpm check:bundle",
     "format:check": "prettier --check apps packages scripts tests convex --ignore-path .prettierignore playwright.config.ts tsconfig*.json package.json pnpm-workspace.yaml .github infra",
     "hosting:check": "wrangler deploy --dry-run --config infra/cloudflare/wrangler.jsonc",
-    "test:auth:p1": "node tests/auth/p1.mjs && node tests/auth/origins.mjs && node tests/auth/stale-response.mjs",
+    "test:auth:p1": "node tests/auth/p1.mjs && node tests/auth/origins.mjs && node tests/auth/stale-response.mjs && node tests/auth/stale-ui.mjs",
     "test:auth:resume": "node tests/auth/resume.mjs"
   },
   "dependencies": {

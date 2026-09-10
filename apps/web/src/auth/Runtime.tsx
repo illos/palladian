@@ -1,4 +1,4 @@
-import { Component, lazy, Suspense, useEffect, useState } from "react";
+import { Component, lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   ConvexReactClient,
@@ -132,7 +132,12 @@ function Connection({
 }) {
   const [client] = useState(
     () =>
-      new ConvexReactClient(__PALLADIAN_CONFIG__.dataUrl, { logger: false }),
+      new ConvexReactClient(__PALLADIAN_CONFIG__.dataUrl, {
+        logger: false,
+        // Schedule renewal from the server-confirmed initial JWT. An immediate
+        // second request can receive the same JWT and leave renewal unscheduled.
+        initialAuthTokenReuse: true,
+      }),
   );
   useEffect(
     () => () => {
@@ -151,20 +156,30 @@ function Connection({
 }
 export default function Runtime() {
   const [epoch, setEpoch] = useState(0);
+  const generation = useRef(0);
+  const mounted = useRef(true);
   const [state, setState] = useState<
     "checking" | "connected" | "temporary" | "logout"
   >("checking");
   function reset() {
+    generation.current += 1;
     setState("checking");
-    setEpoch((e) => e + 1);
+    setEpoch(generation.current);
   }
   useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  useEffect(() => {
     let active = true;
+    const requestGeneration = generation.current;
     record("resolving");
     void authClient
       .getSession()
       .then((result) => {
-        if (!active) return;
+        if (!active || requestGeneration !== generation.current) return;
         if (result.error) {
           record("temporary");
           setState("temporary");
@@ -175,7 +190,7 @@ export default function Runtime() {
         }
       })
       .catch(() => {
-        if (active) {
+        if (active && requestGeneration === generation.current) {
           record("temporary");
           setState("temporary");
         }
@@ -218,22 +233,36 @@ export default function Runtime() {
   }, []);
   function logout() {
     // Unmount all private subscriptions/cache before waiting for the network.
+    const requestGeneration = ++generation.current;
+    const isCurrent = () =>
+      mounted.current && requestGeneration === generation.current;
     record("logout");
     setState("logout");
     void authClient
       .signOut()
       .then((result) => {
+        if (!isCurrent()) return;
         if (result.error) setState("logout");
         else reset();
       })
-      .catch(() => setState("logout"));
+      .catch(() => {
+        if (isCurrent()) setState("logout");
+      });
+  }
+  // Descendant async work belongs to the connection that initiated it. An old
+  // sign-in/revoke completion must not reset or sign out a newer connection.
+  function resetConnection() {
+    if (mounted.current && generation.current === epoch) reset();
+  }
+  function logoutConnection() {
+    if (mounted.current && generation.current === epoch) logout();
   }
   return (
     <section aria-label="Authentication">
       <p>Development data only · Recovery/TOTP pending</p>
       {state === "connected" ? (
-        <ConnectionBoundary key={epoch} reset={reset}>
-          <Connection reset={reset} logout={logout} />
+        <ConnectionBoundary key={epoch} reset={resetConnection}>
+          <Connection reset={resetConnection} logout={logoutConnection} />
         </ConnectionBoundary>
       ) : (
         <p role="status">

@@ -1,0 +1,3 @@
+# Patch context/removal lines must preserve upstream whitespace verbatim.
+# Normal source whitespace and formatter checks remain enabled.
+patches/*.patch -whitespace

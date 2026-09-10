@@ -1,3 +1,4 @@
+import { frontendOrigin } from "./environment.mjs";
 import { chromium } from "@playwright/test";
 import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
@@ -30,12 +31,15 @@ const server = createServer((_req, res) => {
 });
 await new Promise((resolve, reject) => {
   server.once("error", reject);
-  server.listen(5176, "127.0.0.1", resolve);
+  server.listen(0, "127.0.0.1", resolve);
 });
+const address = server.address();
+assert(address && typeof address === "object");
+const hostileOrigin = `http://127.0.0.1:${address.port}`;
 const browser = await chromium.launch();
 try {
   const page = await browser.newPage();
-  await page.goto("http://localhost:5173");
+  await page.goto(frontendOrigin);
   await page.getByLabel("Email", { exact: true }).fill(user.email);
   await page.getByLabel("Password", { exact: true }).fill(user.password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
@@ -44,7 +48,7 @@ try {
     (await import("/src/auth/client.ts")).authClient.getCookie(),
   );
   const hostile = await browser.newPage();
-  await hostile.goto("http://127.0.0.1:5176");
+  await hostile.goto(hostileOrigin);
   const blocked = await hostile.evaluate(async (cookie) => {
     try {
       await fetch("http://127.0.0.1:3215/api/auth/sign-out", {
@@ -78,7 +82,7 @@ try {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        origin: "http://localhost:5173",
+        origin: frontendOrigin,
       },
       body: '{"token":"not-a-credential"}',
     },

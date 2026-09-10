@@ -1,0 +1,114 @@
+# P1 independent protected-core review
+
+Date: 2026-09-10. Reviewed candidate: implementation `f61a6a2` and `970d941`, report `b315159`, plus the current owner specification/handoff edits. Reviewer did not implement these changes. Applied the Convex reviewer skill; inspected the specification, execution plan, P0 review, P1 implementation report, ADR 0002, application auth/backend source, acceptance probes, declaration patches, and installed Better Auth 1.6.30 / integration 0.12.5 / Convex 1.45.0 source.
+
+**Decision: changes required; P1 is not accepted.** The existing A07 failure and automatic A03 failure block downstream implementation acceptance. This review authorizes the bounded correction described below under the existing owner contract; it is not approval of the resulting code or of production, hosted auth, personal data, or a substitute session lifecycle.
+
+## Blocking findings
+
+### High — obsolete auth responses can replace the current account's browser credential
+
+`tests/auth/stale-response.mjs` preserves an actual successful sliding-renewal response from A, signs out, signs in B, then releases A's response. The implementation report records failure of the assertion that a subsequent official-client session check still identifies B. Installed `@convex-dev/better-auth/src/plugins/cross-domain/client.ts` confirms that `onSuccess` merges every cookie response into the current localStorage jar without checking the request's original identity/generation. Signout clears the jar at request initialization, but an earlier response can subsequently refill it.
+
+This is a confirmed account-state and availability defect. The reviewed evidence does not show server authorization bypass: A's revoked live session remains invalid. It nevertheless violates the protected account boundary and is unsafe as the basis for private app caches.
+
+**Bounded proposal verdict:** ADR 0002's request/session-generation guard may be implemented without asking the owner to change the contract. It restores already-required A07 behavior while leaving the supported transport, session policy, server checks, and credential format intact. Prefer the narrowest supported fetch boundary or upstream-compatible package correction. Acceptance requires independent review of actual hook ordering and new code, not merely this proposal approval.
+
+Required invariants:
+
+- Capture the request's identity generation before dispatch. Reject obsolete cookie, response-body, session-store and token-cache effects before downstream consumers process them. Cookie storage suppression by itself is insufficient: Better Auth's `dist/client/session-atom.mjs` consumes returned `/get-session` data after the fetch resolves.
+- Represent explicit identity transitions, including the empty state. Comparing only current token values misses empty → sign-in → logout → empty ordering. Same-session sliding expiry metadata must not create a new identity generation or invalidate parallel legitimate renewal.
+- Preserve intentional initial sign-in and subsequent sign-in. Delayed signout, failed signout, stale authoritative null/401 responses, old token responses and their notifications must not clear or poison a newer account. Do not treat an obsolete response as evidence that the current session is unauthorized.
+- Protect provider token promises if they can survive an identity transition: old `.then`, `.catch` or `.finally` handlers must not overwrite a current token or clear a newer pending request. The installed provider currently assigns cached tokens and clears its pending reference without comparing promise identity. Demonstrate whether the transport guard and provider disposal already close each path before adding another patch.
+- Cross-tab storage changes must participate in the same ordering. A page must not rely solely on receipt of a delayed `storage` event to decide whether a response is current. Keep credentials and private data out of diagnostics.
+- Preserve 365-day sliding sessions, the daily update threshold, 900-second JWTs, exact trusted origins, live revocation, temporary-failure credential retention and device/grant independence. No new refresh timer, rotation algorithm, account-wide revoke, custom auth proxy or relaxed assertion is approved.
+
+Required adversarial integration regressions: A → logout without a new login; A → B; initial unauthenticated request → sign-in; old `/get-session` body with no cookie header; old null/401 response; delayed `/convex/token`; delayed signout response after B; overlapping signout and sign-in; same-session sliding in two tabs; identity transition in another tab before this tab receives its storage event; and an empty-state ABA sequence. Include the existing A07 probe unchanged, positive protected access for the current platform identity after each race, and assertions on visible/store identity as well as credentials. Fault injection may delay a real response, but must retain actual Better Auth/Convex processing.
+
+**Hook-order clarification:** independently checked installed Better Fetch `dist/index.js`: caller hooks are snapshotted before plugin initialization and execute before adapter hooks. An adapter-only success hook therefore cannot prevent every obsolete downstream write. The correction may include narrowly scoped cancellation checks in Better Fetch and cancellation handling in Better Auth's session atom if required to enforce the same request-generation boundary. Check cancellation before dispatch, before each response/success/error/retry hook and before returning results, including after awaited body/schema processing. An obsolete cancellation must not mark the current account unauthorized or leave it permanently pending. Runtime changes in these packages must be separately identified and independently reviewed; the old declaration-only characterization will no longer describe the complete patch set. This is an approval of correction scope, not of an unseen implementation.
+
+### High — automatic recovery after JWT expiry is not established
+
+`tests/auth/resume.mjs` uses an actual 900-second JWT and waits beyond the verifier's five-second tolerance with the production tab frozen. The reported final run denied the old JWT and detected no navigation, but observed no distinct unexpired token during the entire 30-second resume window. The positive protected-data assertion was not reached. This is a failed local A03 gate, independently of pending iPhone evidence.
+
+There is a concrete installed-source lead, not yet a proved root cause: Convex's `src/browser/sync/authentication_manager.ts` initially force-refetches after confirming the first token unless `initialAuthTokenReuse` is enabled. If the refetch returns the identical token, `refetchToken()` transitions to `notRefetching` without scheduling another renewal. Two JWT requests within the same signing second can potentially take this branch. Establish safe request counts, token equality/expiry booleans and lifecycle timing before selecting a correction. A supported client configuration that retains the official lifecycle can be proposed and reviewed on this evidence. An imperative token demand in the acceptance probe or custom resume refresh loop would hide the failure and is not approved.
+
+Keep the existing real-expiry success conditions: old token denied after tolerance, no reload/manual refresh, a distinct automatically obtained token with future expiry, positive protected data for the same platform identity, and restored account UI. A deterministic local test may accelerate diagnosis but does not replace the real-window run. Run against unchanged built assets and record their revision. iPhone/PWA acceptance remains pending even after desktop success.
+
+**Superseding harness finding, 2026-09-10:** the diagnosis agent found that Playwright's ordinary launch/focus behavior prevents the visible page from actually freezing. Independently reproduced against a blank real Chromium page using the old probe's `chromium.launch()` and `Page.setWebLifecycleState` sequence: a 500 ms timer fired during a 1,500 ms purported freeze; visibility remained `visible`; neither `freeze` nor `resume` event occurred. No auth backend or mock was involved in this short reproduction. Therefore the earlier run establishes failure of its token-observation assertion, not an actual frozen/background-page scenario. A03 remains unproved; do not infer its root cause from that run. The corrected harness may launch raw Chromium without focus emulation and must affirmatively prove hidden state, freeze/resume events and timer suppression before accepting its real-window result. This strengthens preconditions rather than weakening the auth assertions.
+
+## Backend and contract assessment
+
+The authored public data surface is small and inspectable:
+
+| Function | Identity and authorization | Validation and bounds |
+|---|---|---|
+| `platform/identity:ensure` | Live `authComponent.getAuthUser`; provider subject derived server-side; indexed transactional unique mapping | Empty args; generated platform ID return |
+| `platform/identity:current` | Live `safeGetAuthUser`; invalid session returns null; mapped stable ID only | Empty args; explicit nullable result validator |
+| `platform/sessions:list` | Live provider user; component query scopes `userId` to that verified subject | Cursor validator; fixed 25-item page; redacted view |
+| `platform/sessions:revoke` | Live provider user; target fetched server-side and same-user checked; supported revoke API with server-only token | String session ID; null return; no browser owner/token argument |
+
+`provision:owner` is an internal operator action, not a public endpoint. It uses library validation/hashing with signup enabled only in that private auth instance. The public instance disables signup. No production auth bypass or caller-supplied owner identity was found. `platformUsers` has the provider/subject index and concurrent creation is transactional. No authored unbounded scans, generic arbitrary-table endpoints, unvalidated public outputs, or application-authored `any` escape hatches were found in this phase.
+
+The installed live-user helper derives verified identity, checks the referenced nonexpired session, and reads its provider user. Device revocation therefore does not rely on access JWT expiry alone. The P1 source correctly centralizes this boundary for P2; future resource operations must also prove actual parent ownership. P1 contains no workspace, private file, resource, schedule or grant implementation to approve.
+
+The application uses the official cross-domain client and provider arrangement described by the [current React integration guide](https://labs.convex.dev/better-auth/framework-guides/react), checked 2026-09-10. That documentation is compatibility context, not proof of the failed lifecycle scenarios. LocalStorage contains both the long session cookie and short Convex cookie; neither is HttpOnly or memory-only. The runtime correctly avoids giving credentials to app props. Hosted origins, browser CSRF/callback behavior and future custom-host bindings retain their existing independent evidence gates.
+
+Declaration patch review confirms that the checked-in P1 patches target declaration files, not JavaScript. The Better Fetch generic `any` occurrences are pre-existing library signatures carried through the declaration mapping, not newly broadened application types. Keep strict/exact-optional checking and the actual schema-generation evidence; do not synthesize Convex generated files. A future runtime adapter patch must be identified explicitly rather than continuing the old declaration-only claim.
+
+## Recovery and owner decisions
+
+ADR 0002's library-based optional TOTP requirements, one-use recovery behavior, stable identity preservation, all-device password-reset revocation and separate grant-revocation choice are appropriate requirements for compatibility testing. They are not an implemented A08 pass. The offline phrase recovery mechanism is unresolved. Email-only or operator-only recovery cannot silently become the personal-data contract; a maintained compatible mechanism or a concrete owner-approved alternative is required before adoption. This decision does not block a development-data pilot once P1–P4 pass their gates.
+
+The current Account copy says “operator reset only,” while no reset path is shipped and ADR 0002 says creating a new fixture account is not recovery. Correct this small factual UI/report mismatch to say recovery is unavailable and the account is disposable; do not add an undocumented reset backdoor. The owner need not choose a recovery replacement merely to correct that copy.
+
+## Evidence and next checkpoint
+
+This initial review is source/documentation review plus local static checks only. It does not independently rerun the reported actual-auth/browser failures or passes, write to a service, create fixtures, start a deployment, or test a phone. The implementation report's prior evidence is attributed to that report, not represented as new reviewer execution. Local check results are recorded in the following addendum after completion.
+
+Independently executed on the initial candidate before correction source edits: `pnpm typecheck` passed all three strict projects; `pnpm lint` passed import boundaries; `pnpm test` passed nine configuration/source-boundary tests. These tests use pure inputs and source fixtures; they do not validate live auth. No build, dependency install, hosted CI, service write or browser test was performed by this reviewer in this initial pass.
+
+Independent correction review is required after the bounded A07 and diagnosed A03 corrections. A01/A02/A04/A05/A06 and U01 must remain passing under the corrected runtime; declare mocks, response faults, real local services and actual browsers separately. Recovery/TOTP, Safari/real iPhone, installed PWAs, hosted Cloudflare/Convex, R2, real grants/MCP clients and downstream phase acceptance remain pending. No production or personal-data authorization follows from this review.
+
+## Correction review in progress — 2026-09-10
+
+The first A07 cancellation candidate still allowed a stale callback after a cross-client transition during asynchronous response parsing. Independently reproduced with the actual Better Auth client/plugin pipeline and synthetic fetch/storage: start A's `/get-session`, hold its JSON parser, sign in B through a second client sharing storage without browser storage events, then release A's parser. The promise rejected with `AbortError`, but A's caller `onSuccess` had already run. No credentials, live service or private content were involved. The implementer is correcting this with a current-generation check at each fetch-pipeline boundary; signal cancellation alone does not close the delayed-storage-event gap. This candidate is not accepted. Also required that an awaited cookie commit cannot adopt an unrelated newer generation, and that cross-tab storage writes have explicit serialization rather than assumed localStorage read/check/write atomicity.
+
+**Additional application completion boundary:** the parent identified, and this reviewer confirmed in source, that `Runtime.logout()` lets an old signout promise call `reset()` or `setState("logout")` after Retry and a newer login. Transport cancellation alone would turn a stale response into the stale catch path and could hide the new account. Independently found that `Account`'s current-session revoke completion can likewise invoke its captured `logout` callback after its account view unmounts, potentially signing out a newer account. A bounded synchronous application-generation guard for async completions and descendant callbacks is approved to implement under A07. Keep immediate private-state disposal and truthful current-operation error reporting; guard old completions, not just cookie writes. Test the visible region/store and positive current-account access after delayed signout/revoke. These are source findings; no claim is made that the first candidate's live integration has passed.
+
+Reviewed and approved for integration testing the A03 bounded changes: raw pinned Chromium with `connectOverCDP({ noDefaults: true })`, hidden/freeze/resume preconditions, timer suspension, post-thaw request tracking, denial restricted to HTTP 200/null or HTTP 401, and actual freeze spanning encoded JWT expiry plus six seconds. The first independent preflight established 2,522 ms suspension but failed temporary-profile cleanup with `ENOTEMPTY`; after the helper's process/cleanup correction, an independent rerun established the same 2,522 ms suspension and exited 0. These are actual Chromium checks without auth/services/mocks. The full auth expiry run remains pending.
+
+The diagnosis agent reported an actual local-service baseline with two initial token responses, both equal. This establishes relevance of the installed Convex branch described above, though that service observation was not rerun by this reviewer. The reviewed `Runtime.tsx` change sets the installed supported `initialAuthTokenReuse: true` option so server confirmation schedules renewal from the initial token's remaining lifetime. It changes no credential lifetime, live-session check or application token-acquisition ownership. The option is explicitly experimental in the pinned library and needs a maintenance/removal note. Its final acceptance depends on real A03 and affected auth regressions.
+
+Reviewed the exact localhost/explicit-port test-origin helper and the ephemeral loopback hostile-origin fixture. They avoid accidentally testing an unrelated occupied local server while preserving distinct origins and the existing preflight, session-survival and callback assertions. Flagged the initial native-Response `.ok()` mistake; the parent corrected it to `.ok` before the service runs. The frontend title preflight is mistake prevention, not a security boundary. The Account copy now truthfully describes a disposable account with recovery unavailable; no reset behavior was added.
+
+## Stable correction review before the real-expiry run
+
+**A07 source and local correction regressions are accepted. P1 phase acceptance remains pending the immutable production-build A03 result and final affected gates.** Reviewed ADR 0003 and the stable patch/runtime source: storage initialization and commits are serialized by the same prefix-scoped Web Lock; absence of Web Locks fails before changing credentials; generation assertions precede caller effects and result delivery; retries preserve the logical request; the precise superseded cancellation does not overwrite current session state; provider pending promises and application callbacks cannot complete into newer account state. Locks do not span network requests, body parsing or caller hooks. The final caller-signal forwarding avoids `AbortSignal.any`, retaining the existing Safari 16.4 build baseline; real Safari/iPhone evidence remains pending. No session, revocation, identity, origin or backend authorization contract was relaxed.
+
+Independently executed against the stable correction:
+
+| Check | Result and evidence scope |
+|---|---|
+| `node scripts/check-auth-patch-source.mjs` | Pass; strict changed adapter/provider TypeScript against installed published types |
+| `node --test tests/auth-session-races.test.mjs` | 11 pass; actual client/package pipeline and Node Web Locks, mocked network/storage |
+| `PALLADIAN_TEST_FRONTEND_ORIGIN=http://localhost:5183 node tests/auth/stale-response.mjs` | Pass; original A07 plus actual shared-context separate-tab A→B race, real Better Auth/Convex and Chromium, held committed response |
+| `PALLADIAN_TEST_FRONTEND_ORIGIN=http://localhost:5183 node tests/auth/stale-ui.mjs` | Both independently authored scenarios pass; actual signout/self-revoke, current-account UI/session/protected access preserved |
+
+The first expanded A07 attempt passed the original race but failed before entering its second scenario because `browser.newPage()` owns a single-page convenience context. The implementer changed the harness to an explicit shared `browser.newContext()`; the subsequent complete independent run passed. This was a harness correction, not a runtime change or weakened assertion.
+
+The reviewer authored `stale-ui.mjs` as an independent acceptance regression, without changing production implementation. Its first scenario holds a successful actual signout response, retries/signs in B, then releases the old completion. The second intercepts the served Account module and inserts one controlled await immediately after the actual current-session revoke succeeds. An exact single-replacement assertion prevents silently omitting this delay. It then signs in B and releases A's old application continuation. Both scenarios prove A's issued JWT loses live access, B is a different account with positive protected identity, and the current private region remains visible. Backend auth, identity, hashing, revocation and B's session are real; only response/application-completion timing is injected. No production instrumentation or test auth bypass was added. A prior-code negative control of these new UI tests was not executed; the old completion handlers were independently reviewed in source.
+
+Before fixture writes, applied the Convex deployment guard and independently confirmed the anonymous 3214/3215 target with no inherited deployment overrides; the parent had registered exactly localhost:5183. Test accounts are disposable and secrets/results stay in memory or suppressed CLI pipes. The reviewer did not push code, change environment values, deploy cloud infrastructure, alter DNS, touch Deltos, or use personal data. Each reviewer browser was closed after its run. The parent owns backend/frontend processes and the upcoming production-preview switch.
+
+Stable reviewed correction fingerprints (SHA-256):
+
+```text
+Better Fetch patch b822b992201716f227df37bda3e03ceb72ca4d8ef133aa774825f0b142729360
+Convex Better Auth patch 4cdeb67452d6ccdc63a77801df78c25b10651e2a4df42312359b8f1e49ab1e5c
+Better Auth patch 8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b
+Runtime.tsx b4f9adc902f0288d46871ce97312b0397db009eea7a3a3265e979fd5dad53fa4
+Account.tsx b313c97bfa303ae8e79b3e472335ae4a8da2ee6dbfd9daa02507fbc7bdf053eb
+```
+
+The corrected full real-expiry run must use production assets from this reviewed runtime without rebuilding mid-run. Its success may close desktop A03 only; real iPhone/PWA, hosted transport, recovery/TOTP and personal-data adoption remain separately pending.

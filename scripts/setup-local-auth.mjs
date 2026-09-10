@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { frontendOrigin } from "./local-auth-origin.mjs";
 const config = readFileSync(".env.local", "utf8");
 if (
   !config.includes("CONVEX_DEPLOYMENT=anonymous:") ||
@@ -37,9 +38,9 @@ const values = new Map(
     }),
 );
 const origin = values.get("SITE_URL");
-if (origin && origin !== "http://localhost:5173")
+if (origin && origin !== frontendOrigin)
   throw new Error("Existing frontend origin differs; refusing to change it");
-if (!origin) command(["env", "set", "SITE_URL", "http://localhost:5173"]);
+if (!origin) command(["env", "set", "SITE_URL", frontendOrigin]);
 if (!values.has("BETTER_AUTH_SECRET"))
   command([
     "env",

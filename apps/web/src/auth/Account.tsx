@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAction, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { authClient } from "./client";
@@ -7,12 +7,19 @@ export default function Account({ logout }: { logout: () => void }) {
   const sessions = useQuery(api.platform.sessions.list, { cursor });
   const revoke = useAction(api.platform.sessions.revoke);
   const [message, setMessage] = useState("");
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   return (
     <section aria-label="Account">
       <h3>Device sessions</h3>
       <p>
-        Development pilot: operator reset only. Recovery and optional TOTP are
-        not available. Use development data only.
+        Disposable development account. Recovery and optional TOTP are not
+        available. Use development data only.
       </p>
       {sessions?.page.map((s) => (
         <div key={s.id}>
@@ -25,16 +32,18 @@ export default function Account({ logout }: { logout: () => void }) {
             onClick={() => {
               void revoke({ id: s.id })
                 .then(() => {
+                  if (!mounted.current) return;
                   if (s.current) {
                     authClient.updateSession();
                     logout();
                   }
                 })
-                .catch(() =>
-                  setMessage(
-                    "Could not revoke. Retry; a fresh sign-in may be required for this account action.",
-                  ),
-                );
+                .catch(() => {
+                  if (mounted.current)
+                    setMessage(
+                      "Could not revoke. Retry; a fresh sign-in may be required for this account action.",
+                    );
+                });
             }}
           >
             Revoke

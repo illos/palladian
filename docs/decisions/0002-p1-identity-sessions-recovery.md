@@ -2,6 +2,8 @@
 
 Status: implemented for local development, **awaiting independent protected-core review**. Date: 2026-09-09. This does not approve hosted auth, production or personal-data adoption. Read ADR 0001 and the complete P0 correction review alongside this decision.
 
+2026-09-10 correction candidate: [ADR 0003](0003-p1-session-response-ordering.md) documents the now-implemented runtime response-ordering patches; the original declaration-only statements below describe the prior baseline. [The A03 investigation](../reviews/P1-resume-investigation.md) documents the corrected suspension harness and reviewed `initialAuthTokenReuse` configuration. Current evidence and the final acceptance decision belong to the P1 implementation/review reports.
+
 ## Identity and private provisioning
 
 Only the operator-invoked internal `provision:owner` action enables the library's signup API in its private instance, with automatic sign-in disabled. The public auth factory always disables signup. No bootstrap secret or privileged browser endpoint exists. Better Auth performs email validation, password hashing and credential account creation. Password length is 16–128 characters; account names are 1–100 characters. Repeating provisioning cannot overwrite an existing password (Better Auth's generic duplicate response deliberately does not disclose whether an account exists). This is provisioning, not recovery.

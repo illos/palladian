@@ -1,3 +1,4 @@
+import { frontendOrigin } from "./environment.mjs";
 // A07: a committed sliding response must not restore the previous account after logout/switch.
 import { chromium } from "@playwright/test";
 import { ConvexHttpClient } from "convex/browser";
@@ -35,16 +36,17 @@ users.forEach((u) => admin("provision:owner", u));
 const browser = await chromium.launch();
 let release;
 try {
-  const page = await browser.newPage();
-  await page.goto("http://localhost:5173");
-  async function login(user) {
-    await page.getByLabel("Email", { exact: true }).fill(user.email);
-    await page.getByLabel("Password", { exact: true }).fill(user.password);
-    await page.getByRole("button", { name: "Sign in", exact: true }).click();
-    await page.getByTestId("private-account").waitFor({ timeout: 20000 });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(frontendOrigin);
+  async function login(user, target = page) {
+    await target.getByLabel("Email", { exact: true }).fill(user.email);
+    await target.getByLabel("Password", { exact: true }).fill(user.password);
+    await target.getByRole("button", { name: "Sign in", exact: true }).click();
+    await target.getByTestId("private-account").waitFor({ timeout: 20000 });
   }
-  async function session() {
-    return page.evaluate(
+  async function session(target = page) {
+    return target.evaluate(
       async () =>
         (await (await import("/src/auth/client.ts")).authClient.getSession())
           .data?.session,
@@ -81,14 +83,22 @@ try {
     },
     { times: 1 },
   );
-  const delayed = session();
+  // Attach immediately: native fetch can reject as soon as logout invalidates it.
+  const delayed = session().then(
+    () => false,
+    (error) =>
+      String(error?.message).includes("Authentication request superseded"),
+  );
   await committedPromise;
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await login(users[1]);
   const second = await session();
   assert(second && second.userId !== first.userId);
   release();
-  await delayed;
+  assert(
+    await delayed,
+    "Old response must be canceled without returning A data",
+  );
   const result = await session();
   assert(
     result?.userId === second.userId,
@@ -105,6 +115,80 @@ try {
   assert(await c.query(api.platform.identity.current, {}));
   console.log(
     "PASS A07 delayed old-account sliding response cannot replace the current account",
+  );
+
+  // The same race in separate same-origin tabs exercises actual browser Web
+  // Locks and storage events, rather than a shared-map transport substitute.
+  const expectedIdentity = await c.query(api.platform.identity.current, {});
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await login(users[0]);
+  const acrossTabsA = await session();
+  const other = await context.newPage();
+  await other.goto(frontendOrigin);
+  await other.getByTestId("private-account").waitFor({ timeout: 20000 });
+  admin(
+    "adapter:updateOne",
+    {
+      input: {
+        model: "session",
+        where: [{ field: "_id", value: acrossTabsA.id }],
+        update: { expiresAt: Date.now() + 31536000000 - 86400000 - 1000 },
+      },
+    },
+    "betterAuth",
+  );
+  const committedAcrossTabs = new Promise((resolve) => {
+    committed = resolve;
+  });
+  const heldAcrossTabs = new Promise((resolve) => {
+    release = resolve;
+  });
+  await page.route(
+    "**/api/auth/get-session*",
+    async (route) => {
+      const response = await route.fetch();
+      assert(response.ok());
+      committed();
+      await heldAcrossTabs;
+      await route.fulfill({ response });
+    },
+    { times: 1 },
+  );
+  const delayedAcrossTabs = session().then(
+    () => false,
+    (error) =>
+      String(error?.message).includes("Authentication request superseded"),
+  );
+  await committedAcrossTabs;
+  await other.getByRole("button", { name: "Sign out", exact: true }).click();
+  await login(users[1], other);
+  const acrossTabsB = await session(other);
+  assert(acrossTabsB && acrossTabsB.userId !== acrossTabsA.userId);
+  release();
+  assert(
+    await delayedAcrossTabs,
+    "Other tab's account change must cancel old response",
+  );
+  for (const target of [page, other]) {
+    await target.getByTestId("private-account").waitFor({ timeout: 20000 });
+    assert.equal((await session(target))?.userId, acrossTabsB.userId);
+    const token = await target.evaluate(
+      async () =>
+        (await (await import("/src/auth/client.ts")).authClient.convex.token())
+          .data?.token,
+    );
+    assert(token);
+    const client = new ConvexHttpClient("http://127.0.0.1:3214", {
+      logger: false,
+    });
+    client.setAuth(token);
+    assert.deepEqual(
+      await client.query(api.platform.identity.current, {}),
+      expectedIdentity,
+    );
+  }
+  console.log(
+    "PASS A07 separate tabs retain B UI, session and protected identity after held A response",
   );
 } catch (error) {
   console.error(

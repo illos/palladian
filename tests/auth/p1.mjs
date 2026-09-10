@@ -1,3 +1,4 @@
+import { frontendOrigin } from "./environment.mjs";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -69,7 +70,7 @@ async function ready(page) {
   await page.getByTestId("private-account").waitFor({ timeout: 20000 });
 }
 async function login(page, user) {
-  await page.goto("http://localhost:5173");
+  await page.goto(frontendOrigin);
   await page.getByLabel("Email", { exact: true }).fill(user.email);
   await page.getByLabel("Password", { exact: true }).fill(user.password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
@@ -111,7 +112,7 @@ try {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      origin: "http://localhost:5173",
+      origin: frontendOrigin,
     },
     body: JSON.stringify({
       ...owner,
@@ -166,7 +167,7 @@ try {
   pass(scenario);
   scenario = "A01 same-tab and shared-storage multitab token races";
   const tab = await context.newPage();
-  await tab.goto("http://localhost:5173");
+  await tab.goto(frontendOrigin);
   await ready(tab);
   assert(
     (await Promise.all([call(page, "race"), call(tab, "race")])).every(Boolean),
@@ -373,7 +374,7 @@ try {
   pass(scenario);
   scenario = "A07 cross-tab logout and failed signout remains locally cleared";
   const peer = await context.newPage();
-  await peer.goto("http://localhost:5173");
+  await peer.goto(frontendOrigin);
   await ready(peer);
   await page.route("**/api/auth/sign-out", (route) => route.abort("timedout"));
   await page.getByRole("button", { name: "Sign out", exact: true }).click();

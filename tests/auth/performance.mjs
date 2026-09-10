@@ -1,3 +1,4 @@
+import { frontendOrigin } from "./environment.mjs";
 import { chromium } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -27,7 +28,7 @@ const browser = await chromium.launch();
 try {
   const original = await browser.newContext();
   const first = await original.newPage();
-  await first.goto("http://localhost:5173");
+  await first.goto(frontendOrigin);
   await first.getByLabel("Email", { exact: true }).fill(user.email);
   await first.getByLabel("Password", { exact: true }).fill(user.password);
   await first.getByRole("button", { name: "Sign in", exact: true }).click();
@@ -51,7 +52,7 @@ try {
   for (let i = 0; i < 6; i++) {
     const context = await browser.newContext({ storageState: state });
     const page = await context.newPage();
-    await page.goto("http://localhost:5173");
+    await page.goto(frontendOrigin);
     cold.push(await measure(page));
     await page.reload();
     warm.push(await measure(page));
