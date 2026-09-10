@@ -65,6 +65,10 @@ export type Connectivity = "online" | "reconnecting" | "offline";
 export type SaveStatus = "unchanged" | "pending" | "acknowledged" | "failed";
 export type ThemePreference = "light" | "dark" | "system";
 export const LIMITS = Object.freeze({
+  titleCharacters: 100,
+  minIdempotencyKeyCharacters: 8,
+  idempotencyKeyCharacters: 128,
+  cursorCharacters: 4096,
   listPage: 25,
   maxListPage: 100,
   searchPage: 20,
@@ -83,3 +87,20 @@ export interface ResourceService {
     limit: number;
   }): Promise<Result<Page<SearchHit>>>;
 }
+
+export type InstancePreferencesId = PlatformId<"instance-preferences">;
+export type InstanceDensity = "comfortable" | "compact";
+export interface Workspace {
+  readonly id: WorkspaceId;
+  readonly title: string;
+  readonly revision: number;
+  readonly theme: ThemePreference;
+}
+export interface InstancePreferences {
+  readonly id: InstancePreferencesId;
+  readonly workspaceId: WorkspaceId;
+  readonly instanceId: InstanceId;
+  readonly density: InstanceDensity;
+  readonly revision: number;
+}
+export { instanceHref, resourceHref } from "./routes";

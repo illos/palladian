@@ -139,3 +139,44 @@ test("host auth may import generated API and browser client, never server code",
     );
   }
 });
+
+test("platform host can consume reactive API and generated ID types only", () => {
+  const file = "apps/web/src/platform/Workspace.tsx";
+  for (const source of [
+    'import {useQuery} from "convex/react";',
+    'import {api} from "../../../../convex/_generated/api.js";',
+    'import type {Id} from "../../../../convex/_generated/dataModel";',
+  ])
+    assert.deepEqual(violations(file, source), []);
+  for (const source of [
+    'import {query} from "../../../../convex/_generated/server";',
+    'import {auth} from "../../../../convex/auth";',
+    'import {authClient} from "better-auth/react";',
+    'import {Doc} from "../../../../convex/_generated/dataModel";',
+  ])
+    assert(violations(file, source).length);
+});
+
+test("server app modules require scope helper and reject sibling or auth internals", () => {
+  const file = "convex/apps/notes/instances.ts";
+  const scope = 'import {requireAppInstance} from "../../platform/scope";';
+  assert.deepEqual(
+    violations(file, scope + 'import {query} from "../../_generated/server";'),
+    [],
+  );
+  for (const source of [
+    "",
+    'import type {requireAppInstance} from "../../platform/scope";',
+    'export {requireAppInstance} from "../../platform/scope";',
+  ])
+    assert(violations(file, source).length);
+  for (const spec of [
+    "../recipes/instances",
+    "../../auth",
+    "node:fs",
+    "better-auth",
+    "../../_generated/api",
+    "../recipes/instances.js",
+  ])
+    assert(violations(file, scope + `import * as x from "${spec}";`).length);
+});

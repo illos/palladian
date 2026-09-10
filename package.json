@@ -21,7 +21,8 @@
     "format:check": "prettier --check apps packages scripts tests convex --ignore-path .prettierignore playwright.config.ts tsconfig*.json package.json pnpm-workspace.yaml .github infra",
     "hosting:check": "wrangler deploy --dry-run --config infra/cloudflare/wrangler.jsonc",
     "test:auth:p1": "node tests/auth/p1.mjs && node tests/auth/origins.mjs && node tests/auth/stale-response.mjs && node tests/auth/stale-ui.mjs",
-    "test:auth:resume": "node tests/auth/resume.mjs"
+    "test:auth:resume": "node tests/auth/resume.mjs",
+    "test:platform:p2": "node tests/platform/redteam.mjs && node tests/platform/ui.mjs"
   },
   "dependencies": {
     "@convex-dev/better-auth": "0.12.5",

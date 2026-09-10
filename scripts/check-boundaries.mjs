@@ -19,6 +19,8 @@ export function violations(file, source) {
     sourceType: "module",
     plugins: ["typescript", "jsx"],
   });
+  const serverApp = normalized.match(/^convex\/apps\/([^/]+)\//)?.[1];
+  let hasScopeImport = false;
   function visit(node) {
     if (!node || typeof node !== "object") return;
     if (node.type === "TSAnyKeyword") errors.push("Explicit any is forbidden");
@@ -42,14 +44,46 @@ export function violations(file, source) {
             path.posix.join(path.posix.dirname(normalized), spec),
           )
         : spec;
+      const canonicalTarget = target.replace(/\.(?:[cm]?[jt]sx?)$/, "");
+      const typeOnly = node.importKind === "type" || node.exportKind === "type";
+      if (serverApp) {
+        const scopeImport = canonicalTarget === "convex/platform/scope";
+        if (
+          scopeImport &&
+          node.type === "ImportDeclaration" &&
+          !typeOnly &&
+          node.specifiers.some(
+            (s) =>
+              s.type === "ImportSpecifier" &&
+              s.importKind !== "type" &&
+              s.imported.name === "requireAppInstance",
+          )
+        )
+          hasScopeImport = true;
+        const allowed =
+          canonicalTarget.startsWith(`convex/apps/${serverApp}/`) ||
+          canonicalTarget.startsWith("convex/platform/") ||
+          canonicalTarget === "convex/_generated/server" ||
+          (typeOnly && canonicalTarget === "convex/_generated/dataModel") ||
+          spec === "convex/values" ||
+          canonicalTarget.startsWith("packages/contracts/");
+        if (!allowed)
+          errors.push(
+            `App server imports outside registered boundary: ${spec}`,
+          );
+      }
       const client =
         normalized.startsWith("apps/web/src/") ||
         normalized.startsWith("packages/");
       const authPackage =
         /^(?:better-auth|@convex-dev\/better-auth)(?:\/|$)/.test(spec);
       const hostConvexClient =
-        normalized.startsWith("apps/web/src/auth/") &&
-        (spec === "convex/react" || target === "convex/_generated/api");
+        (normalized.startsWith("apps/web/src/auth/") ||
+          normalized.startsWith("apps/web/src/platform/")) &&
+        (spec === "convex/react" ||
+          spec === "convex/values" ||
+          canonicalTarget === "convex/_generated/api" ||
+          (typeOnly && canonicalTarget === "convex/_generated/dataModel"));
       const allowedAuthClient =
         normalized.startsWith("apps/web/src/auth/") &&
         authClientEntries.has(spec);
@@ -91,6 +125,10 @@ export function violations(file, source) {
       }
   }
   visit(ast.program);
+  if (serverApp && !hasScopeImport)
+    errors.push(
+      "App server must import the live requireAppInstance scope helper",
+    );
   if (/@ts-(ignore|nocheck)/.test(source))
     errors.push("Typecheck suppression is forbidden");
   return [...new Set(errors)];
@@ -102,7 +140,11 @@ function files(dir) {
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const errors = [];
-  for (const file of [...files("apps/web/src"), ...files("packages")]) {
+  for (const file of [
+    ...files("apps/web/src"),
+    ...files("packages"),
+    ...files("convex/apps"),
+  ]) {
     if (/\.(ts|tsx)$/.test(file))
       errors.push(
         ...violations(file, readFileSync(file, "utf8")).map(

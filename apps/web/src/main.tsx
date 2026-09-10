@@ -1,4 +1,4 @@
-import { Component, Suspense, lazy, useState } from "react";
+import { Component, Suspense, lazy, useState, useEffect } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import type { ThemePreference } from "../../../packages/contracts/src/index";
@@ -42,6 +42,15 @@ function Shell() {
     const value = document.documentElement.dataset.theme;
     return value === "dark" || value === "light" ? value : "system";
   });
+  useEffect(() => {
+    function reconciled() {
+      const value = document.documentElement.dataset.theme;
+      setTheme(value === "dark" || value === "light" ? value : "system");
+    }
+    window.addEventListener("palladian-theme-reconciled", reconciled);
+    return () =>
+      window.removeEventListener("palladian-theme-reconciled", reconciled);
+  }, []);
   const entry = previews.find((def) => def.id === selected);
   function changeTheme(value: ThemePreference) {
     setTheme(value);
@@ -82,7 +91,7 @@ function Shell() {
           </nav>
           <div className="sidebar-bottom">
             <span className="status-dot" /> Foundation preview
-            <p>Private owner pilot · P1</p>
+            <p>Private owner pilot · P2</p>
           </div>
         </aside>
         <div className="workspace">
@@ -147,7 +156,7 @@ function Shell() {
                 <section aria-labelledby="apps-heading">
                   <div className="section-heading">
                     <h2 id="apps-heading">Your apps</h2>
-                    <span>Foundation · P1</span>
+                    <span>Foundation · P2</span>
                   </div>
                   <div className="app-grid">
                     {previews.map((def) => (

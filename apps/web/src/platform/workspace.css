@@ -1,0 +1,39 @@
+.workspace {
+  margin-block: 1.5rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.workspace form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.75rem;
+}
+.workspace label {
+  display: grid;
+  gap: 0.35rem;
+}
+.workspace input,
+.workspace select {
+  min-height: 2.75rem;
+  padding: 0.5rem;
+  max-width: 100%;
+}
+.workspace button {
+  min-height: 2.75rem;
+  padding: 0.5rem 0.8rem;
+  margin: 0.25rem;
+}
+.instance-list {
+  display: grid;
+  gap: 1rem;
+  margin-block: 1rem;
+}
+.instance-editor {
+  border-top: 1px solid var(--border);
+  padding-block: 1rem;
+}
+.workspace [role="status"]:empty {
+  display: none;
+}

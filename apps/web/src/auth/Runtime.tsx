@@ -12,6 +12,7 @@ import { authClient } from "./client";
 import { record, exportDiagnostics } from "./diagnostics";
 const SignIn = lazy(() => import("./SignIn"));
 const Account = lazy(() => import("./Account"));
+const Workspace = lazy(() => import("../platform/Workspace"));
 function Identity({
   reset,
   logout,
@@ -64,6 +65,7 @@ function Identity({
       <p>Account connected.</p>
       <Suspense fallback={<p>Opening account…</p>}>
         <Account logout={logout} />
+        <Workspace />
       </Suspense>
     </div>
   );
