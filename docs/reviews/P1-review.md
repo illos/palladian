@@ -2,7 +2,7 @@
 
 Date: 2026-09-10. Reviewed candidate: implementation `f61a6a2` and `970d941`, report `b315159`, plus the current owner specification/handoff edits. Reviewer did not implement these changes. Applied the Convex reviewer skill; inspected the specification, execution plan, P0 review, P1 implementation report, ADR 0002, application auth/backend source, acceptance probes, declaration patches, and installed Better Auth 1.6.30 / integration 0.12.5 / Convex 1.45.0 source.
 
-**Decision: changes required; P1 is not accepted.** The existing A07 failure and automatic A03 failure block downstream implementation acceptance. This review authorizes the bounded correction described below under the existing owner contract; it is not approval of the resulting code or of production, hosted auth, personal data, or a substitute session lifecycle.
+**Current decision: P1 accepted for local development, 2026-09-10.** Independently reviewed correction commit `14c01341de205f5014c50156261d0415c72b0793` and passed the full real-expiry A03 test against unchanged production assets. The final acceptance section below supersedes the original changes-required decision and intermediate pending statuses. Hosted transport, actual iPhone/PWA, implemented recovery/TOTP, production and personal-data adoption remain unaccepted. The original findings and correction evidence are retained below.
 
 ## Blocking findings
 
@@ -112,3 +112,23 @@ Account.tsx b313c97bfa303ae8e79b3e472335ae4a8da2ee6dbfd9daa02507fbc7bdf053eb
 ```
 
 The corrected full real-expiry run must use production assets from this reviewed runtime without rebuilding mid-run. Its success may close desktop A03 only; real iPhone/PWA, hosted transport, recovery/TOTP and personal-data adoption remain separately pending.
+
+## Final independent acceptance — 2026-09-10
+
+**P1 is accepted as the local-development foundation for P2.** The reviewer owned the single complete run of `PALLADIAN_TEST_FRONTEND_ORIGIN=http://localhost:5183 node tests/auth/resume.mjs`; it exited 0, with completion verified at 04:07 UTC. This was actual production-built Palladian, the actual anonymous Convex/Better Auth backend at 3214/3215, and actual Chromium JS suspension. It did not shorten the 900-second JWT lifetime, fake the clock, invoke a browser token refresh directly, reload the page, or replace backend auth with a mock.
+
+The safe result was:
+
+```json
+{"expiredJwtDenied":true,"resumedWithoutNavigation":true,"tokenResponseObserved":true,"distinctUnexpiredTokenObserved":true}
+```
+
+All subsequent assertions completed: the page froze before JWT expiry and stayed frozen through expiry plus six seconds; its one-second timer ran only after actual resume; a token request dispatched after thaw returned a distinct unexpired JWT within the existing 30-second observation window; that token retrieved the same protected platform identity; the private account UI was available; and the final signout executed. The old token was denied by the real server after its verifier tolerance. A temporary service failure could not satisfy the corrected denial assertion. The browser and its temporary profile were closed successfully.
+
+Independently recorded all ten production files, including the hidden Vite manifest, before the run and compared the exact per-file hash/path manifest after completion: no file or content changed. Its reviewer manifest fingerprint is `0d8effde292268212aa3ee2637237334ac372b56f1c02184a542fa0ece78c66f`. Also independently reproduced the implementation report's aggregate using sorted relative paths, NUL separators and file bytes: `2acde5215469cb1d13d33cc6077b61070ac68e67750e383f38bd6c6d19a941ac`. The reviewed runtime is correction commit `14c01341de205f5014c50156261d0415c72b0793`; committing the already-reviewed source during the waiting interval did not change those bytes. Final strict application/backend typecheck and import lint were independently rerun and passed without rebuilding the assets.
+
+This closes the local A03 and A07 blockers in conjunction with the independently reproduced correction cases above. The parent reports the corrected 11-scenario real-auth suite, local origin probe, 20 local tests, six production-shell browser tests, strict checks/build, 105,057-byte required-auth bundle, hosting dry run, timing/redacted export and dependency checks in `P1-implementation.md`; those parent executions are attributed there and are not relabeled as independent reviewer runs. The original backend source review and the final bounded correction review found no additional P1-blocking defect.
+
+The existing session policy remains 365-day sliding expiry, daily update threshold, 900-second access JWT, supported library freshness behavior, live-session revocation, private provisioning and stable provider-to-platform identity mapping. The package runtime patches and experimental Convex initial-token option remain maintenance obligations under ADR 0003 and the resume investigation; their regression tests must accompany upgrades. The owner does not need to select a new auth contract to proceed.
+
+Acceptance permits downstream **development-data** implementation under the active roadmap goal. It does not certify hosted HTTPS transport or any domain binding; those require the actual hosted-origin checks. Real iPhone/Safari and installed-PWA persistence/resume remain pending and block v1 acceptance. Recovery/TOTP requirements have been reviewed as a design, but the maintained phrase-recovery mechanism remains unresolved and all recovery implementation remains pending before personal-data adoption. Agent-grant independence, private files, application cache/draft isolation, collaboration, MCP, scheduling and later release evidence remain in their assigned phases. No production deployment, DNS change, real-data import, or Deltos modification is authorized by this review.
