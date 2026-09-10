@@ -1,0 +1,11 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "palladian-development",
+  "compatibility_date": "2026-09-09",
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "directory": "../../.wrangler/palladian-development/assets",
+    "not_found_handling": "single-page-application",
+  },
+}
