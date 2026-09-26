@@ -19,14 +19,14 @@ The app must avoid Deltos's failure mode: locally available notes hidden behind 
 
 ## Confirmed feature direction
 
-The first usable release is for **the owner plus invited collaborators** (confirmed during specification drafting). Public signup is outside the initial scope. Ownership and invitation permissions still need Q06.
+The first usable release is for **the owner plus invited collaborators** (confirmed during specification drafting). Public signup is outside the initial scope. Notebooks are libraries of notes, private by default. Each notebook and note has a permissions manifest: private, private with invited members, or public to anyone with the URL. Members may be users or individual AI agents, each with read-only or edit access. Explicit note permissions override notebook defaults. Remaining ownership and sharing details are Q06.
 
 | Area            | Desired product behavior                                                           | Release commitment                                                  |
 | --------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | Notes           | Simple, clean writing and organization                                             | Core                                                                |
 | Editor          | Apple Notes-like continuous rich text, Markdown shortcuts, optional complex embeds | Core; exact formats open                                            |
 | History         | Recoverable revisions and restore                                                  | Core foundation                                                     |
-| Sharing         | Shareable links and access control                                                 | Requested; exact modes open                                         |
+| Sharing         | Shareable links and access control                                                 | Modes confirmed; remaining semantics open                           |
 | Collaboration   | Realtime editing where possible                                                    | Requested; editor/backend gate                                      |
 | External agents | Fast search, creation, editing, attachment, and publishing through MCP             | Core product interface                                              |
 | Accounts        | User accounts, reliable authentication, security                                   | Core; owner plus invited collaborators; login/recovery methods open |
@@ -56,7 +56,7 @@ Agent paragraph checkout is a desired collaboration direction: indicate which se
 
 ## What this draft does not assume
 
-The organization hierarchy, ownership/invitation details, public sharing semantics, login method, recovery method, end-to-end encryption requirement, file quotas, retention, and production domain are unresolved. The old single-owner auth plan cannot decide those for the new app.
+Notebooks and note-level permission overrides are confirmed. Further organization details, ownership/invitation administration, public visitor rights and live-versus-snapshot behavior, login method, recovery method, end-to-end encryption requirement, file quotas, retention, and production domain are unresolved. The old single-owner auth plan cannot decide those for the new app.
 
 ## Success
 

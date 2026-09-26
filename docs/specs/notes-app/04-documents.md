@@ -15,7 +15,10 @@ These are conceptual records, not a finalized database schema.
 | Record                  | Essential meaning                                                                                                                                                    |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Account                 | Stable identity independent of login provider                                                                                                                        |
-| Membership/access grant | Who can access which collection/note and with what rights                                                                                                            |
+| Notebook                | Library of notes with its own permissions manifest, private by default                                                                                               |
+| Permission manifest     | Notebook or note visibility and invited user/individual-agent read/edit entries; explicit note preferences override notebook defaults                                |
+| Agent identity          | Individually addressable agent member, distinct from its display name or provider label                                                                              |
+| Membership/access grant | Which user or individual agent can access which notebook/note and with what rights                                                                                   |
 | Note                    | Stable ID, owner/access scope, title, current accepted revision, lifecycle state                                                                                     |
 | Revision                | Immutable ID, note ID, parent/base reference, schema version, authenticated actor, change provenance, device edit time, server receipt time, reconstructable content |
 | Edit operation          | Stable request ID, expected revision/target versions, operation payload, result receipt                                                                              |

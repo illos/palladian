@@ -56,15 +56,21 @@ Proposed: immediate Undo reverses a shortcut transformation and restores literal
 
 ## Organization and search
 
-Open Q05/Q06: account ownership and collection hierarchy; first-release accounts are confirmed as owner plus invited collaborators. Proposed minimal shape: a private library, notebooks/collections, pinned notes, archive/trash, and text search. Folder nesting, tags, multi-collection membership, title placement, and default sorting are not decided.
+Confirmed: a notebook is a library of notes, private by default. First-release accounts are the owner plus invited collaborators. Proposed supporting features: pinned notes, archive/trash, and text search. Notebook ownership/administration, nesting, tags, multi-notebook membership, title placement, and default sorting remain Q05/Q06.
 
 Cached title/preview search can respond immediately. Server full-text search provides authorized results across accepted content. If local search covers only cached content, the UI states that scope. Agent reads for editing resolve current authoritative content, not an old search excerpt.
 
 ## Sharing and publishing
 
-Shareable links are confirmed; their meaning is Q06. Distinguish invited access, unlisted viewing, anonymous editing, and publication of a fixed revision. Do not make these equivalent accidentally.
+Confirmed: every notebook and every note has a permissions manifest supporting:
 
-Proposed default: invited readers/editors plus revocable unlisted read links; publication is an explicit action on a chosen revision. Public snapshots include only intentionally published attachments and do not expose private history, agent conversation, or later drafts. Link expiry, indexing, editing rights, and attachment access follow the selected sharing contract.
+- Private.
+- Private with access for invited members. A member is another user or an individual AI agent; each invited member can read only or edit.
+- Public: anyone with the URL can access it. This does not authorize public account signup.
+
+Notebook permissions provide defaults; explicit individual note permissions override them. A private note inside a shared/public notebook remains private; a note can be shared independently from a private notebook. Notebook listing and search must respect the effective note permissions.
+
+Open Q06: public visitor read/edit rights, who manages invitations and permissions, live content versus fixed-revision publication, history visibility, and link expiry/indexing. Proposed defaults: public visitors read only, links are revocable, and any snapshot publication is an explicit action. Public snapshots would include only intentionally published attachments and exclude private history, agent conversation, and later drafts. These defaults are not confirmed merely by selecting public URL access.
 
 ## Files and embeds
 

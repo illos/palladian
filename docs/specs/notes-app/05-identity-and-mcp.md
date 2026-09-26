@@ -2,7 +2,7 @@
 
 ## Accounts and reliable sessions
 
-**Confirmed Q01:** first usable release is for the owner plus invited collaborators. Public signup is outside that initial scope. Proposed: each person has their own account and private library; invitations grant explicit access rather than making all invited users co-owners. The exact ownership/invitation model is Q06.
+**Confirmed Q01:** first usable release is for the owner plus invited collaborators. Public signup is outside that initial scope. Confirmed: notebooks contain notes and are private by default. Notebook and note permissions support private, invited-member, and public URL access. Invited members can be users or individual agents with read-only or edit access. Explicit note permissions override notebook defaults. Ownership and permission-administration rules remain Q06.
 
 Better Auth is the preferred identity/session library. Login methods, recovery, MFA, and encryption expectations are Q08/Q13; supported integration is G03. Do not inherit single-owner security exceptions from Deltos or copy the old app's session state machine.
 
@@ -23,7 +23,9 @@ Better Auth supports configurable lifetime and renewal intervals, but correct se
 
 ## Authorization
 
-Proposed: one server-owned authorization layer shared by editor operations, MCP, file access, search, history, and publication. Permission checks cover the actual note/container, not just whether a caller is logged in.
+Confirmed: authorization must represent individual agents as members, not just a blanket provider label such as Codex or Claude. Both notes and notebooks have permission manifests; explicit note settings take precedence over notebook defaults. The agent identity and credential-linking representation remains an implementation design, with connection authentication covered by Q14.
+
+Proposed: one server-owned authorization layer shared by editor operations, MCP, file access, search, history, and publication. Permission checks cover the effective note/notebook permissions, not just whether a caller is logged in. Notebook membership cannot bypass a more restrictive note override, including through listings, search excerpts, direct reads, files, or MCP.
 
 Never derive identity from caller-supplied account IDs. Recheck write access at commit time, including claim expiry and offline branch submission. Search results must be scoped before returning excerpts. Private bytes and revision history follow explicit access rules. File links must not expose permanent credentials.
 
@@ -43,7 +45,7 @@ MCP endpoints must work while the browser is closed. They access the current acc
 
 Proposed small, coherent model:
 
-- Collections: stable IDs, names, descriptions, access rights, and filing guidance.
+- Notebooks: stable IDs, names, descriptions, permission manifests, effective access rights, and filing guidance.
 - Notes: stable ID, title, metadata, accepted revision, outline, and document URL.
 - Content: readable text/Markdown with stable section/block targets; typed references for rich objects.
 - Revisions: explicit expected revision or target-version preconditions and compact committed receipts.
@@ -54,17 +56,17 @@ Creation accepts substantial Markdown in one request and converts it into native
 
 Names below are conceptual API names, not frozen wire schemas.
 
-| Tool family      | Contract                                                                                                          |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Find collections | Resolve destination using IDs/names, description, and configured filing guidance                                  |
-| Search notes     | Ranked authorized excerpts, note IDs, matching section IDs, revision and pagination information                   |
-| Read note        | Outline, selected sections, or full readable content; clear truncation/pagination; current revision for editing   |
-| Create note      | Title, destination, Markdown/native supported content, optional metadata, stable request ID                       |
-| Edit note        | Bounded atomic batch of append/insert/replace/move/delete-content/metadata operations with explicit preconditions |
-| Attach file      | Upload/finalize/reference workflow; no whole-body rewrite; explicit size/type limits                              |
-| History          | List/read/compare/restore revisions according to permission policy                                                |
-| Share/publish    | Explicit visibility operation, independent of ordinary save                                                       |
-| Claim/release    | Optional online section checkout, expiry, and takeover semantics                                                  |
+| Tool family    | Contract                                                                                                          |
+| -------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Find notebooks | Resolve destination using IDs/names, description, and configured filing guidance                                  |
+| Search notes   | Ranked authorized excerpts, note IDs, matching section IDs, revision and pagination information                   |
+| Read note      | Outline, selected sections, or full readable content; clear truncation/pagination; current revision for editing   |
+| Create note    | Title, destination, Markdown/native supported content, optional metadata, stable request ID                       |
+| Edit note      | Bounded atomic batch of append/insert/replace/move/delete-content/metadata operations with explicit preconditions |
+| Attach file    | Upload/finalize/reference workflow; no whole-body rewrite; explicit size/type limits                              |
+| History        | List/read/compare/restore revisions according to permission policy                                                |
+| Share/publish  | Explicit visibility operation, independent of ordinary save                                                       |
+| Claim/release  | Optional online section checkout, expiry, and takeover semantics                                                  |
 
 Prefer stable target IDs; never assume a heading label is unique. Destructive operations state their effects clearly. A tool that saves a private note does not implicitly publish it. Unknown or unsupported blocks remain preserved and readable by description.
 
