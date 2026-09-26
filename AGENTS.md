@@ -1,5 +1,7 @@
 # Palladian implementation instructions
 
+> **Owner direction — deep sleep, 2026-09-26.** This entire app-hosting-platform effort is shelved. Do not resume implementation, review, or deployment from an old phase assignment or ongoing-roadmap instruction. The current product focus is the original Deltos goal: a fast, MCP-first notes app. Resume Palladian only on a new explicit owner request. See `docs/handoff/deep-sleep.md` for preserved work and recovery. All phase instructions below are historical while shelved.
+
 Read `docs/specs/palladian-platform-v1.md` and the assigned phase in `docs/handoff/execution-plan.md` before implementation. This repository begins as a specification handoff, not an existing application.
 
 - Implement the phase assigned by the user. If using the initial handoff prompt, that phase is P0 only.

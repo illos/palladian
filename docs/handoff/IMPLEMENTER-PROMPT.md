@@ -1,5 +1,7 @@
 # Copy this prompt into the coding-model session
 
+> **Inactive — deep sleep, 2026-09-26.** These prompts are historical. The owner has shelved the app-platform concept and returned focus to fast, MCP-first Deltos notes. Do not execute them without a new explicit owner request to resume Palladian. See [the shelf record](deep-sleep.md).
+
 You are implementing Palladian, a personal platform for small agent-built web apps. The repository is `/srv/presidium/projects/palladian/code`.
 
 Read these files fully before editing:

@@ -1,5 +1,7 @@
 # Palladian implementation and review plan
 
+> **Shelved — deep sleep, 2026-09-26.** This plan is inactive. The owner has returned focus to the original Deltos goal: a fast, MCP-first notes app. See [the shelf record](deep-sleep.md); do not resume phases without a new explicit owner request.
+
 Read [the specification](../specs/palladian-platform-v1.md) first. This plan makes its requirements executable in bounded increments. No phases have been implemented or accepted.
 
 ## Working agreement

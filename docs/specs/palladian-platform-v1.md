@@ -1,5 +1,7 @@
 # Palladian platform specification
 
+> **Shelved — deep sleep, 2026-09-26.** This app-platform specification is preserved for possible future use. Current focus is the original Deltos goal: a fast, MCP-first notes app. See [the shelf record](../handoff/deep-sleep.md).
+
 Date: 2026-09-09  
 Status: implementation handoff; no application has been implemented or validated.  
 Owner: Jim. Execution workflow: bounded implementation by a coding model, then independent review of core changes.

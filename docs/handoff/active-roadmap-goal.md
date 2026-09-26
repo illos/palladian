@@ -1,5 +1,7 @@
 # Active roadmap goal — 2026-09-10
 
+> **Superseded — deep sleep, 2026-09-26.** The owner has paused this entire roadmap indefinitely and returned focus to Deltos: a fast, MCP-first notes app. The ongoing authorization below is historical and must not trigger further work. See [the shelf and recovery record](deep-sleep.md). Resume only on a new explicit owner request.
+
 The owner has assigned the roadmap as an ongoing goal, authorized subagents and independent adversarial review, and prioritized backend architecture. Notify the owner as soon as a usable development prototype exists, then work together on tools, components, and UI. This supersedes the historical requirement for a new owner assignment at every phase; independent protected-core acceptance remains required before downstream implementation.
 
 Initial baseline: `b315159`; correction implementation: `14c0134`. P0 is independently accepted. P1's A07 response-ordering and stale-UI corrections now pass parent and independent real browser/service regressions. The corrected full 900-second A03 expiry run passed against immutable production assets. Independent review accepted P1 as the local P2 foundation in `351cac3`. P2 implementation and independent adversarial tests are underway; hosted acceptance is tracked separately. Existing owner edits in AGENTS.md, the specification, and handoff documents must be preserved.

@@ -1,5 +1,7 @@
 # Palladian
 
+> **Deep sleep — 2026-09-26.** The owner has shelved the Palladian app-hosting platform and returned focus to the original Deltos goal: **a fast, MCP-first notes app**. Do not resume the platform roadmap without a new explicit owner request. See [the shelf and recovery record](docs/handoff/deep-sleep.md). The implementation instructions below are historical.
+
 P0 foundation for the platform specified in [the specification](docs/specs/palladian-platform-v1.md). The responsive shell offers light/dark/system themes and two explicitly empty, lazy app previews. Authentication is a separate disposable compatibility spike; the web app does not sign in, create instances, or persist private data yet.
 
 Use Node **24.18.0** and pnpm **11.5.3**:
