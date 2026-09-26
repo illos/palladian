@@ -9,6 +9,21 @@ minimumReleaseAgeExclude:
   - react-dom@19.3.0
   - react@19.3.0
   - scheduler@0.28.0
+  - '@aws-sdk/checksums@3.1001.0'
+  - '@aws-sdk/client-s3@3.1129.0'
+  - '@aws-sdk/core@3.978.0'
+  - '@aws-sdk/credential-provider-env@3.972.71'
+  - '@aws-sdk/credential-provider-http@3.972.73'
+  - '@aws-sdk/credential-provider-ini@3.973.16'
+  - '@aws-sdk/credential-provider-login@3.972.78'
+  - '@aws-sdk/credential-provider-node@3.972.83'
+  - '@aws-sdk/credential-provider-process@3.972.71'
+  - '@aws-sdk/credential-provider-sso@3.973.15'
+  - '@aws-sdk/credential-provider-web-identity@3.972.77'
+  - '@aws-sdk/middleware-sdk-s3@3.972.76'
+  - '@aws-sdk/nested-clients@3.997.45'
+  - '@aws-sdk/s3-request-presigner@3.1129.0'
+  - '@aws-sdk/token-providers@3.1129.0'
 strictPeerDependencies: true
 # Patch miniflare's image decoder for GHSA-rgj7-g3m4-5g8c.
 overrides:

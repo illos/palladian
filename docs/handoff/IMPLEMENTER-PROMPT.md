@@ -16,6 +16,7 @@ Critical constraints:
 
 - Convex is the authoritative app backend; Cloudflare hosts static frontend assets and private R2 objects.
 - Better Auth + Convex must be verified for compatible versions and reliable long-lived sessions. Do not substitute Convex Auth or copy the old Deltos refresh state machine.
+- MCP targets official TypeScript SDK v2 and protocol `2026-07-28` only, with legacy handling explicitly disabled. Required clients are ChatGPT, Codex, and Claude Code. Add legacy support only after a real required-client test confirms lack of new-protocol support; absent documentation or unavailable testing is not sufficient. Follow the specification's conditional fallback policy.
 - Shell rendering cannot wait for authentication/network readiness.
 - App data is typed and scoped; every public backend operation verifies identity and resource ownership.
 - Apps are trusted build-time modules, not sandboxed arbitrary code.

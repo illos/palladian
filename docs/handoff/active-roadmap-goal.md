@@ -2,7 +2,7 @@
 
 The owner has assigned the roadmap as an ongoing goal, authorized subagents and independent adversarial review, and prioritized backend architecture. Notify the owner as soon as a usable development prototype exists, then work together on tools, components, and UI. This supersedes the historical requirement for a new owner assignment at every phase; independent protected-core acceptance remains required before downstream implementation.
 
-Initial baseline: `b315159`; correction implementation: `14c0134`. P0 is independently accepted. P1's A07 response-ordering and stale-UI corrections now pass parent and independent real browser/service regressions. The corrected full 900-second A03 expiry run passed against immutable production assets. Independent review accepted P1 as the local P2 foundation in `351cac3`. P2 implementation and independent adversarial tests are underway; hosted acceptance is tracked separately. Existing owner edits in AGENTS.md, the specification, and handoff documents must be preserved.
+Initial baseline: `b315159`; correction implementation: `14c0134`. P0 is independently accepted. P1's A07 response-ordering and stale-UI corrections now pass parent and independent real browser/service regressions. The corrected full 900-second A03 expiry run passed against immutable production assets. Independent review accepted P1 as the local P2 foundation in `351cac3`. P2 implementation `a15c488` is independently accepted locally at `57c4fe0`; P3 private R2/search work is underway. Hosted acceptance is tracked separately. Existing owner edits in AGENTS.md, the specification, and handoff documents must be preserved.
 
 ## Execution order
 

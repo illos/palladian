@@ -25,6 +25,8 @@
     "test:platform:p2": "node tests/platform/redteam.mjs && node tests/platform/ui.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.1129.0",
+    "@aws-sdk/s3-request-presigner": "3.1129.0",
     "@convex-dev/better-auth": "0.12.5",
     "better-auth": "1.6.30",
     "convex": "1.45.0",

@@ -57,7 +57,7 @@ P2 is local only at this checkpoint. The isolated published development environm
 
 ## Performance and limitations
 
-Required shell plus auth JavaScript is 105,200 gzip bytes versus the 204,800 budget. The private Workspace module is lazy (2.77 kB gzip in this build); Notes/Recipes bundles remain lazy. No new device or hosted latency benchmark is claimed for P2.
+Required shell plus auth JavaScript is 105,202 gzip bytes versus the 204,800 budget. The private Workspace module is lazy (2.78 kB gzip in this build); Notes/Recipes bundles remain lazy. No new device or hosted latency benchmark is claimed for P2.
 
 One workspace per owner is the documented initial default. Create receipts are retained indefinitely until a separately reviewed cleanup contract exists. Pagination is bounded and scoped; malformed framework validator/cursor errors remain framework transport errors, while domain errors use fixed code/message payloads. Host UI never renders arbitrary server error text. Density preference storage is functional; content-layout use arrives with actual app roots. The shell Theme control provides immediate local appearance; saved workspace preference reconciles when private data loads/changes. Existing typed resource-service contracts are extension seams; no fake resolver/search success is returned.
 

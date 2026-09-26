@@ -24,6 +24,7 @@ An app works inside the Palladian shell, through a direct URL, and as an individ
 - Deck, voice input, upload UI, scheduling, notifications, and editors are reusable tools. Apps may replace their UI while retaining platform service and access contracts.
 - Shared managed infrastructure, app-owned data models, enforced ownership boundaries.
 - The platform remains accessible through integrated and standalone experiences.
+- MCP targets TypeScript SDK v2 and protocol revision `2026-07-28` only initially. Required clients are ChatGPT, Codex, and Claude Code. Add legacy compatibility only after a required client's lack of new-protocol support is confirmed by an actual compatibility test; missing documentation is not confirmation.
 
 ### Implementation defaults chosen by this specification
 
@@ -338,6 +339,16 @@ Native input remains functional. Custom input is opt-in and lazy; respect hardwa
 
 ## 10. Agent integration and MCP: protected core
 
+### New-protocol-first policy (owner decision, 2026-09-09)
+
+Build with pinned, compatible official TypeScript SDK v2 packages, targeting MCP `2026-07-28`. Explicitly disable legacy protocol handling, including SDK defaults that accept older requests. Do not add v1 SDK dependencies, legacy endpoints, fallback routing, or speculative compatibility wrappers. A package version and a negotiated protocol revision are different: a successful tool call through a fallback does not prove new-protocol support.
+
+Test ChatGPT, Codex, and Claude Code separately, recording the actual product surface/version, supported opt-in configuration, protocol revision observed, discovery, authentication, and tool-call results. Use available documented opt-ins before concluding a client lacks support. Do not infer ChatGPT web behavior from a Codex CLI result.
+
+Legacy support is authorized only when an actual required-client test demonstrates lack of support for the new protocol. First rule out endpoint reachability, auth configuration, incorrect SDK usage, and disabled client opt-ins. Missing documentation, unavailable client access, or a generic connection failure is insufficient evidence; mark these unverified. Document confirmed incompatibility in the phase report and then add only the smallest necessary compatibility adapter, with tests identifying the client and protocol it serves. Keep that adapter separate from domain operations and record the condition for removing it. The existing independent-review checkpoint still applies; no extra permission ceremony is needed for this explicitly authorized conditional fallback.
+
+Removing protocol-level sessions does not remove Better Auth device sessions or OAuth grants. Preserve all auth lifecycle and authorization requirements. Use stable application idempotency keys across transport retries, even when the client assigns a new JSON-RPC request ID.
+
 The platform is useful to agents both when building apps and when using their data. Distinguish developer deployment privileges from runtime user grants. Runtime MCP must never provide arbitrary code execution, schema mutation, deployment, shell, secret access, or unrestricted URL fetch.
 
 Expose a small stable tool set backed by a typed server registry:
@@ -349,11 +360,11 @@ Expose a small stable tool set backed by a typed server registry:
 - Invoke a registered operation with validated arguments, scope checks, and idempotency key for writes.
 - Obtain scoped file upload/download facilities where granted.
 
-These are semantic requirements, not fixed MCP SDK function names. Implement protocol-compatible discovery/errors using a maintained SDK and current official specifications. Descriptions must make write effects clear. Use the same backend domain functions as the UI so validation, collaboration, file references, and search updates cannot diverge.
+These are semantic requirements, not fixed MCP SDK function names. Implement protocol-compatible discovery/errors using the pinned SDK v2 and `2026-07-28` specification under the policy above. Descriptions must make write effects clear. Use the same backend domain functions as the UI so validation, collaboration, file references, and search updates cannot diverge.
 
 Read is the default; writes require an explicitly minted grant. Scope each grant to selected instances and operations. Derive identity from verified credentials. Never trust `userId`, `workspaceId`, or `instanceId` in tool input without checking actual grant coverage. A resource moved or removed from coverage immediately becomes inaccessible. Keep audit metadata (actor, operation, resource IDs, outcome), not full sensitive bodies or tokens.
 
-Begin protocol development with a manually minted revocable token and a real MCP client. Store only an approved hash of a high-entropy credential, reveal the credential once, and isolate its lifetime from browser sessions. This does not complete the final integration: full v1 also requires the OAuth connection flow for the intended ChatGPT/Claude clients, with discovery, PKCE, consent, refresh, and individual disconnect tested.
+Begin protocol development with a manually minted revocable token and a real MCP client. Store only an approved hash of a high-entropy credential, reveal the credential once, and isolate its lifetime from browser sessions. This does not complete the final integration: full v1 also requires the OAuth connection flow for ChatGPT, Codex, and Claude Code, with discovery, PKCE, consent, refresh, and individual disconnect tested. Apply the new-protocol-first policy to each client.
 
 Better Auth OAuth/MCP packages are not assumed to be drop-in compatible with the Convex adapter. P5 must prove the exact package/adapter/transport arrangement. Use supported library primitives; if unsupported, produce a concrete alternative for review rather than implementing an OAuth server from memory.
 
