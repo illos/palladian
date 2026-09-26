@@ -66,11 +66,11 @@ Confirmed: every notebook and every note has a permissions manifest supporting:
 
 - Private.
 - Private with access for invited members. A member is another user or an individual AI agent; each invited member can read only or edit.
-- Public: anyone with the URL can access it. This does not authorize public account signup.
+- Public: anyone with the URL can read it. Editing requires invited membership with edit permission. This does not authorize public account signup.
 
 Notebook permissions provide defaults; explicit individual note permissions override them. A private note inside a shared/public notebook remains private; a note can be shared independently from a private notebook. Notebook listing and search must respect the effective note permissions.
 
-Open Q06: public visitor read/edit rights, who manages invitations and permissions, live content versus fixed-revision publication, history visibility, and link expiry/indexing. Proposed defaults: public visitors read only, links are revocable, and any snapshot publication is an explicit action. Public snapshots would include only intentionally published attachments and exclude private history, agent conversation, and later drafts. These defaults are not confirmed merely by selecting public URL access.
+Open Q06: who manages invitations and permissions, live content versus fixed-revision publication, history visibility, and link expiry/indexing. Confirmed for the first release: public visitors are read-only. Proposed defaults: links are revocable, and any snapshot publication is an explicit action. Public snapshots would include only intentionally published attachments and exclude private history, agent conversation, and later drafts. These defaults are not confirmed merely by selecting public URL access.
 
 ## Files and embeds
 
