@@ -1,5 +1,11 @@
 # Palladian implementation instructions
 
+## Current notes-app specification work
+
+The owner explicitly authorized a new notes-app specification on 2026-09-26. Read `docs/specs/notes-app/README.md` and its linked documents for that product direction. Confirmed decisions, proposals, open owner questions, and technical gates are labeled separately. This authorization covers specification work, not implementation or deployment. The archived platform phases below remain historical; do not use them as the execution plan for the notes app. Deltos remains read-only reference. Preserve the platform shelf and its archive branch/tag.
+
+## Historical app-hosting-platform instructions
+
 > **Owner direction — deep sleep, 2026-09-26.** This entire app-hosting-platform effort is shelved. Do not resume implementation, review, or deployment from an old phase assignment or ongoing-roadmap instruction. The current product focus is the original Deltos goal: a fast, MCP-first notes app. Resume Palladian only on a new explicit owner request. See `docs/handoff/deep-sleep.md` for preserved work and recovery. All phase instructions below are historical while shelved.
 
 Read `docs/specs/palladian-platform-v1.md` and the assigned phase in `docs/handoff/execution-plan.md` before implementation. This repository begins as a specification handoff, not an existing application.

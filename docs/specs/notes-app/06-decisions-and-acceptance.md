@@ -1,0 +1,90 @@
+# 06 — Decisions and acceptance
+
+## Build readiness
+
+There is enough information to specify and prototype the main flow. There is not enough to build and declare the complete product finished without inventing important behavior. The questions below separate owner decisions from engineering gates.
+
+The implementation sequence here is proposed. It does not resume the historical P0–P9 platform plan or authorize implementation, deployments, migration, or production changes.
+
+## Settled top-level decisions
+
+| ID  | Decision                                                                                                                | Evidence                                                          |
+| --- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Q01 | First usable release: owner plus invited collaborators; no public signup initially                                      | Owner selected option 1 during specification drafting, 2026-09-26 |
+| D01 | Online working experience and immediate cached viewing take priority over offline editing                               | Owner explicitly described offline editing as a side branch       |
+| D02 | Device edit timestamps plus revision ancestry; concurrent offline/online branches become two copies for user resolution | Owner's 1:00/1:10/1:20 example and subsequent agreement           |
+| D03 | Continuous Apple Notes-style rich text with optional specialized embeds                                                 | Owner rejected paragraph-by-paragraph block UI friction           |
+| D04 | Markdown-style shortcuts, including `#HEADER` then Tab to H1                                                            | Explicit owner example                                            |
+| D05 | MCP is a fast primary interface; SDK v2 / protocol `2026-07-28`                                                         | Explicit owner confirmation                                       |
+| D06 | No commercially licensed self-hosting as a solution or fallback                                                         | Explicit owner exclusion                                          |
+| D07 | Long-lived reliable auth; no network gate before cached display; no device failure disconnecting agents                 | Original Deltos findings read and reaffirmed                      |
+
+## Open owner decisions, in discussion order
+
+Recommendations are proposals. Unanswered items remain open; passage of time is not acceptance.
+
+| ID  | Missing information                                                                                                                                                                        | Proposed starting point                                                                                                                             | Must settle before                       |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| Q02 | First release scope: which requested features must ship together?                                                                                                                          | Core notes/history/auth/MCP, basic files and invited sharing/live editing; sidebar/native/offline editing later; explicitly decide reminders for v1 | Delivery plan and acceptance scope       |
+| Q03 | Is immediate viewing followed by a brief wait to enable editing acceptable?                                                                                                                | Yes; connection starts in parallel; no whole-screen spinner                                                                                         | Startup/editor contract                  |
+| Q04 | How much content should be cached for viewing?                                                                                                                                             | All note-list metadata and text bodies in background, subject to storage; attachment downloads controlled separately                                | Cache/storage design                     |
+| Q05 | Organization and editor details: folders/notebooks/tags, title placement, tables, sorting, minimum rich embeds?                                                                            | Small notebook model, search/pins/trash, standard formatting and file/image blocks; defer specialized embeds                                        | Schema/editor and initial UI             |
+| Q06 | Invitations, ownership, sharing, and publishing: personal libraries or shared workspace; reader/editor roles; unlisted versus public; live link versus fixed revision; history visibility? | Personal ownership with explicit invited access; revocable unlisted read links; fixed-revision publication                                          | Authorization and share schema           |
+| Q07 | Reminder delivery and behavior: push/email/in-app, recurrence, snooze, timezones, late notifications?                                                                                      | One selected channel and one-shot reminders first; prove delivery on target phone with app closed                                                   | Reminder implementation                  |
+| Q08 | Login and recovery: email/password, passkeys, social login, MFA, recovery method?                                                                                                          | Supported library flows; reliable long sessions; preserve recovery preference only after owner confirms it for new app                              | Identity implementation                  |
+| Q09 | Agent checkout details: paragraph versus section; takeover rights; default direct editing or suggestions?                                                                                  | Short paragraph leases, explicit human takeover; suggestions for large rewrites                                                                     | Claim/agent collaboration implementation |
+| Q10 | Reference phone/browser/PWA, expected library and note sizes, performance budgets?                                                                                                         | Measure actual owner's iPhone; separate visible-content time, edit-ready time, and interaction responsiveness                                       | Performance acceptance                   |
+| Q11 | History/trash/file retention, quotas, permanent deletion, and what happens to drafts after original deletion?                                                                              | Undoable deletion and restore; retain history initially within agreed limits; no silent resurrection                                                | Data/file lifecycle implementation       |
+| Q12 | Future sidebar: providers, BYO credentials or app-funded, execution hosting, shared/private chat?                                                                                          | Defer until external MCP is useful; same authorized operations                                                                                      | Sidebar implementation only              |
+| Q13 | Privacy: shared devices/local unlock, cache treatment after expiry/revocation, encryption, end-to-end encryption expectation?                                                              | Server-readable content for search/agents; account-scoped local cache; explicit logout clears it                                                    | Final security architecture              |
+| Q14 | Exact MCP clients and minimum operations; OAuth/PAT expectations, scopes and write limits?                                                                                                 | Codex, Claude, and Hermes as named by owner, exact products/versions verified; granular read/write/publish grants                                   | MCP acceptance and auth integration      |
+| Q15 | Existing data import, source reuse, deployment domain and service accounts, operating budget?                                                                                              | New disposable development data; selective audited Deltos reuse; production/import separately assigned                                              | Migration, hosting and production        |
+
+Q02, Q03, Q05, Q06, Q08, and Q13 are the main product decisions needed before a complete implementation plan. Technical choices like raw ProseMirror versus Tiptap are engineering investigations, not questions the owner must answer from memory.
+
+## Proposed proof and delivery order
+
+1. Resolve product scope and ownership; establish reference data and phone. Finalize the distinction between visible notes and editing readiness.
+2. Prove cached cold launch and natural editor behavior with disposable fixtures. No auth/network dependency before display.
+3. Prove actual session lifecycle and account separation. Reproduce the old races/failure modes and demonstrate they do not recur.
+4. Prove two-client online editing, agent transform, claim takeover, dropped-response retry, and recovery. Select the collaboration component based on evidence.
+5. Build a narrow end-to-end MCP flow: authenticated create, search, targeted edit, history, and explicit publication using real clients.
+6. Complete chosen organization, file, sharing, reminder, and operational scope. Review protected contracts independently before acceptance.
+7. Later: sidebar agents, offline draft adapter/conflict-copy UI, and native app investigation, each with separate requirements.
+
+None of these steps authorizes production deployment or personal-data import by itself.
+
+## Acceptance matrix
+
+Every case is **pending**. Each report must distinguish fixtures/mocks, actual backend/auth services, browser automation, actual MCP clients, and a physical iPhone. Simulated mobile viewports do not count as iPhone evidence.
+
+| ID  | Case                                                                           | Required result/evidence                                                                                                                  |
+| --- | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| A01 | Returning-device cold launch with auth/network stalled                         | Actual cached titles/content visible; navigation works; no dependency on auth response                                                    |
+| A02 | Normal connected cold launch on reference iPhone                               | Record launch-to-content and launch-to-edit-ready separately across repeated runs against agreed budgets                                  |
+| A03 | Large representative library and note                                          | Home does not hydrate all documents; measured selection/typing remains responsive during background refresh                               |
+| A04 | Broken/slow embed and busy agent                                               | Ordinary text, save, and navigation unaffected; no disruptive layout or cursor jumps                                                      |
+| A05 | Native mobile selection, paste, composition, Markdown shortcut, Undo           | Natural cross-paragraph behavior and exact `#HEADER` + Tab conversion; mobile space alternative works                                     |
+| A06 | Transient auth timeout/429/5xx and multi-tab renewal                           | No credential deletion, false login, permanent revoked latch, or agent-grant revocation                                                   |
+| A07 | Real access-token expiry, device resume, delayed response after account switch | Supported renewal succeeds; stale session/UI cannot replace current account; other account's data absent                                  |
+| A08 | Explicit logout/revocation and unsaved work                                    | Selected privacy policy enforced; unsaved work handled without silent loss or account leakage                                             |
+| A09 | Two people and an agent editing concurrently                                   | Convergent accepted document, revision-aware transforms, useful conflict response, unchanged rich objects preserved                       |
+| A10 | Claim acquisition race, expiry and human takeover                              | Server enforces affected content and generation; late agent rejected; in-flight human work recoverable                                    |
+| A11 | Save response lost; browser closes or note unmounts                            | Durable recovery journal retained; retry does not duplicate accepted edit; receipt distinguishes unknown outcome                          |
+| A12 | External MCP normal-sized conversation save and targeted section edit          | One create write with known destination; bounded section read/edit; measure calls, bytes/tokens, latency and history result               |
+| A13 | MCP v2 compatibility                                                           | Actual chosen clients demonstrate protocol/auth/discovery/tools; unsupported cases remain explicit                                        |
+| A14 | Unauthorized search/history/file/share access                                  | No cross-user content/excerpts, ownership bypass, or expired/revoked grant reuse                                                          |
+| A15 | Interrupted file upload and retained historical reference                      | Retry/finalization correct; cleanup does not remove referenced bytes; MIME/size rules enforced                                            |
+| A16 | Publication and revocation                                                     | Chosen live/snapshot semantics, attachment access and visibility match contract; saving private changes never publishes them accidentally |
+| A17 | Reminder with app closed, timezone change, edit/cancel/retry                   | Chosen channel delivers correctly without duplicates; cancellation and late delivery behavior demonstrated                                |
+| A18 | Backup and restore                                                             | Restore reconstructs notes/history/access metadata/file references and needed bytes in disposable target                                  |
+| A19 | Later offline edit based on current head                                       | Atomically accepted; device timestamps/history preserved; repeated submission creates no duplicate                                        |
+| A20 | Later offline edit based on diverged/deleted/revoked head                      | Both branches preserved under chosen recovery policy; no silent overwrite, resurrection, or permission bypass                             |
+
+## Performance budget proposal to discuss
+
+Provisional targets, not approved promises: returning-device cached home content visible within 500 ms at p95; ordinary typing avoids app-induced long tasks; connected edit readiness measured separately with a target chosen after the first actual-device baseline. Specify process-cold versus first-install, cache state, production bundle, dataset, network, and device for every result. Do not substitute FCP of an empty shell for visible notes.
+
+## Remaining engineering evidence
+
+G01–G05 in document 03 remain open. In particular, the current ProseMirror sync candidate is not accepted merely because offline editing is deferred: recovery, server validation hooks, cache handoff, document limits, presence, and history reconstruction still need proof. Better Auth/Convex and MCP compatibility also require actual-service evidence. No implementation evidence is supplied by this specification commit.

@@ -1,5 +1,13 @@
 # Palladian
 
+## Current product: notes app
+
+The owner is specifying a fast, MCP-first notes app. Start with the [new notes-app specifications](docs/specs/notes-app/README.md), organized from product and behavior through architecture, history, identity/MCP, and open decisions. These are discussion drafts; implementation has not been authorized by the specification task. The first release is for the owner plus invited collaborators.
+
+The existing code and the instructions below belong to the shelved app-hosting-platform effort. They are preserved reference, not evidence that the new notes app has been implemented.
+
+## Shelved platform reference
+
 > **Deep sleep — 2026-09-26.** The owner has shelved the Palladian app-hosting platform and returned focus to the original Deltos goal: **a fast, MCP-first notes app**. Do not resume the platform roadmap without a new explicit owner request. See [the shelf and recovery record](docs/handoff/deep-sleep.md). The implementation instructions below are historical.
 
 P0 foundation for the platform specified in [the specification](docs/specs/palladian-platform-v1.md). The responsive shell offers light/dark/system themes and two explicitly empty, lazy app previews. Authentication is a separate disposable compatibility spike; the web app does not sign in, create instances, or persist private data yet.
