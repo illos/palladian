@@ -56,13 +56,13 @@ Proposed: immediate Undo reverses a shortcut transformation and restores literal
 
 ## Organization and search
 
-Confirmed: a notebook is a library of notes, private by default. Each note belongs to one notebook at a time. First-release accounts are the owner plus invited collaborators.
+Confirmed: a notebook is a library of notes, private by default. Notebooks form a flat list and never nest. Folders are outside the first release; any future folder feature must preserve the rule that a notebook cannot contain another notebook. Each note belongs to one notebook at a time. First-release accounts are the owner plus invited collaborators.
 
 Collections are separate saved queries that display notes matching criteria such as search text, title, date, and location. Users can create collections, and every user starts with one default collection, **All notes**, including both notes they own and notes shared with them. Matching is dynamic: edits to a note or its relevant metadata can change which collections display it. A note can appear in multiple collections without being copied or moved. Collections cannot be shared or published to other users. They are available to MCP agents in the associated user context and have no independent permission controls. Results, counts, and previews respect the requesting user or agent's notebook permissions and any note-level overrides; matching a query never grants additional access.
 
 Proposed: cache collection definitions and evaluate supported queries against cached metadata/text immediately; make any partial/offline result scope clear. Server results refresh independently of initial display. Query fields/operators, date meanings/timezones, source and consent for location metadata, and archive/trash inclusion in All notes and other collections remain Q05. A location filter does not itself authorize automatic device-location collection.
 
-Proposed supporting features: pinned notes, archive/trash, and text search. Notebook ownership transfer, nesting, tags, title placement, and default sorting remain Q05/Q06.
+Proposed supporting features: pinned notes, archive/trash, and text search. Notebook ownership transfer, tags, title placement, and default sorting remain Q05/Q06.
 
 Cached title/preview search can respond immediately. Server full-text search provides authorized results across accepted content. If local search covers only cached content, the UI states that scope. Agent reads for editing resolve current authoritative content, not an old search excerpt.
 
