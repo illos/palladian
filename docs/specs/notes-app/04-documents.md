@@ -10,7 +10,7 @@ Markdown, plain text, outlines, previews, and search text are projections or imp
 
 ## Notebooks and collections
 
-Confirmed: a note has one notebook at a time. Collections select notes programmatically through saved queries; they do not provide additional notebook memberships or permission inheritance. Every user has a default All notes collection and can create more. Collections are personal and not shareable/publishable to other users, but visible through MCP in the associated user context. They have no permission manifest or independent membership list; note access is governed by notebook permissions and note-level overrides.
+Confirmed: a note has one notebook at a time. Collections select notes programmatically through saved queries; they do not provide additional notebook memberships or permission inheritance. Every user has a default All notes collection covering owned notes and notes shared with them, and can create more. Collections are personal and not shareable/publishable to other users, but visible through MCP in the associated user context. They have no permission manifest or independent membership list; note access is governed by notebook permissions and note-level overrides.
 
 Proposed representation: a collection stores its user association, name, and a versioned structured query definition. Its matching note IDs are derived results, not ownership records. Filters cover agreed text/title/date/location semantics. Validate supported query fields and operators; a saved query is not executable user code. Apply authorization before exposing matches, counts, or excerpts. Exact metadata and query semantics remain Q05.
 
