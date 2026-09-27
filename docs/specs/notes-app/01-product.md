@@ -38,6 +38,12 @@ The first usable release is for **the owner plus invited collaborators** (confir
 
 Proposed first usable release: private notes, basic organization/search, history, account/session reliability, attachments, external MCP, and a narrow sharing/collaboration flow. Reminder delivery and exact sharing scope must be decided before calling a feature-complete v1. See Q02, Q06, and Q07.
 
+## Organization
+
+Confirmed: each note belongs to one notebook at a time. Collections are a separate classifier: saved queries that display matching notes programmatically using criteria such as search text, title, date, and location. Every user starts with an **All notes** collection and can create additional collections. A note can match multiple collections while remaining in one notebook. Collection results do not transfer ownership or override note/notebook permissions.
+
+Collection sharing, exact query operators/date fields, location metadata, and the precise scope of All notes remain open under Q05.
+
 ## Editor intent
 
 Internal block identities must not dictate the visible interaction model. Ordinary writing is one continuous surface: select across paragraphs, copy mixed content, and move the cursor naturally. Rich embedded objects have their own controls when needed.

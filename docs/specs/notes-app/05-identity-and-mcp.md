@@ -48,7 +48,8 @@ MCP endpoints must work while the browser is closed. They access the current acc
 Proposed small, coherent model:
 
 - Notebooks: stable IDs, names, descriptions, permission manifests, effective access rights, and filing guidance.
-- Notes: stable ID, title, metadata, accepted revision, outline, and document URL.
+- Collections: stable IDs, names, saved query definitions, and authorized matching notes; distinct from notebook destinations.
+- Notes: stable ID, single notebook ID, title, metadata, accepted revision, outline, and document URL.
 - Content: readable text/Markdown with stable section/block targets; typed references for rich objects.
 - Revisions: explicit expected revision or target-version preconditions and compact committed receipts.
 
@@ -58,17 +59,18 @@ Creation accepts substantial Markdown in one request and converts it into native
 
 Names below are conceptual API names, not frozen wire schemas.
 
-| Tool family    | Contract                                                                                                          |
-| -------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Find notebooks | Resolve destination using IDs/names, description, and configured filing guidance                                  |
-| Search notes   | Ranked authorized excerpts, note IDs, matching section IDs, revision and pagination information                   |
-| Read note      | Outline, selected sections, or full readable content; clear truncation/pagination; current revision for editing   |
-| Create note    | Title, destination, Markdown/native supported content, optional metadata, stable request ID                       |
-| Edit note      | Bounded atomic batch of append/insert/replace/move/delete-content/metadata operations with explicit preconditions |
-| Attach file    | Upload/finalize/reference workflow; no whole-body rewrite; explicit size/type limits                              |
-| History        | List/read/compare require effective edit permission; restore also enforces write authorization                    |
-| Share/publish  | Owner-only visibility operation, independent of ordinary save                                                     |
-| Claim/release  | Optional online section checkout, expiry, and takeover semantics                                                  |
+| Tool family    | Contract                                                                                                                |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Find notebooks | Resolve destination using IDs/names, description, and configured filing guidance                                        |
+| Collections    | Discover/read/create/update saved queries; list authorized matches; never use a collection ID as a notebook destination |
+| Search notes   | Ranked authorized excerpts, note IDs, matching section IDs, revision and pagination information                         |
+| Read note      | Outline, selected sections, or full readable content; clear truncation/pagination; current revision for editing         |
+| Create note    | Title, destination, Markdown/native supported content, optional metadata, stable request ID                             |
+| Edit note      | Bounded atomic batch of append/insert/replace/move/delete-content/metadata operations with explicit preconditions       |
+| Attach file    | Upload/finalize/reference workflow; no whole-body rewrite; explicit size/type limits                                    |
+| History        | List/read/compare require effective edit permission; restore also enforces write authorization                          |
+| Share/publish  | Owner-only visibility operation, independent of ordinary save                                                           |
+| Claim/release  | Optional online section checkout, expiry, and takeover semantics                                                        |
 
 Prefer stable target IDs; never assume a heading label is unique. Destructive operations state their effects clearly. A tool that saves a private note does not implicitly publish it. Once a note is public, accepted edits automatically update the content at its public URL; no separate publish call is needed. Share/publish changes visibility rather than freezing a revision. Unknown or unsupported blocks remain preserved and readable by description.
 

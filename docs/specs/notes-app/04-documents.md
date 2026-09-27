@@ -8,6 +8,12 @@ Proposed representation: a versioned rich-text document with stable IDs for addr
 
 Markdown, plain text, outlines, previews, and search text are projections or import/export forms. Agents must not replace rich documents with a lossy Markdown round trip when editing a small region. Unknown rich objects remain preserved and discoverable through a readable description and stable reference.
 
+## Notebooks and collections
+
+Confirmed: a note has one notebook at a time. Collections select notes programmatically through saved queries; they do not provide additional notebook memberships or permission inheritance. Every user has a default All notes collection and can create more.
+
+Proposed representation: a collection stores its user association, name, and a versioned structured query definition. Its matching note IDs are derived results, not ownership records. Filters cover agreed text/title/date/location semantics. Validate supported query fields and operators; a saved query is not executable user code. Apply authorization before exposing matches, counts, or excerpts. Exact metadata and query semantics remain Q05.
+
 ## Proposed logical records
 
 These are conceptual records, not a finalized database schema.
@@ -18,10 +24,11 @@ Confirmed: notes created in a notebook belong to the notebook owner. Record the 
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Account                 | Stable identity independent of login provider                                                                                                                        |
 | Notebook                | Library of notes with its own permissions manifest, private by default                                                                                               |
+| Collection              | User-associated saved query and name; dynamic authorized results; default All notes                                                                                  |
 | Permission manifest     | Notebook or note visibility and invited user/individual-agent read/edit entries; explicit note preferences override notebook defaults                                |
 | Agent identity          | Individually addressable agent member, distinct from its display name or provider label                                                                              |
 | Membership/access grant | Which user or individual agent can access which notebook/note and with what rights                                                                                   |
-| Note                    | Stable ID, owner/access scope, title, current accepted revision, lifecycle state                                                                                     |
+| Note                    | Stable ID, single notebook ID, owner/access scope, creator attribution, title, current accepted revision, lifecycle state                                            |
 | Revision                | Immutable ID, note ID, parent/base reference, schema version, authenticated actor, change provenance, device edit time, server receipt time, reconstructable content |
 | Edit operation          | Stable request ID, expected revision/target versions, operation payload, result receipt                                                                              |
 | Claim                   | Note/block targets, authenticated holder, generation, server expiry, lease status                                                                                    |
