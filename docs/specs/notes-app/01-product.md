@@ -19,7 +19,7 @@ The app must avoid Deltos's failure mode: locally available notes hidden behind 
 
 ## Confirmed feature direction
 
-The first usable release is for **the owner plus invited collaborators** (confirmed during specification drafting). Public signup is outside the initial scope. Notebooks are libraries of notes, private by default. Each notebook and note has a permissions manifest: private, private with invited members, or public to anyone with the URL. Members may be users or individual AI agents, each with read-only or edit access. Public URL access is read-only and shows the latest saved content automatically; editing requires invited edit access. Explicit note permissions override notebook defaults. Remaining ownership and sharing details are Q06.
+The first usable release is for **the owner plus invited collaborators** (confirmed during specification drafting). Public signup is outside the initial scope. Notebooks are libraries of notes, private by default. Each notebook and note has a permissions manifest: private, private with invited members, or public to anyone with the URL. Members may be users or individual AI agents, each with read-only or edit access. Public URL access is read-only and shows the latest saved content automatically; editing requires invited edit access. Explicit note permissions override notebook defaults. Only the owner can invite members or change sharing permissions. Remaining ownership-assignment and link details are Q06.
 
 | Area            | Desired product behavior                                                           | Release commitment                                                  |
 | --------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
@@ -56,7 +56,7 @@ Agent paragraph checkout is a desired collaboration direction: indicate which se
 
 ## What this draft does not assume
 
-Notebooks and note-level permission overrides are confirmed. Further organization details, ownership/invitation administration, login method, recovery method, end-to-end encryption requirement, file quotas, retention, and production domain are unresolved. The old single-owner auth plan cannot decide those for the new app.
+Notebooks and note-level permission overrides are confirmed. Further organization details, ownership assignment, login method, recovery method, end-to-end encryption requirement, file quotas, retention, and production domain are unresolved. The old single-owner auth plan cannot decide those for the new app.
 
 ## Success
 

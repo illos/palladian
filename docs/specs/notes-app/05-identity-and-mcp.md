@@ -2,7 +2,7 @@
 
 ## Accounts and reliable sessions
 
-**Confirmed Q01:** first usable release is for the owner plus invited collaborators. Public signup is outside that initial scope. Confirmed: notebooks contain notes and are private by default. Notebook and note permissions support private, invited-member, and public URL access. Invited members can be users or individual agents with read-only or edit access. Public visitors are read-only; public visibility never grants edit permission. Editing requires invited edit access. Explicit note permissions override notebook defaults. Ownership and permission-administration rules remain Q06.
+**Confirmed Q01:** first usable release is for the owner plus invited collaborators. Public signup is outside that initial scope. Confirmed: notebooks contain notes and are private by default. Notebook and note permissions support private, invited-member, and public URL access. Invited members can be users or individual agents with read-only or edit access. Public visitors are read-only; public visibility never grants edit permission. Editing requires invited edit access. Explicit note permissions override notebook defaults. Only the owner can invite members or change sharing permissions. Ownership assignment remains Q06.
 
 Better Auth is the preferred identity/session library. Login methods, recovery, MFA, and encryption expectations are Q08/Q13; supported integration is G03. Do not inherit single-owner security exceptions from Deltos or copy the old app's session state machine.
 
@@ -26,6 +26,8 @@ Better Auth supports configurable lifetime and renewal intervals, but correct se
 Confirmed: authorization must represent individual agents as members, not just a blanket provider label such as Codex or Claude. Both notes and notebooks have permission manifests; explicit note settings take precedence over notebook defaults. The agent identity and credential-linking representation remains an implementation design, with connection authentication covered by Q14.
 
 Proposed: one server-owned authorization layer shared by editor operations, MCP, file access, search, history, and publication. Permission checks cover the effective note/notebook permissions, not just whether a caller is logged in. Notebook membership cannot bypass a more restrictive note override, including through listings, search excerpts, direct reads, files, or MCP.
+
+Only the owner can administer invitations, change member roles, or change public/private visibility. Enforce this in UI and MCP operations; an invited editor, human or agent, cannot escalate its own or another member's permissions. Agent authentication and any owner-authorized credential scope remain Q14; ordinary agent edit membership is insufficient for permission changes.
 
 Never derive identity from caller-supplied account IDs. Recheck write access at commit time, including claim expiry and offline branch submission. Search results must be scoped before returning excerpts. Private bytes follow explicit access rules. Listing revisions, reading historical content, and comparing versions require effective edit permission; read-only human and agent members and public visitors can access only current content. File links must not expose permanent credentials.
 
@@ -65,7 +67,7 @@ Names below are conceptual API names, not frozen wire schemas.
 | Edit note      | Bounded atomic batch of append/insert/replace/move/delete-content/metadata operations with explicit preconditions |
 | Attach file    | Upload/finalize/reference workflow; no whole-body rewrite; explicit size/type limits                              |
 | History        | List/read/compare require effective edit permission; restore also enforces write authorization                    |
-| Share/publish  | Explicit visibility operation, independent of ordinary save                                                       |
+| Share/publish  | Owner-only visibility operation, independent of ordinary save                                                     |
 | Claim/release  | Optional online section checkout, expiry, and takeover semantics                                                  |
 
 Prefer stable target IDs; never assume a heading label is unique. Destructive operations state their effects clearly. A tool that saves a private note does not implicitly publish it. Once a note is public, accepted edits automatically update the content at its public URL; no separate publish call is needed. Share/publish changes visibility rather than freezing a revision. Unknown or unsupported blocks remain preserved and readable by description.
