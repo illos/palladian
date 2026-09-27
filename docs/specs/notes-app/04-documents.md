@@ -12,6 +12,8 @@ Markdown, plain text, outlines, previews, and search text are projections or imp
 
 These are conceptual records, not a finalized database schema.
 
+Confirmed: notes created in a notebook belong to the notebook owner. Record the creating user or agent separately as authorship/provenance; do not assign ownership from the actor who submits creation. Ownership transfer and cross-owner notebook moves remain Q06.
+
 | Record                  | Essential meaning                                                                                                                                                    |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Account                 | Stable identity independent of login provider                                                                                                                        |

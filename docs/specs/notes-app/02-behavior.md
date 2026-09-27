@@ -56,7 +56,7 @@ Proposed: immediate Undo reverses a shortcut transformation and restores literal
 
 ## Organization and search
 
-Confirmed: a notebook is a library of notes, private by default. First-release accounts are the owner plus invited collaborators. Proposed supporting features: pinned notes, archive/trash, and text search. Notebook ownership assignment, nesting, tags, multi-notebook membership, title placement, and default sorting remain Q05/Q06.
+Confirmed: a notebook is a library of notes, private by default. First-release accounts are the owner plus invited collaborators. Proposed supporting features: pinned notes, archive/trash, and text search. Notebook ownership transfer, nesting, tags, multi-notebook membership, title placement, and default sorting remain Q05/Q06.
 
 Cached title/preview search can respond immediately. Server full-text search provides authorized results across accepted content. If local search covers only cached content, the UI states that scope. Agent reads for editing resolve current authoritative content, not an old search excerpt.
 
@@ -74,7 +74,7 @@ Confirmed: public links show the latest saved content automatically. Once a note
 
 Confirmed: public visitors and invited read-only members see only current content. Viewing version history requires effective edit permission, for both users and individual agents. This includes listing revisions, reading past content, and comparing versions.
 
-Public visitors remain read-only. Making private content public is still an explicit permission change; saving an already-public note updates its public content. Confirmed: only the owner can invite members or change sharing permissions, including member roles and public/private visibility. Edit permission alone does not grant these powers, whether the member is a user or an agent. Open Q06: ownership assignment (including notes created by collaborators) and link expiry/indexing. Proposed defaults: links are revocable; public access includes current authorized attachments but excludes agent conversation. Historical content is restricted to editors by the confirmed rule above.
+Public visitors remain read-only. Making private content public is still an explicit permission change; saving an already-public note updates its public content. Confirmed: only the owner can invite members or change sharing permissions, including member roles and public/private visibility. Edit permission alone does not grant these powers, whether the member is a user or an agent. Confirmed: a note created inside a notebook belongs to the notebook owner, regardless of which invited user or agent created it. History credits the actual creator; authorship does not confer ownership or permission administration. Open Q06: ownership transfer, moves between notebooks with different owners, and link expiry/indexing. Proposed defaults: links are revocable; public access includes current authorized attachments but excludes agent conversation. Historical content is restricted to editors by the confirmed rule above.
 
 ## Files and embeds
 

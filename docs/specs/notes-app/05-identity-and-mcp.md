@@ -2,7 +2,7 @@
 
 ## Accounts and reliable sessions
 
-**Confirmed Q01:** first usable release is for the owner plus invited collaborators. Public signup is outside that initial scope. Confirmed: notebooks contain notes and are private by default. Notebook and note permissions support private, invited-member, and public URL access. Invited members can be users or individual agents with read-only or edit access. Public visitors are read-only; public visibility never grants edit permission. Editing requires invited edit access. Explicit note permissions override notebook defaults. Only the owner can invite members or change sharing permissions. Ownership assignment remains Q06.
+**Confirmed Q01:** first usable release is for the owner plus invited collaborators. Public signup is outside that initial scope. Confirmed: notebooks contain notes and are private by default. Notebook and note permissions support private, invited-member, and public URL access. Invited members can be users or individual agents with read-only or edit access. Public visitors are read-only; public visibility never grants edit permission. Editing requires invited edit access. Explicit note permissions override notebook defaults. Only the owner can invite members or change sharing permissions. Notes created in a notebook belong to the notebook owner, including notes created by invited users or agents; creator attribution is separate. Ownership transfer and cross-owner moves remain Q06.
 
 Better Auth is the preferred identity/session library. Login methods, recovery, MFA, and encryption expectations are Q08/Q13; supported integration is G03. Do not inherit single-owner security exceptions from Deltos or copy the old app's session state machine.
 
