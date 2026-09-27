@@ -15,9 +15,9 @@ Proposed: list metadata for the library is retained locally; bodies and attachme
 
 ## Display versus editing
 
-**Open Q03:** may the app briefly wait to enable editing while showing cached content immediately?
+**Confirmed Q03:** existing cached notes display immediately and may briefly remain read-only while the app connects and prepares live editing. Reading and navigation remain available throughout; no whole-screen loading gate.
 
-Proposed default: cached content is readable/selectable immediately; shared editing begins after current permission, document version, and active claims are established. Once ready, keystrokes render locally without waiting for a server acknowledgement per character.
+Proposed readiness checks implementing this decision: cached content is readable/selectable immediately; shared editing begins after current permission, document version, and active claims are established. Once ready, keystrokes render locally without waiting for a server acknowledgement per character.
 
 | Condition                             | Proposed behavior                                                                                                                  |
 | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
@@ -29,7 +29,7 @@ Proposed default: cached content is readable/selectable immediately; shared edit
 | Explicit logout/account switch        | Clear the prior account's visible data and private caches before another account appears; settle unsaved-work handling explicitly  |
 | Broken embed or agent failure         | Isolate the failure; ordinary text and navigation remain usable                                                                    |
 
-Instant typing before live readiness is a different requirement from instant display. If chosen, specify buffering and reconciliation explicitly; do not smuggle a full offline editor into startup.
+Typing into an existing cached note before live readiness is not required for the first release. Keep any later offline-edit adapter separate from startup. A brief readiness wait is acceptable; its performance budget still needs Q10 and actual-device evidence. This decision does not specify new-note creation while connecting.
 
 ## Editor
 

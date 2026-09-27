@@ -8,7 +8,7 @@ The app must avoid Deltos's failure mode: locally available notes hidden behind 
 
 ## Confirmed priorities
 
-1. Launch, navigation, note titles, and downloaded note content appear without a server round trip.
+1. Launch, navigation, note titles, and downloaded note content appear without a server round trip. Existing cached notes may briefly remain read-only while live editing becomes ready; reading and navigation remain available throughout (confirmed Q03).
 2. Online writing, saving, and collaboration are the primary working path.
 3. Rich embeds, agent tools, remote updates, and sync notifications must not block or degrade ordinary note use.
 4. Previously downloaded notes remain viewable without connectivity.
