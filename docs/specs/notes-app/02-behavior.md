@@ -11,7 +11,9 @@ Confirmed: displaying previously downloaded notes must not wait for authenticati
 5. Refresh snapshots from accepted server state without blanking the screen, losing scroll position, or moving the cursor unexpectedly.
 6. Initialize rich viewers and agent UI independently when used.
 
-Proposed: list metadata for the library is retained locally; bodies and attachment previews download in the background under a visible storage policy. Whether all text bodies are automatically retained is Q04. Cache completion must be observable; a record of a note is not proof its body/files are present. Handle storage failure/eviction without treating missing local state as a server deletion.
+**Confirmed Q04:** automatically download and retain all current note text in the user's accessible library, including owned and shared notes. Pictures and PDFs load lazily when needed; text-cache population does not bulk-download their bytes.
+
+Proposed implementation: retain list metadata and the document structure needed to render text locally. Populate and refresh the text cache incrementally in the background, prioritizing the active note; never wait for the whole library to download before displaying available notes or enabling ready online work. This is current-content caching, not a requirement to download every historical revision. Cache completion must be observable; a record of a note is not proof its body/files are present. Handle storage failure/eviction without treating missing local state as a server deletion. Account separation and access-revocation handling remain subject to Q13.
 
 ## Display versus editing
 
@@ -86,7 +88,7 @@ Public visitors remain read-only. Making private content public is still an expl
 
 Pictures, PDFs, and miscellaneous files are required. Proposed: private bytes in R2; authoritative ownership, references, and lifecycle in Convex. Pending/uploading/ready/failed states are distinct. Retrying an upload must not duplicate attachments. Failed or cancelled uploads are cleaned up without deleting referenced historical files.
 
-Text renders independently of file download and preview generation. Embeds reserve predictable space or a compact placeholder. A download is not counted as available offline until its bytes are stored locally. Limits, full-resolution caching, PDF page rendering, malware handling, supported MIME types, and retention are Q04/Q05/Q11.
+Confirmed: pictures and PDFs lazy-load when needed. Proposed: apply the same on-demand policy to miscellaneous file bytes. Text renders independently of file download and preview generation. Embeds reserve predictable space or a compact placeholder. A download is not counted as available offline until its bytes are stored locally. Limits, media-cache retention after loading, explicit offline attachment downloads, PDF page rendering, malware handling, and supported MIME types remain Q05/Q11.
 
 ## Reminders
 

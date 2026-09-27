@@ -56,6 +56,7 @@ Never label journal data as a server-confirmed snapshot. Include note ID, base r
 ## Performance boundaries
 
 - Cache the app shell and essential editor assets; network access cannot be necessary to display cached notes.
+- Confirmed Q04: cache all current note text in the accessible library; lazy-load pictures and PDFs. Populate text incrementally in the background, keeping network/CPU work off the launch and interaction paths. Persisting the library does not mean hydrating every document into memory at launch.
 - Read the list from an indexed projection. Do not hydrate every note/editor to render home.
 - Lazy-load advanced features, but avoid serial chunk fetches on ordinary note opening. Precache the basic editor for returning use.
 - Isolate editor updates from agent chat, notifications, sidebar state, and full-library rerenders.

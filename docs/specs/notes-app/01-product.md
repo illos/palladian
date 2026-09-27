@@ -11,7 +11,7 @@ The app must avoid Deltos's failure mode: locally available notes hidden behind 
 1. Launch, navigation, note titles, and downloaded note content appear without a server round trip. Existing cached notes may briefly remain read-only while live editing becomes ready; reading and navigation remain available throughout (confirmed Q03).
 2. Online writing, saving, and collaboration are the primary working path.
 3. Rich embeds, agent tools, remote updates, and sync notifications must not block or degrade ordinary note use.
-4. Previously downloaded notes remain viewable without connectivity.
+4. Automatically download and retain all note text for fast opening and offline viewing. Pictures and PDFs load lazily when needed (confirmed Q04). Previously downloaded notes remain viewable without connectivity.
 5. Offline editing is a later optional branch. It cannot sit between launch and the ordinary online experience.
 6. History preserves work. Divergent offline and online versions can become two copies for the user to resolve.
 7. Device-recorded edit times are preserved. Revision ancestry, not clock ordering, determines divergence.
