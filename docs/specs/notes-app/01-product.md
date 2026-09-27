@@ -31,12 +31,12 @@ The first usable release is for **the owner plus invited collaborators** (confir
 | External agents | Fast search, creation, editing, attachment, and publishing through MCP             | Core product interface                                              |
 | Accounts        | User accounts, reliable authentication, security                                   | Core; owner plus invited collaborators; login/recovery methods open |
 | Files           | Pictures, PDFs, documents, miscellaneous files                                     | Requested; limits and previews open                                 |
-| Reminders       | Reminders associated with notes                                                    | Requested; delivery and scheduling behavior open                    |
+| Reminders       | Reminders associated with notes                                                    | V2 target confirmed; delivery and scheduling behavior open          |
 | Agent sidebar   | Converse with an agent and edit a note together                                    | Future feature; not required for first useful MCP access            |
 | Offline editing | Preserve local revisions; fork copies on divergence                                | Later extension                                                     |
 | Native iOS      | Possible React Native application                                                  | Long term, not a first-release commitment                           |
 
-Proposed first usable release: private notes, basic organization/search, history, account/session reliability, attachments, external MCP, and a narrow sharing/collaboration flow. Reminder delivery and exact sharing scope must be decided before calling a feature-complete v1. See Q02, Q06, and Q07.
+Proposed first usable release: private notes, basic organization/search, history, account/session reliability, attachments, external MCP, and a narrow sharing/collaboration flow. Reminders are a confirmed v2 target and do not block the first usable release. Remaining first-release scope and sharing details are Q02/Q06; reminder delivery details (Q07) can be settled for v2.
 
 ## Organization
 

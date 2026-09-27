@@ -66,7 +66,7 @@ Never label journal data as a server-confirmed snapshot. Include note ID, base r
 
 ## Shared backend responsibilities
 
-Convex is proposed to own accepted notes and revisions, authorization, claim leases, sharing/publication records, file metadata, reminder schedules, idempotency results, and indexed search projections. UI and MCP call the same mutation/transform rules. Presence can be ephemeral and is not part of permanent note history.
+Convex is proposed to own accepted notes and revisions, authorization, claim leases, sharing/publication records, file metadata, idempotency results, and indexed search projections. UI and MCP call the same mutation/transform rules. Presence can be ephemeral and is not part of permanent note history. Reminders target v2; reminder scheduling/delivery is not a first-release dependency. Proposed for v2: authoritative reminder schedules also live in Convex.
 
 Cloudflare provides frontend delivery and private byte access as needed. Do not duplicate the authoritative note store, permissions rules, or scheduler across providers. A Worker used for MCP or file access must authenticate the caller and invoke the authorized backend contract; an edge deployment is not permission to bypass it.
 

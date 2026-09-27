@@ -90,9 +90,9 @@ Pictures, PDFs, and miscellaneous files are required. Proposed: private bytes in
 
 Confirmed: pictures and PDFs lazy-load when needed. Proposed: apply the same on-demand policy to miscellaneous file bytes. Text renders independently of file download and preview generation. Embeds reserve predictable space or a compact placeholder. A download is not counted as available offline until its bytes are stored locally. Limits, media-cache retention after loading, explicit offline attachment downloads, PDF page rendering, malware handling, and supported MIME types remain Q05/Q11.
 
-## Reminders
+## Reminders — v2 target
 
-Reminders are required, but delivery is Q07: in-app, web push, email, or eventual native notifications. Define timezone, recurrence, snooze, late delivery, account/device targeting, and edit/delete cancellation before implementation. A server schedule alone is not proof that a phone receives a notification with the app closed.
+Confirmed: reminders target v2 and are outside the first usable release. Delivery remains a deferred Q07 decision: in-app, web push, email, or eventual native notifications. Define timezone, recurrence, snooze, late delivery, account/device targeting, and edit/delete cancellation before implementation. A server schedule alone is not proof that a phone receives a notification with the app closed.
 
 ## Agent collaboration
 
