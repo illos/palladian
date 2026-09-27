@@ -70,7 +70,11 @@ Confirmed: every notebook and every note has a permissions manifest supporting:
 
 Notebook permissions provide defaults; explicit individual note permissions override them. A private note inside a shared/public notebook remains private; a note can be shared independently from a private notebook. Notebook listing and search must respect the effective note permissions.
 
-Open Q06: who manages invitations and permissions, live content versus fixed-revision publication, history visibility, and link expiry/indexing. Confirmed for the first release: public visitors are read-only. Proposed defaults: links are revocable, and any snapshot publication is an explicit action. Public snapshots would include only intentionally published attachments and exclude private history, agent conversation, and later drafts. These defaults are not confirmed merely by selecting public URL access.
+Confirmed: public links show the latest saved content automatically. Once a note is public, subsequent accepted edits become visible without another publish action. Public notebook views likewise reflect current saved content, subject to each note's effective permissions. Unsaved local work is not public content. This supersedes the earlier proposed fixed-revision publication default; a separate snapshot-publishing feature is not required for the first release.
+
+Confirmed: public visitors and invited read-only members see only current content. Viewing version history requires effective edit permission, for both users and individual agents. This includes listing revisions, reading past content, and comparing versions.
+
+Public visitors remain read-only. Making private content public is still an explicit permission change; saving an already-public note updates its public content. Open Q06: who manages invitations and permissions, and link expiry/indexing. Proposed defaults: links are revocable; public access includes current authorized attachments but excludes agent conversation. Historical content is restricted to editors by the confirmed rule above.
 
 ## Files and embeds
 

@@ -27,7 +27,7 @@ Confirmed: authorization must represent individual agents as members, not just a
 
 Proposed: one server-owned authorization layer shared by editor operations, MCP, file access, search, history, and publication. Permission checks cover the effective note/notebook permissions, not just whether a caller is logged in. Notebook membership cannot bypass a more restrictive note override, including through listings, search excerpts, direct reads, files, or MCP.
 
-Never derive identity from caller-supplied account IDs. Recheck write access at commit time, including claim expiry and offline branch submission. Search results must be scoped before returning excerpts. Private bytes and revision history follow explicit access rules. File links must not expose permanent credentials.
+Never derive identity from caller-supplied account IDs. Recheck write access at commit time, including claim expiry and offline branch submission. Search results must be scoped before returning excerpts. Private bytes follow explicit access rules. Listing revisions, reading historical content, and comparing versions require effective edit permission; read-only human and agent members and public visitors can access only current content. File links must not expose permanent credentials.
 
 Choose privacy expectations before implementing server search and agents. End-to-end encryption that prevents the server from reading content is a materially different architecture; it cannot be silently promised on top of server-side transformations and indexing.
 
@@ -64,11 +64,11 @@ Names below are conceptual API names, not frozen wire schemas.
 | Create note    | Title, destination, Markdown/native supported content, optional metadata, stable request ID                       |
 | Edit note      | Bounded atomic batch of append/insert/replace/move/delete-content/metadata operations with explicit preconditions |
 | Attach file    | Upload/finalize/reference workflow; no whole-body rewrite; explicit size/type limits                              |
-| History        | List/read/compare/restore revisions according to permission policy                                                |
+| History        | List/read/compare require effective edit permission; restore also enforces write authorization                    |
 | Share/publish  | Explicit visibility operation, independent of ordinary save                                                       |
 | Claim/release  | Optional online section checkout, expiry, and takeover semantics                                                  |
 
-Prefer stable target IDs; never assume a heading label is unique. Destructive operations state their effects clearly. A tool that saves a private note does not implicitly publish it. Unknown or unsupported blocks remain preserved and readable by description.
+Prefer stable target IDs; never assume a heading label is unique. Destructive operations state their effects clearly. A tool that saves a private note does not implicitly publish it. Once a note is public, accepted edits automatically update the content at its public URL; no separate publish call is needed. Share/publish changes visibility rather than freezing a revision. Unknown or unsupported blocks remain preserved and readable by description.
 
 MCP results use schemas and compact receipts: operation ID, note ID, URL, accepted revision, affected IDs, status, and explicit warnings. Errors distinguish conflict, denied, invalid input, missing resource, transient failure, and uncertain operation outcome without leaking private content.
 

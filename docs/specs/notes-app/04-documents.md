@@ -24,7 +24,7 @@ These are conceptual records, not a finalized database schema.
 | Edit operation          | Stable request ID, expected revision/target versions, operation payload, result receipt                                                                              |
 | Claim                   | Note/block targets, authenticated holder, generation, server expiry, lease status                                                                                    |
 | File                    | Owner/access context, private storage key, media metadata, upload state, references                                                                                  |
-| Publication             | Deliberately published revision and allowed file references; sharing mode determined by Q06                                                                          |
+| Public link             | Note/notebook URL resolving latest saved content under effective permissions; no fixed publication revision                                                          |
 | Offline draft           | Local ID, original note/base revision, ordered local versions, device timestamps, synchronization status                                                             |
 | Conflict link           | Original note/revision, incoming branch, recovered copy, resolution provenance                                                                                       |
 
@@ -57,10 +57,12 @@ G02 must determine whether the collaboration component exposes sufficient valida
 
 Confirmed: history is foundational. Record device edit time for edits made on a device, separately from server receipt/acceptance time. Preserve the revision from which the edit was made. For server-hosted agents, the editing process records its edit time and the server independently records acceptance.
 
+Confirmed: viewing history requires effective edit permission. Invited read-only members and public visitors see only current content; users and agents follow the same rule. Revision lists, past content, and comparisons must enforce this permission.
+
 Proposed:
 
 - Keep reconstructable history through snapshots plus changes or another verified bounded representation. Visible history groups related typing into useful checkpoints rather than exposing every keystroke as a separate item.
-- Keep authorship and human/agent provenance. Sharing a current note does not automatically grant access to all historical private material; Q06 defines history visibility.
+- Keep authorship and human/agent provenance. Current read access does not grant historical access; history requires effective edit permission as confirmed above.
 - Restore creates a new current revision referring to the restored source; it does not erase subsequent history.
 - A user can compare a version with its predecessor or the common base of two branches.
 - Attachments needed by retained revisions remain recoverable. Blob garbage collection must respect history and publication references.
