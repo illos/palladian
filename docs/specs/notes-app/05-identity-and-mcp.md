@@ -6,7 +6,7 @@
 
 **Confirmed:** v1 sign-in uses email and password. Passkeys, magic-link sign-in, and two-factor authentication are later features, with no release number committed yet. The existing invitation-only account policy still applies. V1 password recovery uses emailed password-reset links delivered through Cloudflare Email Service. This resets the password; magic-link sign-in remains deferred.
 
-Better Auth is the preferred identity/session library. Email verification, reset effects on agent grants, and encryption expectations remain Q08/Q13; supported integration is G03. Do not inherit single-owner security exceptions from Deltos or copy the old app's session state machine.
+Better Auth is the preferred identity/session library. Email verification and encryption expectations remain Q08/Q13; supported integration is G03. Do not inherit single-owner security exceptions from Deltos or copy the old app's session state machine.
 
 Required outcomes from the owner's discussion:
 
@@ -25,11 +25,13 @@ Better Auth supports configurable lifetime and renewal intervals, but correct se
 
 ## Password recovery
 
-Confirmed: the user requests a password-reset email and uses its link to set a new password. Cloudflare Email Service is the delivery provider. A successful password reset automatically signs out other devices; this is not an optional choice in v1. Agent-grant effects remain a separate open Q08 decision.
+Confirmed: the user requests a password-reset email and uses its link to set a new password. Cloudflare Email Service is the delivery provider. A successful password reset automatically signs out other devices; this is not an optional choice in v1. The reset flow asks the user whether to disconnect connected AI agents. Choosing to disconnect revokes that account's agent connections and requires reauthorization; choosing to keep them preserves their existing authorization. Other devices sign out in either case.
+
+Proposed interaction: present an explicit keep/disconnect choice before submitting the new password. Do not silently infer the choice from an unanswered prompt. Apply the selected connection policy only when the password reset succeeds; do not change notebook/note membership permissions as a side effect.
 
 Proposed implementation: use the auth library's supported reset lifecycle, with expiring, single-use reset tokens, rate-limited requests, and a response that does not reveal whether an email has an account. Keep reset tokens and links out of logs. Requesting a reset must not itself change a password or revoke sessions; invalid, expired, or failed resets must not trigger the successful-reset sign-out behavior. Other-device sessions must lose authorized server access and renewal after successful reset. Local cache and unsaved-work handling follow Q13 and the existing recovery contract; server revocation cannot erase a disconnected device immediately.
 
-G03 requires actual delivery through the selected sender domain and a complete request → inbox → reset → sign-in check, plus expired/reused-link rejection, delivery-failure behavior, and automatic other-device sign-out only after a successful reset. Cloudflare setup prerequisites are recorded in [architecture](03-architecture.md). No email or infrastructure changes are performed by this specification.
+G03 requires actual delivery through the selected sender domain and a complete request → inbox → reset → sign-in check, plus expired/reused-link rejection, delivery-failure behavior, automatic other-device sign-out only after a successful reset, and both keep/disconnect agent choices. Cloudflare setup prerequisites are recorded in [architecture](03-architecture.md). No email or infrastructure changes are performed by this specification.
 
 ## Authorization
 

@@ -15,7 +15,7 @@ The app must avoid Deltos's failure mode: locally available notes hidden behind 
 5. Offline editing is a later optional branch. It cannot sit between launch and the ordinary online experience.
 6. History preserves work. Divergent offline and online versions can become two copies for the user to resolve.
 7. Device-recorded edit times are preserved. Revision ancestry, not clock ordering, determines divergence.
-8. V1 sign-in uses email and password, with password-reset links delivered through Cloudflare Email Service; passkeys, magic-link sign-in, and two-factor authentication are deferred to a later release. A successful password reset automatically signs out other devices. Authentication should otherwise stay out of the way: no routine weekly login, no false logout due to connectivity, and no device-session failure disconnecting agents.
+8. V1 sign-in uses email and password, with password-reset links delivered through Cloudflare Email Service; passkeys, magic-link sign-in, and two-factor authentication are deferred to a later release. A successful password reset automatically signs out other devices; the reset flow asks whether to disconnect connected AI agents. Authentication should otherwise stay out of the way: no routine weekly login, no false logout due to connectivity, and no device-session failure disconnecting agents.
 
 ## Confirmed feature direction
 
