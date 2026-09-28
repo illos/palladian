@@ -6,7 +6,7 @@
 
 **Confirmed:** v1 sign-in uses email and password. Passkeys, magic-link sign-in, and two-factor authentication are later features, with no release number committed yet. The existing invitation-only account policy still applies. Accepting a valid emailed invitation verifies the invited email address; no separate verification email is required. V1 password recovery uses emailed password-reset links delivered through Cloudflare Email Service. This resets the password; magic-link sign-in remains deferred.
 
-Better Auth is the preferred identity/session library. The v1 identity decisions are settled under Q08; encryption/privacy expectations remain Q13; supported integration is G03. Do not inherit single-owner security exceptions from Deltos or copy the old app's session state machine.
+Better Auth is the preferred identity/session library. The v1 identity decisions are settled under Q08; local-cache privacy details remain Q13; supported integration is G03. Do not inherit single-owner security exceptions from Deltos or copy the old app's session state machine.
 
 Required outcomes from the owner's discussion:
 
@@ -19,7 +19,7 @@ Required outcomes from the owner's discussion:
 - Explicit logout/account switching isolates local state before displaying the next account.
 - Late responses cannot overwrite a newer login, restore a signed-out session, or render the prior account's data.
 
-Cached viewing entails retaining previously downloaded private content on the device. Offline revocation cannot instantly erase disconnected copies. Q13 must settle shared-device expectations, local unlock, cache clearing, and encryption. Local snapshots never grant fresh server access.
+Cached viewing entails retaining previously downloaded private content on the device. Offline revocation cannot instantly erase disconnected copies. Q13 must settle shared-device expectations, local unlock, cache clearing, and any additional local-storage encryption policy. Local snapshots never grant fresh server access.
 
 Better Auth supports configurable lifetime and renewal intervals, but correct settings alone do not prove correct browser behavior. Test transport, origin, cookie/header handling, sleeping tabs, and real token expiry using the chosen version. See [session documentation](https://better-auth.com/docs/concepts/session-management) and [Convex integration](https://labs.convex.dev/better-auth/framework-guides/react).
 
@@ -49,7 +49,7 @@ Only the owner can administer invitations, change member roles, or change public
 
 Never derive identity from caller-supplied account IDs. Recheck write access at commit time, including claim expiry and offline branch submission. Search results must be scoped before returning excerpts. Private bytes follow explicit access rules. Listing revisions, reading historical content, and comparing versions require effective edit permission; read-only human and agent members and public visitors can access only current content. File links must not expose permanent credentials.
 
-Choose privacy expectations before implementing server search and agents. End-to-end encryption that prevents the server from reading content is a materially different architecture; it cannot be silently promised on top of server-side transformations and indexing.
+Confirmed: the backend may read/process note content for search and authorized agent operations. V1 does not require end-to-end encryption that prevents server access to content. Every operation still enforces note/notebook access rules, including agent-specific permissions; this decision does not make notes public. Remaining local-cache privacy choices are Q13.
 
 ## MCP foundation
 

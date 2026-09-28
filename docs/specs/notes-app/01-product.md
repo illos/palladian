@@ -52,6 +52,10 @@ Typing `#HEADER` followed by Tab converts that paragraph into a level-one headin
 
 Agent paragraph checkout is a desired collaboration direction: indicate which section the agent owns and temporarily prevent conflicting edits there. Expiry, takeover, granularity, and handling in-flight edits require an explicit contract and proof.
 
+## Content privacy
+
+Confirmed: the backend may process note content for search and authorized agent operations. V1 does not require end-to-end encryption that prevents the backend from reading content. Note and notebook permissions continue to govern user and agent access.
+
 ## Constraints
 
 - No commercially licensed self-hosted backend as a required solution or reassuring exit plan. Hosted services are not categorically excluded.
@@ -62,7 +66,7 @@ Agent paragraph checkout is a desired collaboration direction: indicate which se
 
 ## What this draft does not assume
 
-Notebooks and note-level permission overrides are confirmed. Further organization details, ownership transfer, remaining identity policies, end-to-end encryption requirement, file quotas, retention, and production domain are unresolved. The old single-owner auth plan cannot decide those for the new app.
+Notebooks and note-level permission overrides are confirmed. Further organization details, ownership transfer, local-cache privacy policies, file quotas, retention, and production domain are unresolved. The old single-owner auth plan cannot decide those for the new app.
 
 ## Success
 

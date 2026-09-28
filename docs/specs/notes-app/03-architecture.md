@@ -2,7 +2,7 @@
 
 ## Chosen direction
 
-Confirmed: prioritize immediate cached display and dependable online editing. The accepted shared document is server-authoritative. Offline editing is a later branch, not the foundation through which every online operation passes.
+Confirmed: prioritize immediate cached display and dependable online editing. The accepted shared document is server-authoritative. The owner permits backend processing of note content for search and authorized agent operations; v1 does not require end-to-end encryption that hides content from the backend. Offline editing is a later branch, not the foundation through which every online operation passes.
 
 ```mermaid
 flowchart LR
