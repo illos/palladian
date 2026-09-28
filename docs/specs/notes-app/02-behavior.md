@@ -31,6 +31,10 @@ Proposed readiness checks implementing this decision: cached content is readable
 | Explicit logout/account switch        | Clear the prior account's visible data and private caches before another account appears; settle unsaved-work handling explicitly  |
 | Broken embed or agent failure         | Isolate the failure; ordinary text and navigation remain usable                                                                    |
 
+Confirmed: explicit sign-out removes the signed-out account's cached note content and downloaded attachments from app-managed storage on that device. Cached metadata, previews, search indexes, and in-memory content must not expose that account afterward. This does not delete server notes or user-exported files outside app-managed storage. Transient connection/auth failures are not explicit sign-out.
+
+Proposed unsaved-work handling: resolve pending edits before destructive local cleanup by saving, offering recovery/export, or obtaining an explicit discard decision. Signing out must not silently discard the only copy of pending work. Exact interaction and cache treatment after expiry/remote revocation remain Q13.
+
 Typing into an existing cached note before live readiness is not required for the first release. Keep any later offline-edit adapter separate from startup. A brief readiness wait is acceptable; its performance budget still needs Q10 and actual-device evidence. This decision does not specify new-note creation while connecting.
 
 ## Editor

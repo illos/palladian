@@ -54,7 +54,7 @@ Agent paragraph checkout is a desired collaboration direction: indicate which se
 
 ## Content privacy
 
-Confirmed: the backend may process note content for search and authorized agent operations. V1 does not require end-to-end encryption that prevents the backend from reading content. Note and notebook permissions continue to govern user and agent access.
+Confirmed: the backend may process note content for search and authorized agent operations. V1 does not require end-to-end encryption that prevents the backend from reading content. Note and notebook permissions continue to govern user and agent access. Explicit sign-out clears the account's cached notes and downloaded attachments from the app on that device.
 
 ## Constraints
 

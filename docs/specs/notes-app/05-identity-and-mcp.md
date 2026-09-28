@@ -16,10 +16,10 @@ Required outcomes from the owner's discussion:
 - Timeout, disconnect, rate limit, or server error is not proof of revocation. Preserve credentials and retry with bounded backoff.
 - Confirmed invalid sessions pause authorized remote work and offer sign-in while keeping unsaved work recoverable.
 - Device revocation and agent-grant revocation are separate operations. Device failure cannot revoke all agent connections.
-- Explicit logout/account switching isolates local state before displaying the next account.
+- Explicit logout clears that account's app-managed cached notes and downloaded attachments on the device. Account switching isolates local state before displaying the next account; unsaved work requires deliberate handling.
 - Late responses cannot overwrite a newer login, restore a signed-out session, or render the prior account's data.
 
-Cached viewing entails retaining previously downloaded private content on the device. Offline revocation cannot instantly erase disconnected copies. Q13 must settle shared-device expectations, local unlock, cache clearing, and any additional local-storage encryption policy. Local snapshots never grant fresh server access.
+Cached viewing entails retaining previously downloaded private content on the device. Offline revocation cannot instantly erase disconnected copies. Explicit logout clears app-managed note/attachment caches. Q13 still covers shared-device expectations, local unlock, cache handling after expiry/remote revocation, unsaved-work interaction, and any additional local-storage encryption policy. Local snapshots never grant fresh server access.
 
 Better Auth supports configurable lifetime and renewal intervals, but correct settings alone do not prove correct browser behavior. Test transport, origin, cookie/header handling, sleeping tabs, and real token expiry using the chosen version. See [session documentation](https://better-auth.com/docs/concepts/session-management) and [Convex integration](https://labs.convex.dev/better-auth/framework-guides/react).
 
