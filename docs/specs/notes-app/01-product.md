@@ -15,26 +15,26 @@ The app must avoid Deltos's failure mode: locally available notes hidden behind 
 5. Offline editing is a later optional branch. It cannot sit between launch and the ordinary online experience.
 6. History preserves work. Divergent offline and online versions can become two copies for the user to resolve.
 7. Device-recorded edit times are preserved. Revision ancestry, not clock ordering, determines divergence.
-8. Authentication should stay out of the way: no routine weekly login, no false logout due to connectivity, and no device-session failure disconnecting agents.
+8. V1 sign-in uses email and password; passkeys and magic-link sign-in are deferred to a later release. Authentication should stay out of the way: no routine weekly login, no false logout due to connectivity, and no device-session failure disconnecting agents.
 
 ## Confirmed feature direction
 
 The first usable release is for **the owner plus invited collaborators** (confirmed during specification drafting). Public signup is outside the initial scope. Notebooks are libraries of notes, private by default. Each notebook and note has a permissions manifest: private, private with invited members, or public to anyone with the URL. Members may be users or individual AI agents, each with read-only or edit access. Public URL access is read-only and shows the latest saved content automatically; editing requires invited edit access. Explicit note permissions override notebook defaults. Only the owner can invite members or change sharing permissions. Notes created in a notebook belong to its owner, including notes created by invited users or agents; history preserves creator attribution. Remaining ownership-transfer and link details are Q06.
 
-| Area            | Desired product behavior                                                           | Release commitment                                                  |
-| --------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Notes           | Simple, clean writing and organization                                             | Core                                                                |
-| Editor          | Apple Notes-like continuous rich text, Markdown shortcuts, optional complex embeds | Core; exact formats open                                            |
-| History         | Recoverable revisions and restore                                                  | Core foundation                                                     |
-| Sharing         | Shareable links and access control                                                 | Modes confirmed; remaining semantics open                           |
-| Collaboration   | Realtime editing where possible                                                    | Requested; editor/backend gate                                      |
-| External agents | Fast search, creation, editing, attachment, and publishing through MCP             | Core product interface                                              |
-| Accounts        | User accounts, reliable authentication, security                                   | Core; owner plus invited collaborators; login/recovery methods open |
-| Files           | Pictures, PDFs, documents, miscellaneous files                                     | Requested; limits and previews open                                 |
-| Reminders       | Reminders associated with notes                                                    | V2 target confirmed; delivery and scheduling behavior open          |
-| Agent sidebar   | Converse with an agent and edit a note together                                    | Future feature; not required for first useful MCP access            |
-| Offline editing | Preserve local revisions; fork copies on divergence                                | Later extension                                                     |
-| Native iOS      | Possible React Native application                                                  | Long term, not a first-release commitment                           |
+| Area            | Desired product behavior                                                           | Release commitment                                         |
+| --------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Notes           | Simple, clean writing and organization                                             | Core                                                       |
+| Editor          | Apple Notes-like continuous rich text, Markdown shortcuts, optional complex embeds | Core; exact formats open                                   |
+| History         | Recoverable revisions and restore                                                  | Core foundation                                            |
+| Sharing         | Shareable links and access control                                                 | Modes confirmed; remaining semantics open                  |
+| Collaboration   | Realtime editing where possible                                                    | Requested; editor/backend gate                             |
+| External agents | Fast search, creation, editing, attachment, and publishing through MCP             | Core product interface                                     |
+| Accounts        | User accounts, reliable authentication, security                                   | Core; invited accounts; email/password v1; recovery open   |
+| Files           | Pictures, PDFs, documents, miscellaneous files                                     | Requested; limits and previews open                        |
+| Reminders       | Reminders associated with notes                                                    | V2 target confirmed; delivery and scheduling behavior open |
+| Agent sidebar   | Converse with an agent and edit a note together                                    | Future feature; not required for first useful MCP access   |
+| Offline editing | Preserve local revisions; fork copies on divergence                                | Later extension                                            |
+| Native iOS      | Possible React Native application                                                  | Long term, not a first-release commitment                  |
 
 Proposed first usable release: private notes, basic organization/search, history, account/session reliability, attachments, external MCP, and a narrow sharing/collaboration flow. Reminders are a confirmed v2 target and do not block the first usable release. Remaining first-release scope and sharing details are Q02/Q06; reminder delivery details (Q07) can be settled for v2.
 
@@ -62,7 +62,7 @@ Agent paragraph checkout is a desired collaboration direction: indicate which se
 
 ## What this draft does not assume
 
-Notebooks and note-level permission overrides are confirmed. Further organization details, ownership transfer, login method, recovery method, end-to-end encryption requirement, file quotas, retention, and production domain are unresolved. The old single-owner auth plan cannot decide those for the new app.
+Notebooks and note-level permission overrides are confirmed. Further organization details, ownership transfer, recovery method, end-to-end encryption requirement, file quotas, retention, and production domain are unresolved. The old single-owner auth plan cannot decide those for the new app.
 
 ## Success
 

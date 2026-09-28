@@ -34,6 +34,7 @@ The implementation sequence here is proposed. It does not resume the historical 
 | Q03 | Cached existing notes display immediately; a brief read-only wait for live editing is acceptable, with reading/navigation available  | Owner confirmation, 2026-09-27                                    |
 | Q04 | Automatically cache all note text; pictures and PDFs lazy-load when needed                                                           | Owner confirmation, 2026-09-27                                    |
 | D21 | Reminders target v2 and are outside the first usable release                                                                         | Owner confirmation, 2026-09-27                                    |
+| D22 | V1 sign-in uses email and password; passkeys and magic-link sign-in are deferred to a later release                                  | Owner confirmation, 2026-09-28                                    |
 
 ## Open owner decisions, in discussion order
 
@@ -45,7 +46,7 @@ Recommendations are proposals. Unanswered items remain open; passage of time is 
 | Q05 | Remaining organization/editor details: collection query semantics/archive and trash inclusion/location source, tags, titles, tables, sorting, embeds? | Flat, never-nested notebooks; one notebook per note; personal MCP-visible collections without separate permissions; All notes includes owned and shared notes. Propose cached query evaluation, search/pins/trash and standard formatting                         | Schema/editor and initial UI             |
 | Q06 | Remaining ownership/sharing details: ownership transfer, cross-owner notebook moves, link lifecycle?                                                  | Notebook/note manifests, human and individual-agent read/edit members, live read-only public URL access, note overrides, editor-only history, owner-only sharing administration, and notebook-owner ownership of created notes confirmed; propose revocable links | Authorization and share schema           |
 | Q07 | Deferred v2 reminder delivery and behavior: push/email/in-app, recurrence, snooze, timezones, late notifications?                                     | One selected channel and one-shot reminders first; prove delivery on target phone with app closed                                                                                                                                                                 | V2 reminder implementation only          |
-| Q08 | Login and recovery: email/password, passkeys, social login, MFA, recovery method?                                                                     | Supported library flows; reliable long sessions; preserve recovery preference only after owner confirms it for new app                                                                                                                                            | Identity implementation                  |
+| Q08 | Remaining identity decisions: password recovery, email verification, MFA?                                                                             | Email/password v1 confirmed; passkeys/magic-link sign-in later. Supported library flows and reliable sessions; recovery not yet selected                                                                                                                          | Identity implementation                  |
 | Q09 | Agent checkout details: paragraph versus section; takeover rights; default direct editing or suggestions?                                             | Short paragraph leases, explicit human takeover; suggestions for large rewrites                                                                                                                                                                                   | Claim/agent collaboration implementation |
 | Q10 | Reference phone/browser/PWA, expected library and note sizes, performance budgets?                                                                    | Measure actual owner's iPhone; separate visible-content time, edit-ready time, and interaction responsiveness                                                                                                                                                     | Performance acceptance                   |
 | Q11 | History/trash/file retention, quotas, permanent deletion, and what happens to drafts after original deletion?                                         | Undoable deletion and restore; retain history initially within agreed limits; no silent resurrection                                                                                                                                                              | Data/file lifecycle implementation       |
@@ -60,11 +61,11 @@ Q02, Q05, Q06, Q08, and Q13 are the main product decisions needed before a compl
 
 1. Resolve product scope and ownership; establish reference data and phone. Use confirmed Q03 to separate immediate visible notes from live editing readiness; settle the performance budget.
 2. Prove cached cold launch and natural editor behavior with disposable fixtures. No auth/network dependency before display.
-3. Prove actual session lifecycle and account separation. Reproduce the old races/failure modes and demonstrate they do not recur.
+3. Prove actual email/password sign-in for invited accounts, session lifecycle, and account separation. Reproduce the old races/failure modes and demonstrate they do not recur.
 4. Prove two-client online editing, agent transform, claim takeover, dropped-response retry, and recovery. Select the collaboration component based on evidence.
 5. Build a narrow end-to-end MCP flow: authenticated create, search, targeted edit, history, and explicit publication using real clients.
 6. Complete chosen first-release organization, file, sharing, and operational scope. Review protected contracts independently before acceptance.
-7. Later: reminders (confirmed v2 target), sidebar agents, offline draft adapter/conflict-copy UI, and native app investigation, each with separate requirements.
+7. Later: reminders (confirmed v2 target), passkeys and magic-link sign-in (release unspecified), sidebar agents, offline draft adapter/conflict-copy UI, and native app investigation, each with separate requirements.
 
 None of these steps authorizes production deployment or personal-data import by itself.
 
@@ -101,6 +102,8 @@ A14 also verifies that invited editors (both users and agents) cannot invite mem
 A21 also verifies a flat notebook list with no notebook nesting or first-release folder feature, and that All notes includes owned notes and notes shared directly or through an accessible notebook, subject to note overrides. Collections are available through MCP in the associated user context, cannot be shared or published to other users, and have no separate permission controls. An agent querying a collection receives only results allowed by its notebook permissions and note overrides.
 
 A01/A03/A04 also verify background caching of all current owned/shared note text without blocking launch or hydrating the whole library at once. A previously unopened note is readable offline after its text cache completes. Text population must not fetch picture/PDF bytes; those load on demand without blocking text. Partial downloads and storage failure remain visible rather than being reported as complete offline availability.
+
+Identity acceptance must demonstrate actual email/password sign-in with invited accounts, alongside the existing A06–A08 session tests. Passkeys and magic-link sign-in are outside v1 acceptance; password recovery remains pending Q08.
 
 ## Performance budget proposal to discuss
 

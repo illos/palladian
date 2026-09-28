@@ -4,7 +4,9 @@
 
 **Confirmed Q01:** first usable release is for the owner plus invited collaborators. Public signup is outside that initial scope. Confirmed: notebooks contain notes and are private by default. Notebook and note permissions support private, invited-member, and public URL access. Invited members can be users or individual agents with read-only or edit access. Public visitors are read-only; public visibility never grants edit permission. Editing requires invited edit access. Explicit note permissions override notebook defaults. Only the owner can invite members or change sharing permissions. Notes created in a notebook belong to the notebook owner, including notes created by invited users or agents; creator attribution is separate. Ownership transfer and cross-owner moves remain Q06.
 
-Better Auth is the preferred identity/session library. Login methods, recovery, MFA, and encryption expectations are Q08/Q13; supported integration is G03. Do not inherit single-owner security exceptions from Deltos or copy the old app's session state machine.
+**Confirmed:** v1 sign-in uses email and password. Passkeys and magic-link sign-in are later features, with no release number committed yet. The existing invitation-only account policy still applies. Password recovery remains open; deferring magic-link sign-in does not decide whether recovery uses an emailed password-reset link.
+
+Better Auth is the preferred identity/session library. Recovery, MFA, and encryption expectations remain Q08/Q13; supported integration is G03. Do not inherit single-owner security exceptions from Deltos or copy the old app's session state machine.
 
 Required outcomes from the owner's discussion:
 
