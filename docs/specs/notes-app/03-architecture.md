@@ -77,13 +77,13 @@ A file upload and a database transaction cannot be assumed atomic together. Use 
 
 ## Technical gates
 
-| Gate | What must be demonstrated                                                                                                                                                                                                  |
-| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| G01  | Natural iPhone text selection, composition, paste, embeds, shortcuts, and acceptable editor startup using the selected engine                                                                                              |
-| G02  | Centralized collaborative edits; authorizing and validating affected content; claim enforcement; agent transforms; cache-to-live handoff; pending-edit recovery; bounded history/storage costs                             |
-| G03  | Supported Better Auth/Convex arrangement; long-lived sessions; expired short-lived token recovery; late responses/account switches; independent agent grants; emailed password-reset flow through Cloudflare Email Service |
-| G04  | MCP SDK v2 protocol/auth compatibility with actual intended clients, not just an SDK unit test                                                                                                                             |
-| G05  | Representative library/document/file limits, costs, backups, and successful restore; storage limits cannot be removed from tests to make the component fit                                                                 |
+| Gate | What must be demonstrated                                                                                                                                                                                                                                                    |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G01  | Natural iPhone text selection, composition, paste, embeds, shortcuts, and acceptable editor startup using the selected engine                                                                                                                                                |
+| G02  | Centralized collaborative edits; authorizing and validating affected content; claim enforcement; agent transforms; cache-to-live handoff; pending-edit recovery; bounded history/storage costs                                                                               |
+| G03  | Supported Better Auth/Convex arrangement; long-lived sessions; expired short-lived token recovery; late responses/account switches; independent agent grants; invitation acceptance verifies the invited email; emailed password-reset flow through Cloudflare Email Service |
+| G04  | MCP SDK v2 protocol/auth compatibility with actual intended clients, not just an SDK unit test                                                                                                                                                                               |
+| G05  | Representative library/document/file limits, costs, backups, and successful restore; storage limits cannot be removed from tests to make the component fit                                                                                                                   |
 
 If a gate fails, record the concrete limitation and compare alternatives. Do not silently restore the full local-first architecture or weaken the owner's behavior requirements.
 

@@ -4,9 +4,9 @@
 
 **Confirmed Q01:** first usable release is for the owner plus invited collaborators. Public signup is outside that initial scope. Confirmed: notebooks contain notes and are private by default. Notebook and note permissions support private, invited-member, and public URL access. Invited members can be users or individual agents with read-only or edit access. Public visitors are read-only; public visibility never grants edit permission. Editing requires invited edit access. Explicit note permissions override notebook defaults. Only the owner can invite members or change sharing permissions. Notes created in a notebook belong to the notebook owner, including notes created by invited users or agents; creator attribution is separate. Ownership transfer and cross-owner moves remain Q06.
 
-**Confirmed:** v1 sign-in uses email and password. Passkeys, magic-link sign-in, and two-factor authentication are later features, with no release number committed yet. The existing invitation-only account policy still applies. V1 password recovery uses emailed password-reset links delivered through Cloudflare Email Service. This resets the password; magic-link sign-in remains deferred.
+**Confirmed:** v1 sign-in uses email and password. Passkeys, magic-link sign-in, and two-factor authentication are later features, with no release number committed yet. The existing invitation-only account policy still applies. Accepting a valid emailed invitation verifies the invited email address; no separate verification email is required. V1 password recovery uses emailed password-reset links delivered through Cloudflare Email Service. This resets the password; magic-link sign-in remains deferred.
 
-Better Auth is the preferred identity/session library. Email verification and encryption expectations remain Q08/Q13; supported integration is G03. Do not inherit single-owner security exceptions from Deltos or copy the old app's session state machine.
+Better Auth is the preferred identity/session library. The v1 identity decisions are settled under Q08; encryption/privacy expectations remain Q13; supported integration is G03. Do not inherit single-owner security exceptions from Deltos or copy the old app's session state machine.
 
 Required outcomes from the owner's discussion:
 
@@ -22,6 +22,12 @@ Required outcomes from the owner's discussion:
 Cached viewing entails retaining previously downloaded private content on the device. Offline revocation cannot instantly erase disconnected copies. Q13 must settle shared-device expectations, local unlock, cache clearing, and encryption. Local snapshots never grant fresh server access.
 
 Better Auth supports configurable lifetime and renewal intervals, but correct settings alone do not prove correct browser behavior. Test transport, origin, cookie/header handling, sleeping tabs, and real token expiry using the chosen version. See [session documentation](https://better-auth.com/docs/concepts/session-management) and [Convex integration](https://labs.convex.dev/better-auth/framework-guides/react).
+
+## Invitation and email verification
+
+Confirmed: accepting an emailed invitation verifies that same invited email address, avoiding a second verification email. Normal sign-in remains email/password.
+
+Proposed implementation: bind the invitation to its destination email, intended access, expiry, and one-time acceptance state. Verification applies only to that address. An expired, revoked, reused, or mismatched invitation must not verify another address or grant access. Invitation acceptance for an existing account must not become an account-takeover or password-replacement path. Prove the supported auth-library integration in G03 rather than directly bypassing verification. New users establish a password as part of account setup.
 
 ## Password recovery
 
