@@ -1,6 +1,6 @@
 # Palladian notes app specification
 
-Status: **discussion draft**, updated 2026-09-28. This package records the owner's notes-app direction and identifies the decisions still needed before a complete build. Writing these specifications does not authorize implementation or deployment.
+Status: **discussion draft**, updated 2026-09-29. This package records the owner's notes-app direction and identifies the decisions still needed before a complete build. Writing these specifications does not authorize implementation or deployment.
 
 Palladian is the working name in this conversation; final branding remains open. This is the original Deltos product goal: a fast, clean, MCP-first notes app. It is not the shelved app-hosting platform. The [platform shelf](../../handoff/deep-sleep.md), archive branch, and archive tag remain intact. Historical platform phases and their acceptance reports do not establish acceptance for this app.
 

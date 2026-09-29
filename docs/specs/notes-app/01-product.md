@@ -68,6 +68,10 @@ Confirmed: the backend may process note content for search and authorized agent 
 
 Notebooks and note-level permission overrides are confirmed. Further organization details, ownership transfer, local-cache privacy policies, file quotas, retention, and production domain are unresolved. The old single-owner auth plan cannot decide those for the new app.
 
+## Supported clients
+
+Confirmed: Safari as an installed PWA is the primary target, with Chrome and Firefox on desktop supported. The primary mobile acceptance environment is a real iPhone running the installed PWA. Native iOS remains a possible later direction. Exact device, OS/browser versions, library sizes, and performance budgets remain Q10.
+
 ## Success
 
 A returning user sees actual notes promptly on their phone. Ordinary typing stays responsive while the app reconnects or an agent works. Accepted saves are durable, pending edits are recoverable, and history makes mistakes reversible. An authenticated agent can save a normal-sized conversation in one write once its destination is known, then change a section without rewriting the whole note.
