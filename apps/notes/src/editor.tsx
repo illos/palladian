@@ -20,26 +20,7 @@ export function validateDocument(document: string) {
     throw new Error("Invalid note document.");
   return node;
 }
-export function emptyDocument() {
-  return JSON.stringify(notesSchema.topNodeType.createAndFill()?.toJSON());
-}
-export function textDocument(lines: string[]) {
-  return JSON.stringify(
-    notesSchema
-      .node(
-        "doc",
-        null,
-        lines.map((line) =>
-          notesSchema.node(
-            "paragraph",
-            null,
-            line ? notesSchema.text(line) : undefined,
-          ),
-        ),
-      )
-      .toJSON(),
-  );
-}
+export { emptyDocument, textDocument } from "./document";
 export function NoteEditor({
   document,
   editable,

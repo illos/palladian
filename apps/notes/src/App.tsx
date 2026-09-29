@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { SessionController } from "./session";
 import { type NoteBody, type NoteSummary, type NotesStore } from "./cache";
-import { emptyDocument, NoteEditor, validateDocument } from "./editor";
+import { emptyDocument, validateCachedDocument } from "./document";
+import { EditorSurface } from "./EditorSurface";
 import "./styles.css";
 
 interface OpenNote extends NoteBody {
@@ -100,7 +101,7 @@ export function App({
         setError("This note's text is not cached on this device yet.");
         return;
       }
-      validateDocument(body.document);
+      validateCachedDocument(body.document);
       setError(null);
       setOpen({ ...body, kind: row.kind, generation });
       setSaveState("Local draft — not saved to server");
@@ -262,9 +263,10 @@ export function App({
                   : "Cached copy — read only"}
               </span>
             </div>
-            <NoteEditor
+            <EditorSurface
               key={currentOpen.id + ":" + currentOpen.generation}
               document={currentOpen.document}
+              text={currentOpen.text}
               editable={currentOpen.kind === "draft"}
               onChange={(document, text) => {
                 void persistDraft(currentOpen, document, text);

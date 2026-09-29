@@ -304,6 +304,7 @@ test("hash header plus Tab creates a native heading", async ({ page }) => {
     .first()
     .click();
   const editor = page.getByRole("textbox", { name: "Note content" });
+  await expect(editor).toHaveAttribute("contenteditable", "true");
   await editor.fill("#HEADER");
   await editor.press("Tab");
   await expect(editor.locator("h1")).toHaveText("HEADER");
@@ -339,4 +340,91 @@ test("another tab's revocation removes visible cached content", async ({
     page.getByRole("button", { name: /Welcome to your notes/ }),
   ).toHaveCount(0);
   await other.close();
+});
+
+test("cached text and draft typing do not wait for the rich editor chunk", async ({
+  page,
+}) => {
+  await page.route("**/src/editor.tsx*", (route) => route.abort("failed"));
+  await seed(page);
+  await page.getByRole("button", { name: /Welcome to your notes/ }).click();
+  await expect(
+    page.getByRole("textbox", { name: "Note content" }),
+  ).toContainText("Opening it does not need a session token");
+  const back = page.getByRole("button", { name: "‹ All notes" });
+  if (await back.isVisible()) await back.click();
+  await page
+    .getByRole("button", { name: "New note", exact: true })
+    .first()
+    .click();
+  const text = page.getByRole("textbox", { name: "Note content" });
+  await text.fill("Immediate plain draft");
+  await expect(
+    page.getByText("Draft saved on this device — not saved to server"),
+  ).toBeVisible();
+  await expect(text).toHaveValue("Immediate plain draft");
+});
+
+test("rich recovery drafts keep formatting when the editor chunk is unavailable", async ({
+  page,
+}) => {
+  await page.route("**/src/editor.tsx*", (route) => route.abort("failed"));
+  await seed(page);
+  await page.evaluate(async () => {
+    const modulePath = "/src/cache.ts";
+    const module = (await import(
+      modulePath
+    )) as typeof import("../../apps/notes/src/cache");
+    const store = module.createNotesStore();
+    await store.writeDraft({
+      accountId: "fixture-account",
+      id: "rich-draft",
+      text: "Rich recovery",
+      document: JSON.stringify({
+        type: "doc",
+        content: [
+          {
+            type: "heading",
+            attrs: { level: 1 },
+            content: [
+              {
+                type: "text",
+                text: "Rich recovery",
+                marks: [{ type: "strong" }],
+              },
+            ],
+          },
+        ],
+      }),
+      updatedAt: Date.now(),
+    });
+    store.close();
+  });
+  await page.reload();
+  await page.getByRole("button", { name: /Rich recovery/ }).click();
+  const viewer = page.getByRole("textbox", { name: "Note content" });
+  await expect(viewer).toHaveAttribute("contenteditable", "false");
+  await expect(viewer).toContainText("Rich recovery");
+  await expect(
+    page.getByText(
+      "This formatted draft will be editable when formatting is ready.",
+    ),
+  ).toBeVisible();
+  const preserved = await page.evaluate(async () => {
+    const modulePath = "/src/cache.ts";
+    const module = (await import(
+      modulePath
+    )) as typeof import("../../apps/notes/src/cache");
+    const store = module.createNotesStore();
+    const note = await store.read("fixture-account", "rich-draft");
+    store.close();
+    return note?.document;
+  });
+  expect(JSON.parse(preserved ?? "{}").content[0]).toEqual({
+    type: "heading",
+    attrs: { level: 1 },
+    content: [
+      { type: "text", text: "Rich recovery", marks: [{ type: "strong" }] },
+    ],
+  });
 });

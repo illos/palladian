@@ -1,5 +1,5 @@
 import type { NotesStore } from "./cache";
-import { textDocument } from "./editor";
+import { textDocument } from "./document";
 /** Disposable synthetic records only. Caller must gate this module to development. */
 export async function seedFixture(store: NotesStore, accountId: string) {
   await store.allowAccount(
@@ -22,19 +22,20 @@ export async function seedFixture(store: NotesStore, accountId: string) {
     1700000000000,
     fence,
   );
+  const longLines = [
+    "A longer note",
+    ...Array.from(
+      { length: 180 },
+      (_, index) =>
+        `Paragraph ${index + 1}. Continuous text for scrolling and selection in the editor foundation.`,
+    ),
+  ];
   await store.cacheAccepted(
     {
       accountId,
       id: "fixture-long",
-      document: textDocument([
-        "A longer note",
-        ...Array.from(
-          { length: 180 },
-          (_, index) =>
-            `Paragraph ${index + 1}. Continuous text for scrolling and selection in the editor foundation.`,
-        ),
-      ]),
-      text: "A longer note\nContinuous text for scrolling and selection.",
+      document: textDocument(longLines),
+      text: longLines.join("\n"),
     },
     1699999999999,
     fence,
