@@ -72,7 +72,7 @@ MCP endpoints must work while the browser is closed. They access the current acc
 Proposed small, coherent model:
 
 - Notebooks: stable IDs, names, descriptions, permission manifests, effective access rights, and filing guidance.
-- Collections: personal saved-query views with stable IDs, names, definitions, and authorized matching notes; visible to MCP agents in the associated user context. They cannot be shared/published to other users and have no independent permission controls. Results follow the caller's notebook permissions and note overrides. They are distinct from notebook destinations.
+- Collections: personal saved-query views with stable IDs, names, definitions, and authorized matching notes; visible to MCP agents in the associated user context. They cannot be shared/published to other users and have no independent permission controls. Results follow the caller's notebook permissions and note overrides. They are distinct from notebook destinations. Trash is a special collection; access to it does not grant additional lifecycle permissions. V1 collection filters include text, title, notebook, creation date, last-edited date, and stored note location. Location capture and visibility policies remain Q05/Q13.
 - Notes: stable ID, single notebook ID, title, metadata, accepted revision, outline, and document URL.
 - Content: readable text/Markdown with stable section/block targets; typed references for rich objects.
 - Revisions: explicit expected revision or target-version preconditions and compact committed receipts.
