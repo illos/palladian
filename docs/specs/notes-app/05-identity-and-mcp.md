@@ -67,6 +67,8 @@ Confirmed: the backend may read/process note content for search and authorized a
 
 **Confirmed:** official MCP TypeScript SDK v2, targeting protocol `2026-07-28`. This is an SDK/protocol decision, not a manifest format. The owner reconfirmed the earlier modern-MCP direction for the notes app.
 
+**Confirmed acceptance targets:** Codex CLI, Claude Code, Hermes, and Codex accessed over the CLI through Presidium. Exercise the Presidium invocation path separately; success in a standalone CLI does not establish that integration. Exact installed versions and authentication compatibility remain G04/Q14, with no client compatibility accepted yet.
+
 Implement the supported modern transport deliberately; installing SDK v2 alone is not proof that legacy protocol handling is disabled. Any legacy adapter is separately justified by reproduced client incompatibility after reachability, auth, SDK configuration, and client opt-in issues are excluded. Do not claim compatibility with a client that has not been exercised.
 
 Use current official SDK APIs at implementation time. [Official SDK v2 documentation](https://ts.sdk.modelcontextprotocol.io/v2/).
