@@ -129,3 +129,7 @@ if (!fixture && typeof siteURL === "string" && siteURL) {
       console.error("Unable to initialize the authentication interface."),
     );
 }
+
+if (!__NOTES_DEV__ && "serviceWorker" in navigator) {
+  void navigator.serviceWorker.register("/sw.js").catch(() => console.error("Offline shell unavailable; current notes remain usable."));
+}

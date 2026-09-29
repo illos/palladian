@@ -1,0 +1,9 @@
+{
+  "name": "Palladian Notes Foundation",
+  "short_name": "Palladian",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8f7f4",
+  "theme_color": "#f8f7f4"
+}

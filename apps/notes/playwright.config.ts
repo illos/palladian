@@ -5,10 +5,10 @@ export default defineConfig({
   testMatch: "notes-foundation.spec.ts",
   fullyParallel: true,
   reporter: "list",
-  use: { baseURL: "http://127.0.0.1:5174", trace: "off" },
+  use: { baseURL: "http://localhost:5178", trace: "off" },
   webServer: {
     command: "pnpm exec vite --config apps/notes/vite.config.ts",
-    url: "http://127.0.0.1:5174",
+    url: "http://localhost:5178",
     cwd: fileURLToPath(new URL("../..", import.meta.url)),
     reuseExistingServer: false,
   },
