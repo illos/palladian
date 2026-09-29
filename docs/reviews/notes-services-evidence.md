@@ -8,7 +8,7 @@ The password/session probe exercises actual HTTP sign-in, session cookies, Conve
 
 The sync probe runs two authenticated HTTP clients against the real component. One accepts a ProseMirror step, the other receives `needs-rebase`, maps its step over the accepted operation and submits at the returned revision. Both read the same `ABHello` result. Replaying the first accepted request after the second edit returns its original version and creates no third history entry. Changed payload under that same request ID fails. Anonymous reads fail. Removing editor access prevents replaying an otherwise valid old receipt.
 
-Claim tests exercise server-side affected-paragraph rejection, editor cancellation, durable cancelled status and late-generation rejection. Astra's independent review identified an order-only claim bypass and absent trusted agent classification; both are addressed with regression tests and a server-owned local fixture principal table. Exact structural editing scope and actual MCP authentication remain unaccepted.
+Claim tests exercise server-side affected-paragraph rejection, editor cancellation, durable cancelled status and late-generation rejection. Astra's independent review identified an order-only claim bypass and absent trusted agent classification; both are addressed with regression tests and a server-owned local fixture principal table. A further canonical-root review finding is addressed by requiring the ProseMirror document root and rejecting text-node roots before creation. Exact structural editing scope and actual MCP authentication remain unaccepted.
 
 ## Verification and limits
 

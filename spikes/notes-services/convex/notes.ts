@@ -24,6 +24,8 @@ function parse(content: string) {
   if (content.length > 100_000)
     throw new ConvexError("Proof document limit exceeded");
   const doc = documentSchema.nodeFromJSON(JSON.parse(content));
+  if (doc.type !== documentSchema.topNodeType)
+    throw new ConvexError("Document root required");
   doc.check();
   const ids = new Set<string>();
   doc.forEach((node) => {
