@@ -291,3 +291,25 @@ input:focus-visible,
     font-size: 34px;
   }
 }
+
+.cached-text {
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.cached-text p:first-child {
+  font-family: Georgia, serif;
+  font-size: 34px;
+  line-height: 1.3;
+  margin-bottom: 26px;
+}
+.draft-fallback {
+  width: 100%;
+  min-height: 60vh;
+  border: 0;
+  background: transparent;
+  resize: vertical;
+  font: inherit;
+  line-height: 1.65;
+  color: inherit;
+}
