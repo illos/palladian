@@ -92,11 +92,17 @@ Names below are conceptual API names, not frozen wire schemas.
 | Create note    | Destination, Markdown/native supported content, optional metadata, stable request ID; title derives from the first content line                     |
 | Edit note      | Bounded atomic batch of append/insert/replace/move/delete-content/metadata operations with explicit preconditions                                   |
 | Attach file    | Upload/finalize/reference workflow; no whole-body rewrite; explicit size/type limits                                                                |
-| History        | List/read/compare require effective edit permission; restore also enforces write authorization                                                      |
+| History        | Browse revisions backward/forward, read/diff/restore; effective edit permission required; browsing never changes live content                       |
 | Share/publish  | Owner-only visibility and public-URL replacement operations, independent of ordinary save                                                           |
-| Claim/release  | Optional online section checkout, expiry, and takeover semantics                                                                                    |
+| Claim/release  | Claim only needed content; release/expiry; human-editor cancellation with agent-visible interruption and stale-write rejection                      |
 
 Prefer stable target IDs; never assume a heading label is unique. Destructive operations state their effects clearly. A tool that saves a private note does not implicitly publish it. Once a note is public, accepted edits automatically update the content at its public URL; no separate publish call is needed. Share/publish changes visibility rather than freezing a revision. Unknown or unsupported blocks remain preserved and readable by description.
+
+Confirmed: authorized agents make direct edits by default, with history for review and recovery. No mandatory proposal/approval phase is required for ordinary content edits. Owner-only administrative operations retain their separate authorization rules.
+
+Proposed history API: paginated revision summaries with stable IDs, parent/order information, actor and timestamps; bounded revision reads and diffs; explicit restore using the expected current revision and an idempotency key. Let agents traverse both directions without downloading the whole history. Restore appends a new revision and preserves intervening history, existing attachment-object lifecycle rules, and concurrent-work checks.
+
+Confirmed: human cancellation alerts the affected agent. Proposed transport: prompt notification for connected clients plus persistent claim/operation status and an explicit interrupted error for late writes. Verify delivery/observation in G04 instead of assuming every MCP client handles unsolicited notifications.
 
 MCP results use schemas and compact receipts: operation ID, note ID, URL, accepted revision, affected IDs, status, and explicit warnings. Errors distinguish conflict, denied, invalid input, missing resource, transient failure, and uncertain operation outcome without leaking private content.
 

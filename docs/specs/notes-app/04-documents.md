@@ -69,26 +69,30 @@ An agent edit uses a known revision and stable targets. Unrelated concurrent edi
 
 Recovery journal entries are removed only after acknowledgement. A timeout means the outcome may be unknown: retry with the same operation ID or look up its receipt before assuming failure. If accepted state has moved too far to replay pending edits safely, preserve a recoverable draft/copy instead of overwriting it.
 
-## Agent paragraph checkout
+## Agent content checkout
 
-Confirmed owner intent: an agent may claim part of a note; UI indicates the claim and prevents competing edits there until release. Proposed contract:
+Confirmed: an agent claims only the content needed for its work. It may claim multiple paragraphs or a larger necessary scope, but must not claim unrelated paragraphs. UI indicates the claim and prevents competing edits there until release. Human editors can cancel the claim, resume editing, and cause the agent to receive an interruption signal. Authorized agents edit directly by default; history supports subsequent correction or rejection of their changes. Precise targeting units are an engineering decision to validate, not permission to lock unnecessary content.
+
+Proposed contract:
 
 1. Claim acquisition is an atomic server operation against stable targets and current state.
 2. Claims have short renewable leases using server time; expiry duration is an engineering default to test.
 3. Connected editors show the holder and allow reading/copying claimed text. Structural edits crossing claimed content are subject to the same rule.
 4. Server write validation checks actual affected content, permissions, and claim generation. UI disabling alone is insufficient.
 5. A successful agent edit and claim release are committed together where the storage model permits atomicity.
-6. Human takeover invalidates the previous generation. Late agent responses cannot commit with that claim.
+6. Human cancellation invalidates the previous generation, releases the affected claim, and records an interruption reason for the agent. Late agent responses cannot commit with that claim. Notify a connected agent promptly and expose the interruption through durable claim/operation status so reconnecting clients also learn what happened. A stale write must return an explicit interrupted result, never silently reacquire the claim. Cancellation stops pending work; already accepted edits stay in history and require a separate corrective edit or restore to undo.
 7. In-flight human edits crossing a newly granted claim must receive a defined ordering/retry result and remain recoverable; they cannot disappear.
 8. Agent research happens before claiming where practical, minimizing time spent blocking writing.
 
-G02 must determine whether the collaboration component exposes sufficient validation hooks. A supplied block ID does not prove an arbitrary document update affects only that block. Q09 settles granularity, takeover rights, and direct-edit versus suggestion defaults.
+G02 must determine whether the collaboration component exposes sufficient validation hooks. A supplied block ID does not prove an arbitrary document update affects only that block. Owner behavior is settled in D55–D58. G02/G04 must prove necessary-scope targeting, cancellation enforcement, and agent-visible interruption delivery/status using actual intended clients.
 
 ## History
 
 Confirmed: history is foundational. Record device edit time for edits made on a device, separately from server receipt/acceptance time. Preserve the revision from which the edit was made. For server-hosted agents, the editing process records its edit time and the server independently records acceptance.
 
 Confirmed: retain edit history for the lifetime of the note, including while it is in Trash. Do not age out historical versions while the note exists. This is server-side history retention, not a requirement to cache every version on each device.
+
+Confirmed: agents can browse and scrub backward/forward through note history via MCP, inspect revisions, compare changes, and restore earlier content. Browsing an earlier revision is a read and does not change the live note. The Git-history comparison describes navigation and recovery behavior, not a requirement to store notes in Git or expose every Git operation.
 
 Confirmed: viewing history requires effective edit permission. Invited read-only members and public visitors see only current content; users and agents follow the same rule. Revision lists, past content, and comparisons must enforce this permission.
 

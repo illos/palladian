@@ -110,4 +110,8 @@ Confirmed: reminders target v2 and are outside the first usable release. Deliver
 
 ## Agent collaboration
 
+Confirmed: agents claim only the content needed for their work, expanding across multiple paragraphs when necessary without claiming unrelated paragraphs. Human editors can cancel an agent claim and resume editing; the agent must be alerted that its edit was interrupted. Authorized agents edit directly by default, with history supporting review, correction, and recovery instead of a mandatory approval queue.
+
+Confirmed: MCP exposes note history so an authorized editor agent can move backward and forward through revisions, inspect earlier content, compare changes, and restore content. This uses the same editor-only history permissions as the app.
+
 External MCP is a primary interface from the first usable agent milestone. The later sidebar should use the same domain operations and permissions. Agent authorship and history are visible; human takeover of a claimed section has a defined result. Model/provider choice, credentials, costs, execution hosting, and conversation retention remain Q12.
