@@ -13,7 +13,7 @@ Confirmed: displaying previously downloaded notes must not wait for authenticati
 
 **Confirmed Q04:** automatically download and retain all current note text in the user's accessible library, including owned and shared notes. Pictures and PDFs load lazily when needed; text-cache population does not bulk-download their bytes.
 
-Proposed implementation: retain list metadata and the document structure needed to render text locally. Populate and refresh the text cache incrementally in the background, prioritizing the active note; never wait for the whole library to download before displaying available notes or enabling ready online work. This is current-content caching, not a requirement to download every historical revision. Cache completion must be observable; a record of a note is not proof its body/files are present. Handle storage failure/eviction without treating missing local state as a server deletion. Account separation and access-revocation handling remain subject to Q13.
+Proposed implementation: retain list metadata and the document structure needed to render text locally. Populate and refresh the text cache incrementally in the background, prioritizing the active note; never wait for the whole library to download before displaying available notes or enabling ready online work. This is current-content caching, not a requirement to download every historical revision. Cache completion must be observable; a record of a note is not proof its body/files are present. Handle storage failure/eviction without treating missing local state as a server deletion. Keep account caches isolated. Once the app learns that access to a shared note has been revoked, remove its cached copy from normal viewing; transient network errors do not establish revocation.
 
 ## Display versus editing
 
@@ -33,7 +33,9 @@ Proposed readiness checks implementing this decision: cached content is readable
 
 Confirmed: explicit sign-out removes the signed-out account's cached note content and downloaded attachments from app-managed storage on that device. Cached metadata, previews, search indexes, and in-memory content must not expose that account afterward. This does not delete server notes or user-exported files outside app-managed storage. Transient connection/auth failures are not explicit sign-out.
 
-Proposed unsaved-work handling: resolve pending edits before destructive local cleanup by saving, offering recovery/export, or obtaining an explicit discard decision. Signing out must not silently discard the only copy of pending work. Exact interaction and cache treatment after expiry/remote revocation remain Q13.
+Confirmed: v1 relies on the device lock and has no separate app-unlock step. When signing out with unsynced edits, offer to wait for saving, export the edits, or explicitly discard them before clearing local data. A failed save or cancelled export must not count as resolving the pending work. Signing out must not silently discard its only copy.
+
+Confirmed: remove a shared note's cached copy once its access revocation is known. Proposed cleanup includes body, title/preview, indexes, historical snapshots, in-memory views, and attachment bytes accessible only through that revoked note; objects still accessible through another authorized note retain their valid cache. Prevent late responses from restoring revoked content. Pending-edit recovery after access loss and account/session revocation handling remain Q13.
 
 Typing into an existing cached note before live readiness is not required for the first release. Keep any later offline-edit adapter separate from startup. A brief readiness wait is acceptable; its performance budget still needs Q10 and actual-device evidence. This decision does not specify new-note creation while connecting.
 
