@@ -137,6 +137,12 @@ const base = schema.nodeFromJSON({
     },
   ],
 });
+await assert.rejects(
+  client.mutation(api.notes.create, {
+    content: JSON.stringify({ type: "text", text: "invalid root" }),
+  }),
+  "non-document root rejected",
+);
 const noteId = await client.mutation(api.notes.create, {
   content: JSON.stringify(base.toJSON()),
   editorId: collaborator.id,
