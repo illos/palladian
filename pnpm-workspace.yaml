@@ -9,6 +9,7 @@ minimumReleaseAgeExclude:
   - react-dom@19.3.0
   - react@19.3.0
   - scheduler@0.28.0
+  - prosemirror-history@1.5.1
 strictPeerDependencies: true
 # Patch miniflare's image decoder for GHSA-rgj7-g3m4-5g8c.
 overrides:
