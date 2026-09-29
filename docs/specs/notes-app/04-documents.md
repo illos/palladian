@@ -4,7 +4,7 @@
 
 Confirmed direction: the server owns the accepted shared document. Local snapshots display accepted content quickly. Later offline edits carry their starting revision and may become separate copies on conflict.
 
-Proposed representation: a versioned rich-text document with stable IDs for addressable paragraphs, headings, list structures, and embeds. IDs are internal targeting aids, not separate text boxes. Splitting, joining, copying, and moving content need deterministic identity rules. A title is distinct metadata or a distinguished node; choose one canonical representation under Q05.
+Proposed representation: a versioned rich-text document with stable IDs for addressable paragraphs, headings, list structures, and embeds. IDs are internal targeting aids, not separate text boxes. Splitting, joining, copying, and moving content need deterministic identity rules. Confirmed: title is derived from the first line of the note. Any stored title field is a rebuildable projection for listing/search, not a second editable source of truth. Proposed: use the first logical line independent of visual wrapping; specify empty/non-text fallbacks before implementation.
 
 Markdown, plain text, outlines, previews, and search text are projections or import/export forms. Agents must not replace rich documents with a lossy Markdown round trip when editing a small region. Unknown rich objects remain preserved and discoverable through a readable description and stable reference.
 
@@ -28,7 +28,7 @@ Confirmed: notes created in a notebook belong to the notebook owner. Record the 
 | Permission manifest     | Notebook or note visibility and invited user/individual-agent read/edit entries; explicit note preferences override notebook defaults                                |
 | Agent identity          | Individually addressable agent member, distinct from its display name or provider label                                                                              |
 | Membership/access grant | Which user or individual agent can access which notebook/note and with what rights                                                                                   |
-| Note                    | Stable ID, single notebook ID, owner/access scope, creator attribution, title, current accepted revision, lifecycle state                                            |
+| Note                    | Stable ID, single notebook ID, owner/access scope, creator attribution, derived first-line title, current accepted revision, lifecycle state                         |
 | Revision                | Immutable ID, note ID, parent/base reference, schema version, authenticated actor, change provenance, device edit time, server receipt time, reconstructable content |
 | Edit operation          | Stable request ID, expected revision/target versions, operation payload, result receipt                                                                              |
 | Claim                   | Note/block targets, authenticated holder, generation, server expiry, lease status                                                                                    |
@@ -106,7 +106,7 @@ Example: online revisions `A -> B`; a device edits B offline to produce C. On re
 
 The branch submission has a stable idempotency key. Comparing the base, accepting the branch, or creating its conflict copy must have an atomic, retry-safe result. Repeated reconnect attempts produce one recovered copy, not a new note each time.
 
-Proposed default: the conflict copy is private to the submitting user, clearly named and linked to its origin. It is not automatically published or shared. User resolution produces a new revision and may archive the extra copy without losing its history.
+Proposed default: the conflict copy is private to the submitting user, clearly named and linked to its origin. It is not automatically published or shared. User resolution produces a new revision. A recovered copy can remain in a user-chosen notebook, including one used for archiving; there is no separate archive state.
 
 If the original was deleted or access revoked, do not resurrect it or bypass authorization. Preserve recoverable local work and expose a deliberate recovery/export path; whether it may be saved as a new private server note is Q11/Q13. A missing retained base produces an explicit recovery/conflict state, never an unsafe overwrite.
 

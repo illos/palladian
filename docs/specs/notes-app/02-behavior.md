@@ -39,6 +39,8 @@ Typing into an existing cached note before live readiness is not required for th
 
 ## Editor
 
+Confirmed: the first line of a note is automatically its title; there is no independent editable title field. Editing that line updates the displayed title. Proposed: derive the title from the first logical line, independent of viewport wrapping, and keep list/search/cache projections aligned with the note revision. Empty or non-text first-line display rules remain to be specified.
+
 Confirmed experience: continuous formatted writing, with specialized embedded objects. Internal stable IDs must not split ordinary paragraphs into isolated text boxes.
 
 Proposed initial formats: paragraphs, headings, bold/italic/strikethrough, links, ordered/unordered lists, checklists, quotes, code, images, and file attachments. Confirmed: editable tables are outside v1, with no later release assigned. Advanced embed scope remains Q05. No formula, diagram, board, or Deck subsystem is automatically inherited from Deltos.
@@ -66,13 +68,13 @@ Confirmed: a notebook is a library of notes, private by default. Notebooks form 
 
 Collections are separate saved queries that display notes matching criteria such as search text, title, date, and location. Users can create collections, and every user starts with one default collection, **All notes**, including both notes they own and notes shared with them. Matching is dynamic: edits to a note or its relevant metadata can change which collections display it. A note can appear in multiple collections without being copied or moved. Collections cannot be shared or published to other users. They are available to MCP agents in the associated user context and have no independent permission controls. Results, counts, and previews respect the requesting user or agent's notebook permissions and any note-level overrides; matching a query never grants additional access.
 
-Proposed: cache collection definitions and evaluate supported queries against cached metadata/text immediately; make any partial/offline result scope clear. Server results refresh independently of initial display. Query fields/operators, date meanings/timezones, source and consent for location metadata, and archive/trash inclusion in All notes and other collections remain Q05. A location filter does not itself authorize automatic device-location collection.
+Proposed: cache collection definitions and evaluate supported queries against cached metadata/text immediately; make any partial/offline result scope clear. Server results refresh independently of initial display. Query fields/operators, date meanings/timezones, source and consent for location metadata, and Trash inclusion in All notes and other collections remain Q05. A location filter does not itself authorize automatic device-location collection.
 
 Confirmed: Trash retention is a user setting, allowing the user to choose whether deleted notes remain until manually emptied or are permanently deleted after a retention period. The default is automatic permanent deletion after 30 days in Trash. Other available periods remain Q11. Confirmed: editors may move shared notes to Trash and restore them; only the note owner may manually delete them permanently. Automatic deletion still follows the configured retention policy. The note owner's Trash retention setting governs shared notes, regardless of which collaborator moves them to Trash.
 
 Confirmed: no tags in v1. Note lists default to most recently edited first; other sorting options come later. This applies to notebook lists of notes and collection results. The exact edit timestamp/tie-breaking semantics remain an engineering contract to specify.
 
-Proposed supporting features: pinned notes, archive, and text search. Notebook ownership transfer and title placement remain Q05/Q06.
+Confirmed: no pinning or separate archive feature in v1. Users can move notes between notebooks. A user wanting an archive creates a normal notebook and moves notes there; it has ordinary notebook permissions and does not automatically hide its notes from All notes. Move authorization, destination-permission behavior, and cross-owner moves remain Q06. Text search is part of the notes flow.
 
 Cached title/preview search can respond immediately. Server full-text search provides authorized results across accepted content. If local search covers only cached content, the UI states that scope. Agent reads for editing resolve current authoritative content, not an old search excerpt.
 

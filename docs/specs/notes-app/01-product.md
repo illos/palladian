@@ -42,9 +42,9 @@ Proposed first usable release: private notes, basic organization/search, history
 
 Confirmed: notebooks form a flat list and never nest inside other notebooks. Folders may be considered later as a separate organizational feature; they are not in the first release. Each note belongs to one notebook at a time. Collections are a separate classifier: saved queries that display matching notes programmatically using criteria such as search text, title, date, and location. Every user starts with an **All notes** collection, which includes notes they own and notes shared with them, and can create additional collections. A note can match multiple collections while remaining in one notebook. Collection results do not transfer ownership or override note/notebook permissions.
 
-Confirmed for the first release: collections are personal to a user and cannot be shared or published to other users, but are visible to MCP agents operating in that user context. Collections have no separate permission controls. Notebook permissions and individual note overrides govern access to matching notes. Exact query operators/date fields, location metadata, and archive/trash inclusion in collections remain open under Q05.
+Confirmed for the first release: collections are personal to a user and cannot be shared or published to other users, but are visible to MCP agents operating in that user context. Collections have no separate permission controls. Notebook permissions and individual note overrides govern access to matching notes. Exact query operators/date fields, location metadata, and Trash inclusion in collections remain open under Q05.
 
-Confirmed v1 scope: no tags or editable tables. Note lists use most recently edited first; additional sorting options are deferred to a later release. Tables are deferred with no release assigned; tags have no committed future scope.
+Confirmed: the first line of the note automatically supplies its title. Confirmed v1 scope: no tags, editable tables, pinning, or separate archive feature. Users can move notes between notebooks and create an ordinary notebook for archiving; its name does not give it special lifecycle behavior. Note lists use most recently edited first; additional sorting options are deferred to a later release. Tables are deferred with no release assigned; tags have no committed future scope.
 
 ## Editor intent
 

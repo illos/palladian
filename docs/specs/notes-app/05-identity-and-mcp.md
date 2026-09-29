@@ -75,7 +75,7 @@ Proposed small, coherent model:
 - Content: readable text/Markdown with stable section/block targets; typed references for rich objects.
 - Revisions: explicit expected revision or target-version preconditions and compact committed receipts.
 
-Creation accepts substantial Markdown in one request and converts it into native content. Targeted edits preserve untouched rich objects. The agent does not need to synthesize ProseMirror JSON or binary collaboration updates for ordinary tasks.
+Creation accepts substantial Markdown in one request and converts it into native content. Title is derived from the first line; an agent renames a note by editing that line, not a separate title property. Targeted edits preserve untouched rich objects. The agent does not need to synthesize ProseMirror JSON or binary collaboration updates for ordinary tasks.
 
 ## Proposed tool surface
 
@@ -87,7 +87,7 @@ Names below are conceptual API names, not frozen wire schemas.
 | Collections    | Discover/read personal saved queries through MCP; proposed create/update operations; list authorized matches; no collection sharing/permissions API |
 | Search notes   | Ranked authorized excerpts, note IDs, matching section IDs, revision and pagination information                                                     |
 | Read note      | Outline, selected sections, or full readable content; clear truncation/pagination; current revision for editing                                     |
-| Create note    | Title, destination, Markdown/native supported content, optional metadata, stable request ID                                                         |
+| Create note    | Destination, Markdown/native supported content, optional metadata, stable request ID; title derives from the first content line                     |
 | Edit note      | Bounded atomic batch of append/insert/replace/move/delete-content/metadata operations with explicit preconditions                                   |
 | Attach file    | Upload/finalize/reference workflow; no whole-body rewrite; explicit size/type limits                                                                |
 | History        | List/read/compare require effective edit permission; restore also enforces write authorization                                                      |
