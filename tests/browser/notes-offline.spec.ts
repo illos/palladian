@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 /** Production preview; synthetic account cache is seeded through browser IDB, never a production fixture API. */
-test("production shell reloads cached notes with all network unavailable", async ({
+for (const librarySize of [1, 2000]) test(`production shell reloads ${librarySize} cached notes with all network unavailable`, async ({
   page,
   context,
 }, testInfo) => {
@@ -19,7 +19,7 @@ test("production shell reloads cached notes with all network unavailable", async
       });
   });
   expect(await page.evaluate(() => "__notesHarness" in window)).toBe(false);
-  await page.evaluate(async () => {
+  await page.evaluate(async (librarySize) => {
     const open = indexedDB.open("palladian-notes-foundation");
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       open.onsuccess = () => resolve(open.result);
@@ -59,6 +59,13 @@ test("production shell reloads cached notes with all network unavailable", async
         })),
       }),
     });
+    for (let index = 1; index < librarySize; index++) {
+      const extraId = "cached-" + index;
+      const title = "Cached note " + index;
+      const text = title + "\n" + "Small note text. ".repeat(200);
+      transaction.objectStore("summaries").put({ accountId, id: extraId, title, preview: "Small cached note", updatedAt: 1699999999999 - index, kind: "cached" });
+      transaction.objectStore("bodies").put({ accountId, id: extraId, text, document: JSON.stringify({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] }) });
+    }
     await new Promise<void>((resolve, reject) => {
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error);
@@ -69,7 +76,7 @@ test("production shell reloads cached notes with all network unavailable", async
       "palladian.notes.account-hint.v1",
       JSON.stringify({ accountId, signedOut: false }),
     );
-  });
+  }, librarySize);
   await context.setOffline(true);
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(
@@ -111,6 +118,7 @@ test("production shell reloads cached notes with all network unavailable", async
   console.log(
     JSON.stringify({
       evidence: "desktop-production-offline-probe",
+      librarySize,
       libraryMs: Number(libraryMs.toFixed(1)),
       noteMs: Number(noteMs.toFixed(1)),
       realIPhone: false,

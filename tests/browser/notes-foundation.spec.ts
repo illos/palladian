@@ -78,10 +78,6 @@ test("confirmed expiry retains cache; confirmed revocation clears it", async ({
 test("same-account retry preserves the draft and subsequent save feedback", async ({
   page,
 }, testInfo) => {
-  test.skip(
-    testInfo.project.name.includes("mobile"),
-    "Library retry control is hidden while the mobile note is open.",
-  );
   await seed(page);
   await page
     .getByRole("button", { name: "New note", exact: true })
@@ -92,7 +88,9 @@ test("same-account retry preserves the draft and subsequent save feedback", asyn
   await expect(
     page.getByText("Draft saved on this device — not saved to server"),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Retry connection" }).click();
+  if (testInfo.project.name.includes("mobile")) {
+    await page.evaluate(() => (window as unknown as { __notesHarness: { session: { retry(): void } } }).__notesHarness.session.retry());
+  } else await page.getByRole("button", { name: "Retry connection" }).click();
   await expect(editor).toContainText("Keep this draft");
   await editor.press("End");
   await editor.pressSequentially(" after retry");
@@ -280,6 +278,7 @@ test("continuous note supports a selection spanning paragraphs", async ({
   await seed(page);
   await page.getByRole("button", { name: /Welcome to your notes/ }).click();
   const editor = page.getByRole("textbox", { name: "Note content" });
+  await expect(editor).toHaveClass(/ProseMirror/);
   const selection = await editor.evaluate((element) => {
     const paragraphs = element.querySelectorAll("p");
     const first = paragraphs[0]?.firstChild;
@@ -447,14 +446,19 @@ test("logout recovery includes queued and quota-failed latest snapshots", async 
     };
     try { await store.writeDraft({ ...draft, text: "latest unsaved text", updatedAt: 2 }); } catch { /* expected */ }
     IDBObjectStore.prototype.put = put;
+    // Initial same-account authentication must not fence drafts typed while connecting.
+    const activation = await store.captureActivationFence();
+    await store.allowAccount("a", activation, () => true);
     const failed = await store.exportDrafts("a");
+    const reopened = await store.read("a", "n");
+    const listing = await store.list("a");
     await store.clearAccount("a");
     let blocked = false;
     try { await store.exportDrafts("a"); } catch { blocked = true; }
     store.close();
-    return { detectedImmediately, queued: queued[0]?.text, failed: failed[0]?.text, blocked };
+    return { detectedImmediately, queued: queued[0]?.text, failed: failed[0]?.text, reopened: reopened?.text, title: listing[0]?.title, blocked };
   });
-  expect(result).toEqual({ detectedImmediately: true, queued: "queued", failed: "latest unsaved text", blocked: true });
+  expect(result).toEqual({ detectedImmediately: true, queued: "queued", failed: "latest unsaved text", reopened: "latest unsaved text", title: "latest unsaved text", blocked: true });
 });
 
 test("logout export requires saved-file confirmation; cancel retains drafts", async ({ page }) => {

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import type { Plugin } from "vite";
 /** Only build-owned public assets enter the shell cache; never API/auth responses. */
 export function offlineShell(): Plugin {
@@ -9,6 +10,7 @@ export function offlineShell(): Plugin {
       const files = Object.keys(bundle).filter((file) => !file.endsWith(".map"));
       const assets = [...new Set(["/", "/index.html", "/manifest.webmanifest", ...files.map((file) => "/" + file)])];
       const digest = createHash("sha256");
+      digest.update(readFileSync(new URL("./public/manifest.webmanifest", import.meta.url)));
       for (const file of files.sort()) {
         const item = bundle[file];
         if (!item) throw new Error("Build asset missing");

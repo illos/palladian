@@ -34,9 +34,9 @@ Each document owns a different level of detail: 01 summarizes the product; 02 ow
 
 ## Current authorization and evidence
 
-This work is documentation only. No application behavior, backend schema, credentials, deployment, DNS, live notes, or Deltos files are changed. No runtime, real-service, browser, or iPhone behavior is accepted by this package. All acceptance cases remain pending.
+On 2026-09-29 the owner authorized a scoped notes foundation and technical proofs with sub-agents and independent Astra review of auth and sync. Evidence and remaining gates are recorded in [foundation implementation](../../reviews/notes-foundation-implementation.md) and [independent review](../../reviews/notes-foundation-astra-review.md). This does not authorize production deployment or establish complete v1 acceptance. Deltos, live data and the platform shelf remain untouched. Full acceptance cases remain pending unless explicitly evidenced in those reports.
 
-Implementation should begin with a separately assigned scope and resolved blocking decisions. Protected changes to authentication, authorization, collaborative persistence, agent scopes, and file access need independent review before acceptance. The old P0–P9 roadmap is not the execution plan for these documents.
+Further implementation should use a separately assigned scope and resolve its blocking technical gates. Protected changes to authentication, authorization, collaborative persistence, agent scopes, and file access need independent review before acceptance. The old P0–P9 roadmap is not the execution plan for these documents.
 
 ## Source context
 

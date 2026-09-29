@@ -61,6 +61,7 @@ export class NotesStore {
   private readonly channel: BroadcastChannel | null;
   private readonly draftQueues = new Map<string, Promise<void>>();
   private readonly recoveryDrafts = new Map<string, Draft>();
+  private readonly recoveryFences = new Map<string, Promise<CacheFence>>();
   constructor(name = "palladian-notes-foundation") {
     this.db = new NotesDatabase(name);
     this.channel =
@@ -110,12 +111,14 @@ export class NotesStore {
       .where("accountId")
       .equals(accountId)
       .toArray();
+    const visible = new Map(rows.map(row => [row.id, row]));
+    for (const draft of await this.accessibleRecovery(accountId, persisted?.epoch ?? 0)) visible.set(draft.id, { ...summary(draft), kind: "draft" });
     const after = await this.db.accounts.get(accountId);
     return this.epoch(accountId) === epoch &&
       !this.blocked.has(accountId) &&
       !after?.blocked &&
       (after?.epoch ?? 0) === (persisted?.epoch ?? 0)
-      ? rows.sort((a, b) => b.updatedAt - a.updatedAt)
+      ? [...visible.values()].sort((a, b) => b.updatedAt - a.updatedAt)
       : [];
   }
   async read(accountId: string, id: string): Promise<NoteBody | undefined> {
@@ -124,7 +127,8 @@ export class NotesStore {
     const persisted = await this.db.accounts.get(accountId);
     if (persisted?.blocked) return undefined;
     const draft = await this.db.drafts.get([accountId, id]);
-    const body = draft ?? (await this.db.bodies.get([accountId, id]));
+    const recovered = (await this.accessibleRecovery(accountId, persisted?.epoch ?? 0)).find(value => value.id === id);
+    const body = recovered ?? draft ?? (await this.db.bodies.get([accountId, id]));
     const after = await this.db.accounts.get(accountId);
     return this.epoch(accountId) === epoch &&
       !this.blocked.has(accountId) &&
@@ -140,6 +144,7 @@ export class NotesStore {
     const key = JSON.stringify([draft.accountId, draft.id]);
     // Keep the latest editor snapshot even when quota prevents a durable write.
     this.recoveryDrafts.set(key, { ...draft });
+    this.recoveryFences.set(key, fence);
     const previous = this.draftQueues.get(key) ?? Promise.resolve();
     const write = previous
       .catch(() => undefined)
@@ -163,6 +168,7 @@ export class NotesStore {
     // Observe fence rejection immediately even if an older write is queued.
     void fence.catch(() => undefined);
     this.draftQueues.set(key, write);
+    this.notify();
     void write
       .finally(() => {
         if (this.draftQueues.get(key) === write) this.draftQueues.delete(key);
@@ -255,11 +261,25 @@ export class NotesStore {
     await this.assertPersistent(accountId, fence.epoch);
     this.assertWritable(accountId, epoch);
     const latest = new Map(drafts.map(draft => [draft.id, draft]));
-    for (const draft of this.recoveryDrafts.values()) if (draft.accountId === accountId) latest.set(draft.id, { ...draft });
+    for (const draft of await this.accessibleRecovery(accountId, fence.epoch)) latest.set(draft.id, { ...draft });
+    await this.assertPersistent(accountId, fence.epoch);
+    this.assertWritable(accountId, epoch);
     return [...latest.values()];
   }
   private forgetRecovery(accountId: string) {
-    for (const [key, draft] of this.recoveryDrafts) if (draft.accountId === accountId) this.recoveryDrafts.delete(key);
+    for (const [key, draft] of this.recoveryDrafts) if (draft.accountId === accountId) {
+      this.recoveryDrafts.delete(key);
+      this.recoveryFences.delete(key);
+    }
+  }
+  private async accessibleRecovery(accountId: string, epoch: number): Promise<Draft[]> {
+    const drafts: Draft[] = [];
+    for (const [key, draft] of this.recoveryDrafts) {
+      if (draft.accountId !== accountId) continue;
+      const fence = await this.recoveryFences.get(key)?.catch(() => null);
+      if (fence?.epoch === epoch && !this.blocked.has(accountId) && this.recoveryDrafts.get(key) === draft) drafts.push({ ...draft });
+    }
+    return drafts;
   }
   invalidateAccount(accountId: string) {
     return this.clearAccount(accountId);
@@ -291,7 +311,7 @@ export class NotesStore {
           throw new Error("Session activation was invalidated.");
         await this.db.accounts.put({
           accountId,
-          epoch: (account?.epoch ?? 0) + 1,
+          epoch: (account?.epoch ?? 0) + (account?.blocked ? 1 : 0),
           blocked: false,
         });
       },

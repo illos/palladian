@@ -2,7 +2,7 @@
 
 ## Current notes-app specification work
 
-The owner explicitly authorized a new notes-app specification on 2026-09-26. Read `docs/specs/notes-app/README.md` and its linked documents for that product direction. Confirmed decisions, proposals, open owner questions, and technical gates are labeled separately. This authorization covers specification work, not implementation or deployment. The archived platform phases below remain historical; do not use them as the execution plan for the notes app. Deltos remains read-only reference. Preserve the platform shelf and its archive branch/tag.
+The owner explicitly authorized a new notes-app specification on 2026-09-26. Read `docs/specs/notes-app/README.md` and its linked documents for that product direction. Confirmed decisions, proposals, open owner questions, and technical gates are labeled separately. On 2026-09-29 the owner additionally authorized the notes foundation and technical proofs, using sub-agents and independent Astra review of authentication and sync. Launching cached notes before authentication and preserving session state across transport errors are the primary requirements. This covers the scoped foundation, not production deployment or acceptance of complete v1. See `docs/reviews/notes-foundation-implementation.md` and its independent review. The archived platform phases below remain historical; do not use them as the execution plan for the notes app. Deltos remains read-only reference. Preserve the platform shelf and its archive branch/tag.
 
 ## Historical app-hosting-platform instructions
 
