@@ -7,14 +7,27 @@ export function offlineShell(): Plugin {
     name: "notes-offline-shell",
     enforce: "post",
     generateBundle(_options, bundle) {
-      const files = Object.keys(bundle).filter((file) => !file.endsWith(".map"));
-      const assets = [...new Set(["/", "/index.html", "/manifest.webmanifest", ...files.map((file) => "/" + file)])];
+      const files = Object.keys(bundle).filter(
+        (file) => !file.endsWith(".map"),
+      );
+      const assets = [
+        ...new Set([
+          "/",
+          "/index.html",
+          "/manifest.webmanifest",
+          ...files.map((file) => "/" + file),
+        ]),
+      ];
       const digest = createHash("sha256");
-      digest.update(readFileSync(new URL("./public/manifest.webmanifest", import.meta.url)));
+      digest.update(
+        readFileSync(new URL("./public/manifest.webmanifest", import.meta.url)),
+      );
       for (const file of files.sort()) {
         const item = bundle[file];
         if (!item) throw new Error("Build asset missing");
-        digest.update(file).update(item.type === "chunk" ? item.code : item.source);
+        digest
+          .update(file)
+          .update(item.type === "chunk" ? item.code : item.source);
       }
       const version = digest.digest("hex").slice(0, 16);
       const source = `const NAME = ${JSON.stringify("palladian-notes-shell-" + version)};

@@ -189,13 +189,21 @@ export function App({
             type="search"
             placeholder="Search cached notes"
             value={query}
-            onChange={(event) => { setQuery(event.target.value); setRowLimit(60); }}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setRowLimit(60);
+            }}
           />
         </label>
-        <div className="note-list" aria-label="Cached notes" onScroll={(event) => {
-          const list = event.currentTarget;
-          if (list.scrollHeight - list.scrollTop - list.clientHeight < 200) setRowLimit(limit => Math.min(visibleRows.length, limit + 60));
-        }}>
+        <div
+          className="note-list"
+          aria-label="Cached notes"
+          onScroll={(event) => {
+            const list = event.currentTarget;
+            if (list.scrollHeight - list.scrollTop - list.clientHeight < 200)
+              setRowLimit((limit) => Math.min(visibleRows.length, limit + 60));
+          }}
+        >
           {visibleRows.slice(0, rowLimit).map((row) => (
             <button
               className={
@@ -211,7 +219,11 @@ export function App({
               {row.kind === "draft" && <small>Local draft</small>}
             </button>
           ))}
-          {rowLimit < visibleRows.length && <button onClick={() => setRowLimit(limit => limit + 60)}>Show more notes</button>}
+          {rowLimit < visibleRows.length && (
+            <button onClick={() => setRowLimit((limit) => limit + 60)}>
+              Show more notes
+            </button>
+          )}
           {!visibleRows.length && (
             <p className="empty-list">
               {permitted

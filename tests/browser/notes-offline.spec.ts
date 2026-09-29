@@ -1,135 +1,155 @@
 import { expect, test } from "@playwright/test";
 
 /** Production preview; synthetic account cache is seeded through browser IDB, never a production fixture API. */
-for (const librarySize of [1, 2000]) test(`production shell reloads ${librarySize} cached notes with all network unavailable`, async ({
-  page,
-  context,
-}, testInfo) => {
-  await page.goto("/");
-  await expect(page.getByRole("heading", { name: "All notes" })).toBeVisible();
-  await page.evaluate(async () => {
-    await navigator.serviceWorker.ready;
-    if (!navigator.serviceWorker.controller)
-      await new Promise<void>((resolve) => {
-        navigator.serviceWorker.addEventListener(
-          "controllerchange",
-          () => resolve(),
-          { once: true },
-        );
+for (const librarySize of [1, 2000])
+  test(`production shell reloads ${librarySize} cached notes with all network unavailable`, async ({
+    page,
+    context,
+  }, testInfo) => {
+    await page.goto("/");
+    await expect(
+      page.getByRole("heading", { name: "All notes" }),
+    ).toBeVisible();
+    await page.evaluate(async () => {
+      await navigator.serviceWorker.ready;
+      if (!navigator.serviceWorker.controller)
+        await new Promise<void>((resolve) => {
+          navigator.serviceWorker.addEventListener(
+            "controllerchange",
+            () => resolve(),
+            { once: true },
+          );
+        });
+    });
+    expect(await page.evaluate(() => "__notesHarness" in window)).toBe(false);
+    await page.evaluate(async (librarySize) => {
+      const open = indexedDB.open("palladian-notes-foundation");
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        open.onsuccess = () => resolve(open.result);
+        open.onerror = () => reject(open.error);
       });
-  });
-  expect(await page.evaluate(() => "__notesHarness" in window)).toBe(false);
-  await page.evaluate(async (librarySize) => {
-    const open = indexedDB.open("palladian-notes-foundation");
-    const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      open.onsuccess = () => resolve(open.result);
-      open.onerror = () => reject(open.error);
+      const accountId = "offline-proof-account";
+      const id = "offline-proof-note";
+      const lines = [
+        "Offline shell proof",
+        "Cached text appears without authentication or network.",
+        "Synthetic content for a browser-only test.",
+      ];
+      const transaction = db.transaction(
+        ["accounts", "summaries", "bodies"],
+        "readwrite",
+      );
+      transaction
+        .objectStore("accounts")
+        .put({ accountId, epoch: 1, blocked: false });
+      transaction.objectStore("summaries").put({
+        accountId,
+        id,
+        title: lines[0],
+        preview: lines[1],
+        updatedAt: 1700000000000,
+        kind: "cached",
+      });
+      transaction.objectStore("bodies").put({
+        accountId,
+        id,
+        text: lines.join("\n"),
+        document: JSON.stringify({
+          type: "doc",
+          content: lines.map((text) => ({
+            type: "paragraph",
+            content: [{ type: "text", text }],
+          })),
+        }),
+      });
+      for (let index = 1; index < librarySize; index++) {
+        const extraId = "cached-" + index;
+        const title = "Cached note " + index;
+        const text = title + "\n" + "Small note text. ".repeat(200);
+        transaction.objectStore("summaries").put({
+          accountId,
+          id: extraId,
+          title,
+          preview: "Small cached note",
+          updatedAt: 1699999999999 - index,
+          kind: "cached",
+        });
+        transaction.objectStore("bodies").put({
+          accountId,
+          id: extraId,
+          text,
+          document: JSON.stringify({
+            type: "doc",
+            content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+          }),
+        });
+      }
+      await new Promise<void>((resolve, reject) => {
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+      });
+      db.close();
+      localStorage.setItem(
+        "palladian.notes.account-hint.v1",
+        JSON.stringify({ accountId, signedOut: false }),
+      );
+    }, librarySize);
+    await context.setOffline(true);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(
+      page.getByRole("button", { name: /Offline shell proof/ }),
+    ).toBeVisible();
+    const libraryMs = await page.evaluate(() => performance.now());
+    await page.getByRole("button", { name: /Offline shell proof/ }).click();
+    await expect(
+      page.getByRole("textbox", { name: "Note content" }),
+    ).toContainText("Cached text appears without authentication or network.");
+    const noteMs = await page.evaluate(() => performance.now());
+    if (librarySize === 2000) {
+      await expect(page.locator(".note-row")).toHaveCount(60);
+      await page.getByRole("searchbox").fill("Cached note 1999");
+      await page.getByRole("button", { name: /Cached note 1999/ }).click();
+      await expect(
+        page.getByRole("textbox", { name: "Note content" }),
+      ).toContainText("Cached note 1999");
+    }
+    await expect(page.getByText("Cached copy — read only")).toBeVisible();
+    expect(
+      await page.evaluate(() => navigator.serviceWorker.controller !== null),
+    ).toBe(true);
+    const cachedRequests = await page.evaluate(async () => {
+      const result: string[] = [];
+      for (const name of await caches.keys()) {
+        if (!name.startsWith("palladian-notes-shell-")) continue;
+        for (const request of await (await caches.open(name)).keys())
+          result.push(new URL(request.url).pathname);
+      }
+      return result;
     });
-    const accountId = "offline-proof-account";
-    const id = "offline-proof-note";
-    const lines = [
-      "Offline shell proof",
-      "Cached text appears without authentication or network.",
-      "Synthetic content for a browser-only test.",
-    ];
-    const transaction = db.transaction(
-      ["accounts", "summaries", "bodies"],
-      "readwrite",
-    );
-    transaction
-      .objectStore("accounts")
-      .put({ accountId, epoch: 1, blocked: false });
-    transaction.objectStore("summaries").put({
-      accountId,
-      id,
-      title: lines[0],
-      preview: lines[1],
-      updatedAt: 1700000000000,
-      kind: "cached",
+    expect(cachedRequests.some((path) => path === "/index.html")).toBe(true);
+    expect(
+      cachedRequests.every(
+        (path) =>
+          path === "/" ||
+          path === "/index.html" ||
+          path === "/manifest.webmanifest" ||
+          path.startsWith("/assets/"),
+      ),
+    ).toBe(true);
+    testInfo.annotations.push({
+      type: "desktop-probe",
+      description: `Offline reload to visible library ${libraryMs.toFixed(1)}ms; cached note after navigation ${noteMs.toFixed(1)}ms from navigation start. Includes browser automation overhead; not an iPhone budget.`,
     });
-    transaction.objectStore("bodies").put({
-      accountId,
-      id,
-      text: lines.join("\n"),
-      document: JSON.stringify({
-        type: "doc",
-        content: lines.map((text) => ({
-          type: "paragraph",
-          content: [{ type: "text", text }],
-        })),
+    console.log(
+      JSON.stringify({
+        evidence: "desktop-production-offline-probe",
+        librarySize,
+        libraryMs: Number(libraryMs.toFixed(1)),
+        noteMs: Number(noteMs.toFixed(1)),
+        realIPhone: false,
+        actualAuthService: false,
       }),
-    });
-    for (let index = 1; index < librarySize; index++) {
-      const extraId = "cached-" + index;
-      const title = "Cached note " + index;
-      const text = title + "\n" + "Small note text. ".repeat(200);
-      transaction.objectStore("summaries").put({ accountId, id: extraId, title, preview: "Small cached note", updatedAt: 1699999999999 - index, kind: "cached" });
-      transaction.objectStore("bodies").put({ accountId, id: extraId, text, document: JSON.stringify({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] }) });
-    }
-    await new Promise<void>((resolve, reject) => {
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error);
-      transaction.onabort = () => reject(transaction.error);
-    });
-    db.close();
-    localStorage.setItem(
-      "palladian.notes.account-hint.v1",
-      JSON.stringify({ accountId, signedOut: false }),
     );
-  }, librarySize);
-  await context.setOffline(true);
-  await page.reload({ waitUntil: "domcontentloaded" });
-  await expect(
-    page.getByRole("button", { name: /Offline shell proof/ }),
-  ).toBeVisible();
-  const libraryMs = await page.evaluate(() => performance.now());
-  await page.getByRole("button", { name: /Offline shell proof/ }).click();
-  await expect(
-    page.getByRole("textbox", { name: "Note content" }),
-  ).toContainText("Cached text appears without authentication or network.");
-  const noteMs = await page.evaluate(() => performance.now());
-  if (librarySize === 2000) {
-    await expect(page.locator(".note-row")).toHaveCount(60);
-    await page.getByRole("searchbox").fill("Cached note 1999");
-    await page.getByRole("button", { name: /Cached note 1999/ }).click();
-    await expect(page.getByRole("textbox", { name: "Note content" })).toContainText("Cached note 1999");
-  }
-  await expect(page.getByText("Cached copy — read only")).toBeVisible();
-  expect(
-    await page.evaluate(() => navigator.serviceWorker.controller !== null),
-  ).toBe(true);
-  const cachedRequests = await page.evaluate(async () => {
-    const result: string[] = [];
-    for (const name of await caches.keys()) {
-      if (!name.startsWith("palladian-notes-shell-")) continue;
-      for (const request of await (await caches.open(name)).keys())
-        result.push(new URL(request.url).pathname);
-    }
-    return result;
+    await context.setOffline(false);
   });
-  expect(cachedRequests.some((path) => path === "/index.html")).toBe(true);
-  expect(
-    cachedRequests.every(
-      (path) =>
-        path === "/" ||
-        path === "/index.html" ||
-        path === "/manifest.webmanifest" ||
-        path.startsWith("/assets/"),
-    ),
-  ).toBe(true);
-  testInfo.annotations.push({
-    type: "desktop-probe",
-    description: `Offline reload to visible library ${libraryMs.toFixed(1)}ms; cached note after navigation ${noteMs.toFixed(1)}ms from navigation start. Includes browser automation overhead; not an iPhone budget.`,
-  });
-  console.log(
-    JSON.stringify({
-      evidence: "desktop-production-offline-probe",
-      librarySize,
-      libraryMs: Number(libraryMs.toFixed(1)),
-      noteMs: Number(noteMs.toFixed(1)),
-      realIPhone: false,
-      actualAuthService: false,
-    }),
-  );
-  await context.setOffline(false);
-});

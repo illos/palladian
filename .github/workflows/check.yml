@@ -21,4 +21,8 @@ jobs:
       - run: pnpm --filter @palladian/auth-spike typecheck
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:browser
+      - run: pnpm --filter @palladian/notes typecheck
+      - run: pnpm --filter @palladian/notes test
+      - run: pnpm --filter @palladian/notes test:browser --project notes-chromium --project notes-mobile-chromium
+      - run: pnpm --filter @palladian/notes test:offline
       - run: pnpm audit --audit-level=moderate

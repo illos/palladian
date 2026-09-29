@@ -1,2 +1,5 @@
 convex/_generated/
 apps/web/dist/
+apps/notes/dist/
+**/test-results/
+**/playwright-report/

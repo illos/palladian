@@ -111,8 +111,12 @@ export class NotesStore {
       .where("accountId")
       .equals(accountId)
       .toArray();
-    const visible = new Map(rows.map(row => [row.id, row]));
-    for (const draft of await this.accessibleRecovery(accountId, persisted?.epoch ?? 0)) visible.set(draft.id, { ...summary(draft), kind: "draft" });
+    const visible = new Map(rows.map((row) => [row.id, row]));
+    for (const draft of await this.accessibleRecovery(
+      accountId,
+      persisted?.epoch ?? 0,
+    ))
+      visible.set(draft.id, { ...summary(draft), kind: "draft" });
     const after = await this.db.accounts.get(accountId);
     return this.epoch(accountId) === epoch &&
       !this.blocked.has(accountId) &&
@@ -127,8 +131,11 @@ export class NotesStore {
     const persisted = await this.db.accounts.get(accountId);
     if (persisted?.blocked) return undefined;
     const draft = await this.db.drafts.get([accountId, id]);
-    const recovered = (await this.accessibleRecovery(accountId, persisted?.epoch ?? 0)).find(value => value.id === id);
-    const body = recovered ?? draft ?? (await this.db.bodies.get([accountId, id]));
+    const recovered = (
+      await this.accessibleRecovery(accountId, persisted?.epoch ?? 0)
+    ).find((value) => value.id === id);
+    const body =
+      recovered ?? draft ?? (await this.db.bodies.get([accountId, id]));
     const after = await this.db.accounts.get(accountId);
     return this.epoch(accountId) === epoch &&
       !this.blocked.has(accountId) &&
@@ -139,7 +146,8 @@ export class NotesStore {
   }
   writeDraft(draft: Draft): Promise<void> {
     const epoch = this.epoch(draft.accountId);
-    if (this.blocked.has(draft.accountId)) return Promise.reject(new Error("Account access changed"));
+    if (this.blocked.has(draft.accountId))
+      return Promise.reject(new Error("Account access changed"));
     const fence = this.captureFence(draft.accountId);
     const key = JSON.stringify([draft.accountId, draft.id]);
     // Keep the latest editor snapshot even when quota prevents a durable write.
@@ -248,7 +256,12 @@ export class NotesStore {
     this.notify();
   }
   async hasDrafts(accountId: string) {
-    if ([...this.recoveryDrafts.values()].some(draft => draft.accountId === accountId)) return true;
+    if (
+      [...this.recoveryDrafts.values()].some(
+        (draft) => draft.accountId === accountId,
+      )
+    )
+      return true;
     return (
       (await this.db.drafts.where("accountId").equals(accountId).count()) > 0
     );
@@ -257,27 +270,40 @@ export class NotesStore {
     const epoch = this.epoch(accountId);
     const fence = await this.captureFence(accountId);
     await Promise.allSettled([...this.draftQueues.values()]);
-    const drafts = await this.db.drafts.where("accountId").equals(accountId).toArray();
+    const drafts = await this.db.drafts
+      .where("accountId")
+      .equals(accountId)
+      .toArray();
     await this.assertPersistent(accountId, fence.epoch);
     this.assertWritable(accountId, epoch);
-    const latest = new Map(drafts.map(draft => [draft.id, draft]));
-    for (const draft of await this.accessibleRecovery(accountId, fence.epoch)) latest.set(draft.id, { ...draft });
+    const latest = new Map(drafts.map((draft) => [draft.id, draft]));
+    for (const draft of await this.accessibleRecovery(accountId, fence.epoch))
+      latest.set(draft.id, { ...draft });
     await this.assertPersistent(accountId, fence.epoch);
     this.assertWritable(accountId, epoch);
     return [...latest.values()];
   }
   private forgetRecovery(accountId: string) {
-    for (const [key, draft] of this.recoveryDrafts) if (draft.accountId === accountId) {
-      this.recoveryDrafts.delete(key);
-      this.recoveryFences.delete(key);
-    }
+    for (const [key, draft] of this.recoveryDrafts)
+      if (draft.accountId === accountId) {
+        this.recoveryDrafts.delete(key);
+        this.recoveryFences.delete(key);
+      }
   }
-  private async accessibleRecovery(accountId: string, epoch: number): Promise<Draft[]> {
+  private async accessibleRecovery(
+    accountId: string,
+    epoch: number,
+  ): Promise<Draft[]> {
     const drafts: Draft[] = [];
     for (const [key, draft] of this.recoveryDrafts) {
       if (draft.accountId !== accountId) continue;
       const fence = await this.recoveryFences.get(key)?.catch(() => null);
-      if (fence?.epoch === epoch && !this.blocked.has(accountId) && this.recoveryDrafts.get(key) === draft) drafts.push({ ...draft });
+      if (
+        fence?.epoch === epoch &&
+        !this.blocked.has(accountId) &&
+        this.recoveryDrafts.get(key) === draft
+      )
+        drafts.push({ ...draft });
     }
     return drafts;
   }

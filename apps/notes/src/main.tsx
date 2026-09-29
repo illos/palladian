@@ -129,5 +129,9 @@ if (!fixture && typeof siteURL === "string" && siteURL) {
 }
 
 if (!__NOTES_DEV__ && "serviceWorker" in navigator) {
-  void navigator.serviceWorker.register("/sw.js").catch(() => console.error("Offline shell unavailable; current notes remain usable."));
+  void navigator.serviceWorker
+    .register("/sw.js")
+    .catch(() =>
+      console.error("Offline shell unavailable; current notes remain usable."),
+    );
 }
