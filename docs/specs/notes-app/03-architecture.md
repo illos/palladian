@@ -63,7 +63,7 @@ Never label journal data as a server-confirmed snapshot. Include note ID, base r
 - Isolate editor updates from agent chat, notifications, sidebar state, and full-library rerenders.
 - Perform expensive indexing/preview work incrementally and off the interaction path; use workers when justified.
 - Reserve embed space; background refresh must not replace typed content or unexpectedly reset selection.
-- Establish auth/connection alongside local display. Expected library scale is hundreds to low thousands of notes per user; preserve the same immediate-display behavior across that range. Exact benchmark datasets, note sizes, and numeric budgets remain Q10.
+- Establish auth/connection alongside local display. Expected library scale is hundreds to low thousands of notes per user; preserve the same immediate-display behavior across that range. Typical notes contain a couple of pages of text; test longer notes for usable opening, scrolling, selection, and editing before accepting the editor/collaboration stack. Exact benchmark datasets, long-note lengths, and numeric budgets remain Q10.
 
 ## Shared backend responsibilities
 
