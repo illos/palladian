@@ -39,6 +39,12 @@ Confirmed: notes created in a notebook belong to the notebook owner. Record the 
 
 Local timestamps are caller-supplied provenance, not authorization evidence. Actor identity is derived from the authenticated principal, never trusted from an arbitrary user ID argument.
 
+## Attachment identity and history
+
+Confirmed: uploaded images, PDFs, and other files are separate, unversioned objects. A note revision stores an object reference, not a copy of its bytes. If the same image remains attached through 400 note revisions, all 400 revisions refer to the same uploaded object; creating a revision does not upload or store the image again. Note restoration reuses that object identity, including restoring it from Trash when still available.
+
+Notes have version history; uploaded objects have only deletion and retention governed by Trash. An object's historical references do not create file versions or extend its Trash retention. This does not specify deduplication across separately submitted uploads. Multi-note reference handling and any future file-replacement operation remain to be defined.
+
 ## Online editing
 
 Proposed: use a maintained centralized ProseMirror collaboration protocol to submit steps/transactions, order accepted changes, and rebase concurrent work. Do not implement whole-body last-writer-wins saving for live notes. Ordinary typed characters appear optimistically while connected; server acceptance determines durable shared save status.

@@ -52,6 +52,7 @@ The implementation sequence here is proposed. It does not resume the historical 
 | D36 | Images, PDFs and other attachments are separate objects; deleting an object moves it to Trash under the same configured retention policy                     | Owner clarification, 2026-09-29                                   |
 | D37 | Restoring a note version referencing a still-trashed object restores that object to active use; historical references do not override object Trash retention | Owner clarification, 2026-09-29                                   |
 | D38 | Moving a public note to Trash immediately makes its public link unavailable                                                                                  | Owner confirmation, 2026-09-29                                    |
+| D39 | Upload an attachment object once and reference it across note revisions; uploaded objects have no version history, only deletion and Trash retention         | Owner clarification and 400-revision example, 2026-09-29          |
 
 ## Open owner decisions, in discussion order
 
@@ -126,6 +127,8 @@ Identity acceptance must demonstrate that accepting an emailed invitation verifi
 Trash lifecycle acceptance must verify the 30-day default from the time a note enters Trash, the selected retention setting, restoration before permanent deletion, and that automatic cleanup does not purge notes under a manual-only policy. Verify editor trash/restore succeeds, manual permanent deletion is allowed only for the note owner, and read-only/public callers cannot mutate Trash state. Cover both UI and MCP authorization, including an editor agent denied permanent deletion. Automatic retention cleanup remains separate from manual permissions. Verify shared notes follow the note owner's retention setting even when the collaborator who trashes them has a different setting, including an owner with manual-only retention. Cleanup scheduling and policy-change behavior depend on the remaining Q11 decisions; testing is pending.
 
 History retention acceptance must show that old versions remain accessible to authorized editors as a note ages, enters Trash, and is restored. Any collaboration-step compaction must preserve reconstructable history. History retention preserves text/structure and object references; it does not override separate object Trash expiry or require downloading historical versions into the ordinary text cache. These checks remain pending; permanent-deletion cleanup details remain Q11.
+
+A15 must also exercise the owner's example: upload one image and create 400 note revisions retaining its reference. Verify all revisions refer to the same object and that revision creation/restoration does not duplicate uploaded bytes or create an object-version history.
 
 A15 must distinguish retained note history from retained object bytes: test object deletion, the configured retention policy, note-version restore before object purge, and expiry despite a historical reference. Do not accept a test that silently retains all object bytes indefinitely. Restore behavior after purge, multi-note references, and note-deletion cascades need the remaining Q11 decisions before acceptance. All tests remain pending.
 
