@@ -68,7 +68,9 @@ Collections are separate saved queries that display notes matching criteria such
 
 Proposed: cache collection definitions and evaluate supported queries against cached metadata/text immediately; make any partial/offline result scope clear. Server results refresh independently of initial display. Query fields/operators, date meanings/timezones, source and consent for location metadata, and archive/trash inclusion in All notes and other collections remain Q05. A location filter does not itself authorize automatic device-location collection.
 
-Proposed supporting features: pinned notes, archive/trash, and text search. Notebook ownership transfer, tags, title placement, and default sorting remain Q05/Q06.
+Confirmed: Trash retention is a user setting, allowing the user to choose whether deleted notes remain until manually emptied or are permanently deleted after a retention period. The default is automatic permanent deletion after 30 days in Trash. Other available periods remain Q11. For shared notes, which user controls retention and who may permanently delete remain to be specified.
+
+Proposed supporting features: pinned notes, archive, and text search. Notebook ownership transfer, tags, title placement, and default sorting remain Q05/Q06.
 
 Cached title/preview search can respond immediately. Server full-text search provides authorized results across accepted content. If local search covers only cached content, the UI states that scope. Agent reads for editing resolve current authoritative content, not an old search excerpt.
 

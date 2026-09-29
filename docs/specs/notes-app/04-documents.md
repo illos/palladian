@@ -75,7 +75,7 @@ Proposed:
 - Restore creates a new current revision referring to the restored source; it does not erase subsequent history.
 - A user can compare a version with its predecessor or the common base of two branches.
 - Attachments needed by retained revisions remain recoverable. Blob garbage collection must respect history and publication references.
-- Permanent deletion, retention, and compaction are Q11. Long-term history and temporary collaboration steps can have different retention policies, but discarded steps must not silently destroy recovery options.
+- Confirmed: Trash retention is user-configurable, defaulting to automatic permanent deletion after 30 days in Trash. Other available periods, shared-note policy ownership, permanent-deletion permissions, history/file retention, and compaction remain Q11. Long-term history and temporary collaboration steps can have different retention policies, but discarded steps must not silently destroy recovery options.
 
 ## Later offline editing
 
