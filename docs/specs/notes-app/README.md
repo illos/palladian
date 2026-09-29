@@ -22,6 +22,8 @@ Palladian is the working name in this conversation; final branding remains open.
 - **Open:** missing product information or a choice whose alternatives change the implementation materially.
 - **Gate:** something engineering must demonstrate, rather than ask the owner to guess.
 
+Discussion cadence: the owner prefers remaining questions in batches of three (updated 2026-09-29).
+
 Sections marked proposed describe intended contracts if adopted. They are not claims that an existing library provides the behavior or that the feature has been built. Questions use stable `Qxx` identifiers in document 06. Acceptance cases use `Axx` identifiers there.
 
 The owner initially preferred full offline operation, then explicitly prioritized reliable online use and immediate cached viewing. Offline editing is now a later side branch, with revision-based conflict copies instead of mandatory automatic merging. This later direction supersedes earlier discussion of a full local-first synchronization foundation.

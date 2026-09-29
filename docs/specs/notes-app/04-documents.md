@@ -66,16 +66,18 @@ G02 must determine whether the collaboration component exposes sufficient valida
 
 Confirmed: history is foundational. Record device edit time for edits made on a device, separately from server receipt/acceptance time. Preserve the revision from which the edit was made. For server-hosted agents, the editing process records its edit time and the server independently records acceptance.
 
+Confirmed: retain edit history for the lifetime of the note, including while it is in Trash. Do not age out historical versions while the note exists. This is server-side history retention, not a requirement to cache every version on each device.
+
 Confirmed: viewing history requires effective edit permission. Invited read-only members and public visitors see only current content; users and agents follow the same rule. Revision lists, past content, and comparisons must enforce this permission.
 
 Proposed:
 
-- Keep reconstructable history through snapshots plus changes or another verified bounded representation. Visible history groups related typing into useful checkpoints rather than exposing every keystroke as a separate item.
+- Keep reconstructable history through snapshots plus changes or another verified storage-efficient representation. Visible history groups related typing into useful checkpoints rather than exposing every keystroke as a separate item.
 - Keep authorship and human/agent provenance. Current read access does not grant historical access; history requires effective edit permission as confirmed above.
 - Restore creates a new current revision referring to the restored source; it does not erase subsequent history.
 - A user can compare a version with its predecessor or the common base of two branches.
 - Attachments needed by retained revisions remain recoverable. Blob garbage collection must respect history and publication references.
-- Confirmed: Trash retention is user-configurable, defaulting to automatic permanent deletion after 30 days in Trash. Editors may trash and restore shared notes; only the note owner may manually delete them permanently. Automatic cleanup follows the note owner's retention setting, regardless of which collaborator trashes the note. Other available periods, history/file retention, and compaction remain Q11. Long-term history and temporary collaboration steps can have different retention policies, but discarded steps must not silently destroy recovery options.
+- Confirmed: Trash retention is user-configurable, defaulting to automatic permanent deletion after 30 days in Trash. Editors may trash and restore shared notes; only the note owner may manually delete them permanently. Automatic cleanup follows the note owner's retention setting, regardless of which collaborator trashes the note. Other Trash periods, file retention, and permanent-deletion cleanup remain Q11. Temporary collaboration steps may be compacted only if retained history remains reconstructable and recovery options are preserved; compaction cannot expire note history.
 
 ## Later offline editing
 
