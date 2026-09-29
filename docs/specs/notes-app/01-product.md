@@ -44,6 +44,8 @@ Confirmed: notebooks form a flat list and never nest inside other notebooks. Fol
 
 Confirmed for the first release: collections are personal to a user and cannot be shared or published to other users, but are visible to MCP agents operating in that user context. Collections have no separate permission controls. Notebook permissions and individual note overrides govern access to matching notes. Exact query operators/date fields, location metadata, and archive/trash inclusion in collections remain open under Q05.
 
+Confirmed v1 scope: no tags or editable tables. Note lists use most recently edited first; additional sorting options are deferred to a later release. Tables are deferred with no release assigned; tags have no committed future scope.
+
 ## Editor intent
 
 Internal block identities must not dictate the visible interaction model. Ordinary writing is one continuous surface: select across paragraphs, copy mixed content, and move the cursor naturally. Rich embedded objects have their own controls when needed.

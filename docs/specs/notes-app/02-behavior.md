@@ -41,7 +41,7 @@ Typing into an existing cached note before live readiness is not required for th
 
 Confirmed experience: continuous formatted writing, with specialized embedded objects. Internal stable IDs must not split ordinary paragraphs into isolated text boxes.
 
-Proposed initial formats: paragraphs, headings, bold/italic/strikethrough, links, ordered/unordered lists, checklists, quotes, code, images, and file attachments. Tables and advanced embeds require Q05. No formula, diagram, board, or Deck subsystem is automatically inherited from Deltos.
+Proposed initial formats: paragraphs, headings, bold/italic/strikethrough, links, ordered/unordered lists, checklists, quotes, code, images, and file attachments. Confirmed: editable tables are outside v1, with no later release assigned. Advanced embed scope remains Q05. No formula, diagram, board, or Deck subsystem is automatically inherited from Deltos.
 
 Acceptance includes cross-paragraph selection on an actual iPhone, mixed-content copying/pasting, selection across formatting, predictable Enter/Backspace, undo/redo, composition input, and moving around embeds without trapping the cursor.
 
@@ -70,7 +70,9 @@ Proposed: cache collection definitions and evaluate supported queries against ca
 
 Confirmed: Trash retention is a user setting, allowing the user to choose whether deleted notes remain until manually emptied or are permanently deleted after a retention period. The default is automatic permanent deletion after 30 days in Trash. Other available periods remain Q11. Confirmed: editors may move shared notes to Trash and restore them; only the note owner may manually delete them permanently. Automatic deletion still follows the configured retention policy. The note owner's Trash retention setting governs shared notes, regardless of which collaborator moves them to Trash.
 
-Proposed supporting features: pinned notes, archive, and text search. Notebook ownership transfer, tags, title placement, and default sorting remain Q05/Q06.
+Confirmed: no tags in v1. Note lists default to most recently edited first; other sorting options come later. This applies to notebook lists of notes and collection results. The exact edit timestamp/tie-breaking semantics remain an engineering contract to specify.
+
+Proposed supporting features: pinned notes, archive, and text search. Notebook ownership transfer and title placement remain Q05/Q06.
 
 Cached title/preview search can respond immediately. Server full-text search provides authorized results across accepted content. If local search covers only cached content, the UI states that scope. Agent reads for editing resolve current authoritative content, not an old search excerpt.
 
