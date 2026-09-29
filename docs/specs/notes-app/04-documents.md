@@ -35,7 +35,7 @@ Proposed: validate ownership and destination access at commit time, and update m
 | Edit operation          | Stable request ID, expected revision/target versions, operation payload, result receipt                                                                              |
 | Claim                   | Note/block targets, authenticated holder, generation, server expiry, lease status                                                                                    |
 | Attachment object       | Stable ID, owner/access context, private storage key, media metadata, upload state, active/trashed lifecycle, trashed-at time, note/revision references              |
-| Public link             | Note/notebook URL resolving latest saved content under effective permissions; no fixed publication revision                                                          |
+| Public link             | Current replaceable note/notebook public URL; latest saved content under effective permissions; invalidated URLs stay invalid                                        |
 | Offline draft           | Local ID, original note/base revision, ordered local versions, device timestamps, synchronization status                                                             |
 | Conflict link           | Original note/revision, incoming branch, recovered copy, resolution provenance                                                                                       |
 
@@ -54,6 +54,12 @@ Confirmed object lifecycle rules:
 - Restoring a note/version that uses a still-trashed object restores that same object to active use. If the object was already permanently deleted, preserve its reference position and show an “attachment permanently deleted” placeholder.
 
 Proposed implementation: serialize or otherwise coordinate reference changes, note lifecycle changes, object restore, and purge decisions so concurrent actions cannot purge an object still in active use. Retry-safe operations must not reset Trash deadlines accidentally. Prove this behavior in G02/G05; no implementation is accepted yet.
+
+## Public link lifecycle
+
+Confirmed: public pages are indexable by default. A note's current public link is unavailable while the note is in Trash and becomes available again on restore if effective permissions still allow public access. Only the owner can replace a public URL; replacement invalidates the old URL. Restoration does not revive invalidated URLs.
+
+Proposed representation: separate stable note/notebook identity from the current public-link identifier or generation. Link replacement does not recreate the note or alter its history, attachments, or invited memberships. Public reads validate current link identity, effective visibility, and lifecycle state together. Do not redirect an invalidated URL to its replacement.
 
 ## Online editing
 

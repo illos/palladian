@@ -49,7 +49,7 @@ Confirmed: effective edit access permits moving a shared note to Trash and resto
 
 Only the owner can administer invitations, change member roles, or change public/private visibility. Enforce this in UI and MCP operations; an invited editor, human or agent, cannot escalate its own or another member's permissions. Agent authentication and any owner-authorized credential scope remain Q14; ordinary agent edit membership is insufficient for permission changes.
 
-Confirmed: trashed notes are unavailable through public links, including through public notebook listings. Public attachment access through a trashed note must not bypass that lifecycle check. Previously downloaded copies cannot be recalled by this server-side access change.
+Confirmed: trashed notes are unavailable through public links, including through public notebook listings. Public attachment access through a trashed note must not bypass that lifecycle check. Restoring a note makes its current public link available again only if effective visibility is public; previously invalidated URLs stay invalid. Public URL replacement requires owner authority in both UI and MCP; ordinary editor membership is insufficient. Previously downloaded copies cannot be recalled by this server-side access change.
 
 Confirmed: notebook moves require ownership, not ordinary edit membership, and v1 allows only notebooks with the same owner. Preserve explicit note overrides; otherwise apply destination notebook permissions. Warn before a move that removes collaborators' effective access. Enforce the same rules through UI and MCP. Proposed MCP contract: expose access impact before an affected move commits, with a versioned precondition so the warning matches the applied change; detailed owner credential delegation remains Q14.
 
@@ -93,7 +93,7 @@ Names below are conceptual API names, not frozen wire schemas.
 | Edit note      | Bounded atomic batch of append/insert/replace/move/delete-content/metadata operations with explicit preconditions                                   |
 | Attach file    | Upload/finalize/reference workflow; no whole-body rewrite; explicit size/type limits                                                                |
 | History        | List/read/compare require effective edit permission; restore also enforces write authorization                                                      |
-| Share/publish  | Owner-only visibility operation, independent of ordinary save                                                                                       |
+| Share/publish  | Owner-only visibility and public-URL replacement operations, independent of ordinary save                                                           |
 | Claim/release  | Optional online section checkout, expiry, and takeover semantics                                                                                    |
 
 Prefer stable target IDs; never assume a heading label is unique. Destructive operations state their effects clearly. A tool that saves a private note does not implicitly publish it. Once a note is public, accepted edits automatically update the content at its public URL; no separate publish call is needed. Share/publish changes visibility rather than freezing a revision. Unknown or unsupported blocks remain preserved and readable by description.
