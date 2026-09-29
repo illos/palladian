@@ -15,5 +15,8 @@
     "prosemirror-model": "1.25.12",
     "prosemirror-state": "1.4.4",
     "prosemirror-transform": "1.12.2"
+  },
+  "devDependencies": {
+    "@types/node": "26.4.0"
   }
 }

@@ -52,11 +52,23 @@ export const identity = query({
   handler: async (ctx) => (await authComponent.getAuthUser(ctx))._id,
 });
 export const fixture = internalMutation({
-  args: { email: v.string(), password: v.string() },
+  args: {
+    email: v.string(),
+    password: v.string(),
+    agent: v.optional(v.boolean()),
+  },
   returns: v.string(),
   handler: async (ctx, args) => {
     const result = await createAuth(ctx, true).api.signUpEmail({
-      body: { ...args, name: "Disposable proof user" },
+      body: {
+        email: args.email,
+        password: args.password,
+        name: "Disposable proof user",
+      },
+    });
+    await ctx.db.insert("principals", {
+      userId: result.user.id,
+      kind: args.agent ? "agent" : "human",
     });
     return result.user.id;
   },
