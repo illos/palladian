@@ -74,7 +74,7 @@ Confirmed: the backend may process note content for search and authorized agent 
 
 ## What this draft does not assume
 
-Notebooks and note-level permission overrides are confirmed. Further organization details, local-cache privacy policies, file quotas, remaining retention details, and production domain are unresolved. Ownership transfers are deferred beyond v1. The old single-owner auth plan cannot decide those for the new app.
+Notebooks and note-level permission overrides are confirmed. Further organization details, local-cache privacy policies, file quotas, and remaining retention details are unresolved. Initial hosting uses the default Cloudflare Worker domain; pricing decisions remain with the owner. Ownership transfers are deferred beyond v1. The old single-owner auth plan cannot decide those for the new app.
 
 ## Supported clients
 

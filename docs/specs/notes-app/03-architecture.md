@@ -98,3 +98,7 @@ If a gate fails, record the concrete limitation and compare alternatives. Do not
 - [Browser storage](https://developer.mozilla.org/en-US/docs/Web/API/Storage_API/Storage_quotas_and_eviction_criteria): offline availability requires capacity and persistence handling.
 
 - [Cloudflare Email Service](https://developers.cloudflare.com/email-service/) and [sending setup](https://developers.cloudflare.com/email-service/get-started/send-emails/), checked 2026-09-28: outbound transactional sending supports password resets through Workers bindings, REST, or SMTP. Docs label Email Sending beta on Workers Paid; domain setup requires Cloudflare DNS and sender-domain onboarding. G03 must verify the selected account/domain and actual recipient delivery before acceptance. Provider selection does not authorize plan purchases or DNS changes.
+
+## Initial hosting and pricing
+
+Confirmed: use the default Cloudflare Worker domain (`workers.dev`) for the initial app; no custom app domain is required. Pricing decisions remain with the owner, rather than requiring a monthly budget to finish this specification. This does not select paid plans or authorize purchases. The email sender-domain/account prerequisites remain separate from the app URL and still require G03 verification.
