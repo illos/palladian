@@ -70,10 +70,10 @@ Notebooks and note-level permission overrides are confirmed. Further organizatio
 
 ## Supported clients
 
-Confirmed: Safari as an installed PWA is the primary target, with Chrome and Firefox on desktop supported. The primary mobile acceptance environment is a real iPhone running the installed PWA. Native iOS remains a possible later direction. Exact device, OS/browser versions, library sizes, and performance budgets remain Q10.
+Confirmed: Safari as an installed PWA is the primary target, with Chrome and Firefox on desktop supported. The primary mobile acceptance environment is a real iPhone running the installed PWA. Native iOS remains a possible later direction. Exact device, OS/browser versions, benchmark fixtures, and performance budgets remain Q10.
 
 ## Success
 
 A returning user sees actual notes promptly on their phone. Ordinary typing stays responsive while the app reconnects or an agent works. Accepted saves are durable, pending edits are recoverable, and history makes mistakes reversible. An authenticated agent can save a normal-sized conversation in one write once its destination is known, then change a section without rewriting the whole note.
 
-Numeric performance budgets and the reference phone/library must be agreed and measured; see Q10 and A01–A04.
+Confirmed expected scale: hundreds to low thousands of notes per user. This is a performance workload target, not an account quota or hard note limit. Exact benchmark counts, individual note sizes, numeric performance budgets, and the reference phone remain to be agreed and measured; see Q10 and A01–A04.
