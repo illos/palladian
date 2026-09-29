@@ -187,6 +187,7 @@ export class SessionController {
             return;
           }
           this.fence();
+          const revocationGeneration = this.snapshot.generation;
           try {
             this.options.hints.signedOut(result.accountId);
           } catch {
@@ -196,12 +197,12 @@ export class SessionController {
           this.pendingCleanup = result.accountId;
           try {
             await this.options.clearAccount(result.accountId);
-            if (this.snapshot.status === "revoked") {
+            if (this.snapshot.generation === revocationGeneration && this.snapshot.status === "revoked") {
               this.pendingCleanup = null;
               this.options.hints.signedOut();
             }
           } catch {
-            if (this.snapshot.status === "revoked")
+            if (this.snapshot.generation === revocationGeneration && this.snapshot.status === "revoked")
               this.update({
                 error:
                   "Local cleanup failed. Cached content remains hidden; retry cleanup before using this device.",

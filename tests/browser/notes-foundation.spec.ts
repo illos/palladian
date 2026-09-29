@@ -428,3 +428,56 @@ test("rich recovery drafts keep formatting when the editor chunk is unavailable"
     ],
   });
 });
+
+test("logout recovery includes queued and quota-failed latest snapshots", async ({ page }) => {
+  await seed(page);
+  const result = await page.evaluate(async () => {
+    const modulePath = "/src/cache.ts";
+    const { createNotesStore } = await import(modulePath) as typeof import("../../apps/notes/src/cache");
+    const store = createNotesStore("logout-recovery-" + crypto.randomUUID());
+    const draft = { accountId: "a", id: "n", document: '{"type":"doc","content":[{"type":"paragraph"}]}', text: "queued", updatedAt: 1 };
+    const first = store.writeDraft(draft);
+    const detectedImmediately = await store.hasDrafts("a");
+    const queued = await store.exportDrafts("a");
+    await first;
+    const put = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (...args: Parameters<typeof put>) {
+      if (this.name === "drafts") throw new DOMException("Synthetic full disk", "QuotaExceededError");
+      return put.apply(this, args);
+    };
+    try { await store.writeDraft({ ...draft, text: "latest unsaved text", updatedAt: 2 }); } catch { /* expected */ }
+    IDBObjectStore.prototype.put = put;
+    const failed = await store.exportDrafts("a");
+    await store.clearAccount("a");
+    let blocked = false;
+    try { await store.exportDrafts("a"); } catch { blocked = true; }
+    store.close();
+    return { detectedImmediately, queued: queued[0]?.text, failed: failed[0]?.text, blocked };
+  });
+  expect(result).toEqual({ detectedImmediately: true, queued: "queued", failed: "latest unsaved text", blocked: true });
+});
+
+test("logout export requires saved-file confirmation; cancel retains drafts", async ({ page }) => {
+  await seed(page);
+  await page.getByRole("button", { name: "New note", exact: true }).first().click();
+  const editor = page.getByRole("textbox", { name: "Note content" });
+  await expect(editor).toHaveAttribute("contenteditable", "true");
+  await editor.fill("Logout recovery draft");
+  await expect(page.getByText("Draft saved on this device — not saved to server")).toBeVisible();
+  await page.evaluate(() => {
+    const harness = (window as unknown as { __notesHarness: { session: { logout(): Promise<boolean> } } }).__notesHarness;
+    void harness.session.logout();
+  });
+  const dialog = page.getByRole("dialog", { name: "Unsaved drafts" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Wait for save", exact: true }).click();
+  await expect(dialog).toContainText("Stay signed in to keep your drafts");
+  const download = page.waitForEvent("download");
+  await dialog.getByRole("button", { name: "Export drafts", exact: true }).click();
+  await download;
+  await expect(dialog.getByRole("button", { name: "Export saved — sign out", exact: true })).toBeVisible();
+  await expect(editor).toContainText("Logout recovery draft");
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(editor).toContainText("Logout recovery draft");
+});

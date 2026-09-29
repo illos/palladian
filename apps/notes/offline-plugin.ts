@@ -7,15 +7,21 @@ export function offlineShell(): Plugin {
     enforce: "post",
     generateBundle(_options, bundle) {
       const files = Object.keys(bundle).filter((file) => !file.endsWith(".map"));
-      const assets = [...new Set(["/", "/index.html", ...files.map((file) => "/" + file)])];
-      const version = createHash("sha256").update(JSON.stringify(files)).digest("hex").slice(0, 16);
+      const assets = [...new Set(["/", "/index.html", "/manifest.webmanifest", ...files.map((file) => "/" + file)])];
+      const digest = createHash("sha256");
+      for (const file of files.sort()) {
+        const item = bundle[file];
+        if (!item) throw new Error("Build asset missing");
+        digest.update(file).update(item.type === "chunk" ? item.code : item.source);
+      }
+      const version = digest.digest("hex").slice(0, 16);
       const source = `const NAME = ${JSON.stringify("palladian-notes-shell-" + version)};
 const ASSETS = ${JSON.stringify(assets)};
 self.addEventListener('install', event => event.waitUntil(caches.open(NAME).then(cache => cache.addAll(ASSETS))));
-self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
+self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('palladian-notes-shell-') && key !== NAME).map(key => caches.delete(key)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
-  if (event.request.method !== 'GET' || url.origin !== self.location.origin || !ASSETS.includes(url.pathname)) return;
+  if (event.request.method !== 'GET' || url.search || event.request.headers.has('authorization') || url.origin !== self.location.origin || !ASSETS.includes(url.pathname)) return;
   event.respondWith(caches.open(NAME).then(cache => cache.match(url.pathname)).then(hit => hit || fetch(event.request)));
 });`;
       this.emitFile({ type: "asset", fileName: "sw.js", source });

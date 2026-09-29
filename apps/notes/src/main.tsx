@@ -68,10 +68,8 @@ const session = new SessionController({
   async prepareLogout() {
     const accountId = session.getSnapshot().accountId;
     if (!accountId || !(await store.hasDrafts(accountId))) return true;
-    // Export/wait-for-save UI is a later integration; never silently discard.
-    return confirm(
-      "Unsaved local drafts exist. Discard them and sign out? Cancel keeps your drafts.",
-    );
+    const { settleDrafts } = await import("./logout");
+    return settleDrafts(store, session, accountId);
   },
 });
 store.subscribe((event) => {
