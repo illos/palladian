@@ -88,6 +88,12 @@ for (const librarySize of [1, 2000]) test(`production shell reloads ${librarySiz
     page.getByRole("textbox", { name: "Note content" }),
   ).toContainText("Cached text appears without authentication or network.");
   const noteMs = await page.evaluate(() => performance.now());
+  if (librarySize === 2000) {
+    await expect(page.locator(".note-row")).toHaveCount(60);
+    await page.getByRole("searchbox").fill("Cached note 1999");
+    await page.getByRole("button", { name: /Cached note 1999/ }).click();
+    await expect(page.getByRole("textbox", { name: "Note content" })).toContainText("Cached note 1999");
+  }
   await expect(page.getByText("Cached copy — read only")).toBeVisible();
   expect(
     await page.evaluate(() => navigator.serviceWorker.controller !== null),

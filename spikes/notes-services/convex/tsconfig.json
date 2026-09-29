@@ -6,11 +6,11 @@
   "compilerOptions": {
     /* These settings are not required by Convex and can be modified. */
     "allowJs": true,
-    "types": ["node"],
+    "types": ["node", "bun"],
     "strict": true,
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
-    "skipLibCheck": true,
+    "skipLibCheck": false,
     "allowSyntheticDefaultImports": true,
 
     /* These compiler options are required by Convex */

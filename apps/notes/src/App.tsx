@@ -28,6 +28,7 @@ export function App({
   const [rows, setRows] = useState<NoteSummary[]>([]);
   const [open, setOpen] = useState<OpenNote | null>(null);
   const [query, setQuery] = useState("");
+  const [rowLimit, setRowLimit] = useState(60);
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState(
     "Local draft — not saved to server",
@@ -50,6 +51,7 @@ export function App({
   useEffect(() => {
     let mounted = true;
     setRows([]);
+    setRowLimit(60);
     setOpen(null);
     setError(null);
     openRequest.current++;
@@ -187,11 +189,14 @@ export function App({
             type="search"
             placeholder="Search cached notes"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => { setQuery(event.target.value); setRowLimit(60); }}
           />
         </label>
-        <div className="note-list" aria-label="Cached notes">
-          {visibleRows.map((row) => (
+        <div className="note-list" aria-label="Cached notes" onScroll={(event) => {
+          const list = event.currentTarget;
+          if (list.scrollHeight - list.scrollTop - list.clientHeight < 200) setRowLimit(limit => Math.min(visibleRows.length, limit + 60));
+        }}>
+          {visibleRows.slice(0, rowLimit).map((row) => (
             <button
               className={
                 currentOpen?.id === row.id ? "note-row selected" : "note-row"
@@ -206,6 +211,7 @@ export function App({
               {row.kind === "draft" && <small>Local draft</small>}
             </button>
           ))}
+          {rowLimit < visibleRows.length && <button onClick={() => setRowLimit(limit => limit + 60)}>Show more notes</button>}
           {!visibleRows.length && (
             <p className="empty-list">
               {permitted

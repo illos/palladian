@@ -17,6 +17,7 @@
     "prosemirror-transform": "1.12.2"
   },
   "devDependencies": {
+    "@types/bun": "1.4.2",
     "@types/node": "26.4.0"
   }
 }
