@@ -81,6 +81,8 @@ Proposed small, coherent model:
 
 Creation accepts substantial Markdown in one request and converts it into native content. Title is derived from the first line; an agent renames a note by editing that line, not a separate title property. Targeted edits preserve untouched rich objects. The agent does not need to synthesize ProseMirror JSON or binary collaboration updates for ordinary tasks.
 
+Confirmed: an agent runs Deltos import manually. Proposed: use authorized destination discovery, note creation, and upload/finalize/attach operations with stable source/request identifiers to make retries safe. Preserve supported formatting and object references; report unsupported content instead of silently dropping it. The source stays read-only, and existing source permissions/history do not automatically become new-app grants/history. Exact fidelity, mapping, source scope, and timing need the import task's contract; no import is executed here.
+
 ## Proposed tool surface
 
 Names below are conceptual API names, not frozen wire schemas.

@@ -24,19 +24,21 @@ The first usable release is for **the owner plus invited collaborators** (confir
 | Area            | Desired product behavior                                                           | Release commitment                                             |
 | --------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------- |
 | Notes           | Simple, clean writing and organization                                             | Core                                                           |
-| Editor          | Apple Notes-like continuous rich text, Markdown shortcuts, optional complex embeds | Core; exact formats open                                       |
+| Editor          | Apple Notes-like continuous rich text, Markdown shortcuts, optional complex embeds | V1 formatting set confirmed; advanced embeds open              |
 | History         | Recoverable revisions and restore                                                  | Core foundation                                                |
 | Sharing         | Shareable links and access control                                                 | Modes confirmed; remaining semantics open                      |
 | Collaboration   | Realtime editing where possible                                                    | Requested; editor/backend gate                                 |
-| External agents | Fast search, creation, editing, attachment, and publishing through MCP             | Core product interface                                         |
+| External agents | Fast search, creation, editing, attachment, and publishing through MCP             | Required in v1                                                 |
 | Accounts        | User accounts, reliable authentication, security                                   | Core; invited accounts; email/password v1; emailed reset links |
 | Files           | Pictures, PDFs, documents, miscellaneous files                                     | Requested; limits and previews open                            |
 | Reminders       | Reminders associated with notes                                                    | V2 target confirmed; delivery and scheduling behavior open     |
-| Agent sidebar   | Converse with an agent and edit a note together                                    | Future feature; not required for first useful MCP access       |
+| Agent sidebar   | Converse with an agent and edit a note together                                    | Confirmed later; outside v1                                    |
 | Offline editing | Preserve local revisions; fork copies on divergence                                | Later extension                                                |
 | Native iOS      | Possible React Native application                                                  | Long term, not a first-release commitment                      |
 
 Proposed first usable release: private notes, basic organization/search, history, account/session reliability, attachments, external MCP, and a narrow sharing/collaboration flow. Reminders are a confirmed v2 target and do not block the first usable release. Remaining first-release scope and sharing details are Q02/Q06; reminder delivery details (Q07) can be settled for v2.
+
+Confirmed: Deltos note import is a manual job run by an agent. Provide the ordinary MCP note-creation and attachment operations needed for that workflow; an automatic in-app migration wizard is not a v1 requirement. The actual import source/scope and timing remain to be assigned.
 
 ## Organization
 
@@ -45,6 +47,8 @@ Confirmed: notebooks form a flat list and never nest inside other notebooks. Fol
 Confirmed for the first release: collections are personal to a user and cannot be shared or published to other users, but are visible to MCP agents operating in that user context. Collections have no separate permission controls. Notebook permissions and individual note overrides govern access to matching notes. Confirmed: Trash acts as a special collection. V1 filters cover text, title, notebook, creation date, last-edited date, and location. The app asks for location access and stores location with the note for searching. Capture location once at note creation; later edits do not update it. Stored location is owner-only, even when the note is shared or public. Notes work normally without location when permission is denied or location is unavailable. Exact operators, precision, and ordinary-collection Trash filtering remain Q05; owner-delegated agent access remains Q14.
 
 Confirmed: the first line of the note automatically supplies its title. Confirmed v1 scope: no tags, editable tables, pinning, or separate archive feature. Users can move notes between notebooks and create an ordinary notebook for archiving; its name does not give it special lifecycle behavior. Note lists use most recently edited first; additional sorting options are deferred to a later release. Tables are deferred with no release assigned; tags have no committed future scope.
+
+Confirmed: v1 supports headings, bold/italic/strikethrough, links, ordered/unordered lists, checklists, quotes, code, images, and file attachments. External agent access through MCP is required in v1; the in-app agent chat sidebar comes later.
 
 ## Editor intent
 

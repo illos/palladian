@@ -45,7 +45,7 @@ Confirmed: the first line of a note is automatically its title; there is no inde
 
 Confirmed experience: continuous formatted writing, with specialized embedded objects. Internal stable IDs must not split ordinary paragraphs into isolated text boxes.
 
-Proposed initial formats: paragraphs, headings, bold/italic/strikethrough, links, ordered/unordered lists, checklists, quotes, code, images, and file attachments. Confirmed: editable tables are outside v1, with no later release assigned. Advanced embed scope remains Q05. No formula, diagram, board, or Deck subsystem is automatically inherited from Deltos.
+Confirmed v1 formats: paragraphs, headings, bold/italic/strikethrough, links, ordered/unordered lists, checklists, quotes, code, images, and file attachments. Confirmed: editable tables are outside v1, with no later release assigned. Advanced embed scope remains Q05. No formula, diagram, board, or Deck subsystem is automatically inherited from Deltos.
 
 Acceptance includes cross-paragraph selection on an actual iPhone, mixed-content copying/pasting, selection across formatting, predictable Enter/Backspace, undo/redo, composition input, and moving around embeds without trapping the cursor.
 
@@ -120,4 +120,4 @@ Confirmed: agents claim only the content needed for their work, expanding across
 
 Confirmed: MCP exposes note history so an authorized editor agent can move backward and forward through revisions, inspect earlier content, compare changes, and restore content. This uses the same editor-only history permissions as the app.
 
-External MCP is a primary interface from the first usable agent milestone. The later sidebar should use the same domain operations and permissions. Agent authorship and history are visible; human takeover of a claimed section has a defined result. Model/provider choice, credentials, costs, execution hosting, and conversation retention remain Q12.
+Confirmed: external MCP agent access ships in v1; the in-app chat sidebar is deferred to a later release. The later sidebar should use the same domain operations and permissions. Agent authorship and history are visible; human takeover of a claimed section has a defined result. Model/provider choice, credentials, costs, execution hosting, and conversation retention remain Q12.
