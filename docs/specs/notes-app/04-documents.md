@@ -71,7 +71,7 @@ Proposed: use a maintained centralized ProseMirror collaboration protocol to sub
 
 An agent edit uses a known revision and stable targets. Unrelated concurrent edits should not force replacing the whole note. Exact rebase/target-version semantics must be proven in G02. Checking only the version fetched inside the save request does not protect against an agent writing stale content from an earlier read.
 
-Recovery journal entries are removed only after acknowledgement. A timeout means the outcome may be unknown: retry with the same operation ID or look up its receipt before assuming failure. If accepted state has moved too far to replay pending edits safely, preserve a recoverable draft/copy instead of overwriting it.
+Recovery journal entries are removed only after acknowledgement during ordinary retry/recovery; known access revocation follows the privacy exception in document 05. A timeout means the outcome may be unknown: retry with the same operation ID or look up its receipt before assuming failure. If accepted state has moved too far to replay pending edits safely, preserve a recoverable draft/copy instead of overwriting it.
 
 ## Agent content checkout
 
@@ -124,6 +124,6 @@ The branch submission has a stable idempotency key. Comparing the base, acceptin
 
 Proposed default: the conflict copy is private to the submitting user, clearly named and linked to its origin. It is not automatically published or shared. User resolution produces a new revision. A recovered copy can remain in a user-chosen notebook, including one used for archiving; there is no separate archive state.
 
-If the original was deleted or access revoked, do not resurrect it or bypass authorization. Preserve recoverable local work and expose a deliberate recovery/export path; whether it may be saved as a new private server note is Q11/Q13. A missing retained base produces an explicit recovery/conflict state, never an unsafe overwrite.
+If the original was deleted or access revoked, do not resurrect it or bypass authorization. Confirmed: users cannot export unsaved work after notebook access is removed. Proposed: after effective note access is lost, purge its pending local content and deny recovery into a separate note; retained explicit note overrides must still be evaluated. For deletion without access revocation, the deliberate recovery/export and private-copy policy remains Q11. A missing retained base produces an explicit recovery/conflict state, never an unsafe overwrite.
 
 This policy deliberately tolerates more conflict copies in exchange for a smaller offline subsystem. Online collaboration still uses its live protocol; the offline branch is not interposed on every online edit.
