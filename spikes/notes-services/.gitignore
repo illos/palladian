@@ -1,3 +1,5 @@
 .env*
 .convex/
 convex/_generated/
+
+node_modules
