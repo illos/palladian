@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { SessionController } from "./session";
 import { type NoteBody, type NoteSummary, type NotesStore } from "./cache";
-import { emptyDocument, NoteEditor } from "./editor";
+import { emptyDocument, NoteEditor, validateDocument } from "./editor";
 import "./styles.css";
 
 interface OpenNote extends NoteBody {
@@ -100,6 +100,7 @@ export function App({
         setError("This note's text is not cached on this device yet.");
         return;
       }
+      validateDocument(body.document);
       setError(null);
       setOpen({ ...body, kind: row.kind, generation });
       setSaveState("Local draft — not saved to server");

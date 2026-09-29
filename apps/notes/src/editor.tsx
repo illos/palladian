@@ -13,6 +13,13 @@ export const notesSchema = new Schema({
   nodes: addListNodes(basicSchema.spec.nodes, "paragraph block*", "block"),
   marks: basicSchema.spec.marks,
 });
+export function validateDocument(document: string) {
+  const node = notesSchema.nodeFromJSON(JSON.parse(document));
+  node.check();
+  if (node.type !== notesSchema.topNodeType)
+    throw new Error("Invalid note document.");
+  return node;
+}
 export function emptyDocument() {
   return JSON.stringify(notesSchema.topNodeType.createAndFill()?.toJSON());
 }
@@ -51,7 +58,7 @@ export function NoteEditor({
     const editor = new EditorView(host.current, {
       state: EditorState.create({
         schema: notesSchema,
-        doc: notesSchema.nodeFromJSON(JSON.parse(document)),
+        doc: validateDocument(document),
         plugins: [
           history(),
           inputRules({
