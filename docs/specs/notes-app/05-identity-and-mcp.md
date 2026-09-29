@@ -2,26 +2,33 @@
 
 ## Accounts and reliable sessions
 
-**Confirmed Q01:** first usable release is for the owner plus invited collaborators. Public signup is outside that initial scope. Confirmed: notebooks contain notes and are private by default. Notebook and note permissions support private, invited-member, and public URL access. Invited members can be users or individual agents with read-only or edit access. Public visitors are read-only; public visibility never grants edit permission. Editing requires invited edit access. Explicit note permissions override notebook defaults. Only the owner can invite members or change sharing permissions. Notes created in a notebook belong to the notebook owner, including notes created by invited users or agents; creator attribution is separate. Ownership transfer and cross-owner moves are outside v1.
+**Confirmed:** the first release supports the owner plus invited collaborators, without public signup. Email/password sign-in, emailed password recovery through Cloudflare Email Service, and invitation acceptance that verifies the invited address are v1 requirements. Passkeys, magic-link sign-in, and two-factor authentication are deferred.
 
-**Confirmed:** v1 sign-in uses email and password. Passkeys, magic-link sign-in, and two-factor authentication are later features, with no release number committed yet. The existing invitation-only account policy still applies. Accepting a valid emailed invitation verifies the invited email address; no separate verification email is required. V1 password recovery uses emailed password-reset links delivered through Cloudflare Email Service. This resets the password; magic-link sign-in remains deferred.
+Better Auth with Convex is proposed, subject to G03. Required outcomes:
 
-Better Auth is the preferred identity/session library. The v1 identity decisions are settled under Q08; local-cache privacy decisions are recorded under settled Q13; supported integration is G03. Do not inherit single-owner security exceptions from Deltos or copy the old app's session state machine.
+- Cached viewing never waits for session validation. Ordinary use does not require weekly sign-in; a year-scale sliding session with shorter-lived access tokens is a proposed configuration.
+- One supported renewal path serves all features. Timeouts, disconnects, rate limits, and server errors cause bounded retry, not false revocation.
+- Session expiry pauses authorized remote work and requests sign-in while preserving cached viewing and ordinary pending work.
+- Device sessions and agent credentials are independent. Device failure does not disconnect agents.
+- Late responses cannot restore cleared content, replace a newer login, or expose another account's data.
 
-Required outcomes from the owner's discussion:
+G03 must verify supported lifetimes, renewal, transport, origins, sleeping tabs, and real token expiry. Discussion references: [Better Auth sessions](https://better-auth.com/docs/concepts/session-management) and [Convex integration](https://labs.convex.dev/better-auth/framework-guides/react).
 
-- Cached note display does not wait for session validation.
-- Ordinary use must not require weekly sign-in. Proposed configuration is a year-scale sliding device session with a shorter access-token lifetime where the integration requires one.
-- Renewal has one supported owner. Editor, attachments, search, and app features do not independently rotate credentials.
-- Timeout, disconnect, rate limit, or server error is not proof of revocation. Preserve credentials and retry with bounded backoff.
-- Invalid sessions pause authorized remote work and offer sign-in; preserve unsaved work for ordinary expiry/retry, subject to explicit revocation cleanup. Confirmed: session expiry keeps cached notes viewable during that prompt; it does not trigger explicit-logout cleanup. Known note-access revocation still removes the affected cache; a remotely revoked device clears account-scoped cached notes once it learns of revocation.
-- Device revocation and agent-grant revocation are separate operations. Device failure cannot revoke all agent connections.
-- Explicit logout clears that account's app-managed cached notes and downloaded attachments on the device. Account switching isolates local state before displaying the next account; sign-out with unsynced work offers wait-for-save, export, or explicit discard before local cleanup.
-- Late responses cannot overwrite a newer login, restore a signed-out session, or render the prior account's data.
+## Local privacy and recovery
 
-Cached viewing entails retaining previously downloaded private content on the device. Offline revocation cannot instantly erase disconnected copies. Explicit logout clears app-managed note/attachment caches. Confirmed: v1 relies on the device lock; no separate app unlock. Known revocation of a shared note removes its cached copy, including derived views; a connectivity failure does not establish revocation. Sign-out with pending edits offers wait-for-save, export, or explicit discard before clearing local data. Confirmed: remotely revoked devices clear account-scoped cached notes once revocation is known. Users cannot export unsaved work after notebook access is removed. Device security is sufficient for local storage in v1; additional app-level encryption is not required. Proposed cleanup removes revoked content from recovery journals as well as display caches and prevents export, copying to a new note, and late replay. This supersedes ordinary recovery for inaccessible content, while explicit note overrides that preserve effective access still apply. Local snapshots never grant fresh server access.
+**Confirmed:** v1 relies on device security, with no separate app unlock or additional app-level local encryption. Backend processing for search and authorized agents is allowed; v1 does not require end-to-end encryption that hides content from the backend.
 
-Better Auth supports configurable lifetime and renewal intervals, but correct settings alone do not prove correct browser behavior. Test transport, origin, cookie/header handling, sleeping tabs, and real token expiry using the chosen version. See [session documentation](https://better-auth.com/docs/concepts/session-management) and [Convex integration](https://labs.convex.dev/better-auth/framework-guides/react).
+| Event                                            | Confirmed behavior                                                                                                                                    |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Session expiry or transient auth/network failure | Cached notes stay viewable; remote work waits for valid auth; ordinary pending work is preserved                                                      |
+| Voluntary logout                                 | Clear account-scoped app-managed note/attachment caches and derived views; first offer save, export, or explicit discard for accessible unsynced work |
+| Learned remote device revocation                 | Clear that account's cached notes on the revoked device                                                                                               |
+| Learned effective note-access loss               | Remove the affected cached note; no export of unsaved work after notebook access is removed                                                           |
+| Permanent note deletion                          | Note and all edit history are deleted; no history restoration remains                                                                                 |
+
+A failed save or cancelled export does not settle voluntary logout. Account switching isolates prior-account data before showing the next account. Cleanup does not delete server notes or files already exported outside app-managed storage. Disconnected devices cannot learn revocation or deletion until they reconnect; local snapshots never grant fresh server access.
+
+**Proposed cleanup:** clear affected metadata, previews, indexes, historical snapshots, memory, and pending recovery content. Account revocation clears the account's app-managed attachment cache; note-level cleanup retains bytes still authorized through another note. Reject late responses, replay, export, and recovery copies for inaccessible or permanently deleted content. Evaluate explicit note overrides before concluding that notebook membership removal revokes a note. These exceptions take precedence over ordinary pending-work recovery. Password-reset revocation of other-device sessions follows the same device-revocation cleanup.
 
 ## Invitation and email verification
 
@@ -41,27 +48,21 @@ G03 requires actual delivery through the selected sender domain and a complete r
 
 ## Authorization
 
-Confirmed: authorization must represent individual agents as members, not just a blanket provider label such as Codex or Claude. Both notes and notebooks have permission manifests; explicit note settings take precedence over notebook defaults. The agent identity and credential-linking representation remains an implementation design, with connection authentication covered by Q14.
+**Confirmed:** notebook defaults and explicit note overrides govern all content access. Notes belong to their notebook owner; creator attribution does not confer ownership. A private override can restrict a note in a shared/public notebook, and a note can be shared independently from a private notebook.
 
-Confirmed: individual agents appear as potential collaborators in sharing controls. Notebook read/edit membership and note overrides determine their content access, with no parallel agent-specific permission system or connection-wide read-only default. Agent authentication identifies the collaborator; it does not itself grant private-note access.
+Agents are individually addressable collaborators selectable in sharing controls. Authentication identifies an agent but grants no private content by itself. There is no parallel MCP content ACL or connection-wide read/edit default.
 
-Confirmed: the owner can explicitly authorize a trusted agent to publish, change sharing, move notes, or permanently delete. Treat those authorized actions as delegated owner authority while retaining agent authorship. Ordinary read/edit membership remains insufficient. Record the delegation through the same ownership/permission authority rather than a second MCP-only content ACL; exact representation, operation selection, and revocation mechanics remain Q14. Earlier owner-only rules permit this explicit trusted-agent delegation for the named operations.
+| Capability                                                                  | Required authority                                                                                     |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Current content                                                             | Effective read access; public visitors read only current public content                                |
+| Edit, browse/compare/restore history, trash/restore note                    | Effective edit access; restoration uses the proposed revision-safe contract below                      |
+| Invite, change sharing, move between notebooks, manually permanently delete | Owner, or an agent explicitly delegated that named action; ordinary edit membership is insufficient    |
+| Replace public URL                                                          | Owner authority; delegation of URL replacement has not been separately specified                       |
+| Stored location                                                             | Owner and agents with effective note access; hidden from other human collaborators and public visitors |
 
-Proposed: one server-owned authorization layer shared by editor operations, MCP, file access, search, history, and publication. Permission checks cover the effective note/notebook permissions, not just whether a caller is logged in. Notebook membership cannot bypass a more restrictive note override, including through listings, search excerpts, direct reads, files, or MCP.
+Delegation uses the same ownership/permission authority while preserving agent attribution. Representation, selected operations, and revocation mechanics remain Q14. Agents cannot self-delegate or escalate permissions. Same-owner notebook moves preserve note overrides and warn about actual collaborator access loss. Public links follow [document 02](02-behavior.md#sharing-and-publishing); public attachments cannot bypass visibility, Trash, or invalidated-URL checks. Automatic Trash cleanup follows the note owner's retention setting and is separate from manual permissions.
 
-Confirmed: effective edit access permits moving a shared note to Trash and restoring it. Manual permanent deletion requires note ownership; read-only/public access permits none of these operations. Apply the same checks to UI and MCP requests; an agent's edit membership does not grant owner powers. Automatic retention cleanup remains a separate lifecycle operation, not an editor permission. The note owner's Trash retention setting governs shared notes, regardless of which collaborator moves them to Trash.
-
-The owner, or an agent explicitly delegated the relevant owner action, can administer invitations, change member roles, or change public/private visibility. Enforce this in UI and MCP operations; an invited editor, human or agent, cannot escalate its own or another member's permissions. Agent authentication and the owner-delegation representation remain Q14; ordinary agent edit membership is insufficient for permission changes.
-
-Confirmed: trashed notes are unavailable through public links, including through public notebook listings. Public attachment access through a trashed note must not bypass that lifecycle check. Restoring a note makes its current public link available again only if effective visibility is public; previously invalidated URLs stay invalid. Public URL replacement requires owner authority in both UI and MCP; ordinary editor membership is insufficient. Previously downloaded copies cannot be recalled by this server-side access change.
-
-Confirmed: notebook moves require ownership, not ordinary edit membership, and v1 allows only notebooks with the same owner. Preserve explicit note overrides; otherwise apply destination notebook permissions. Warn before a move that removes collaborators' effective access. Enforce the same rules through UI and MCP. Proposed MCP contract: expose access impact before an affected move commits, with a versioned precondition so the warning matches the applied change; detailed owner credential delegation remains Q14.
-
-Confirmed clarification: agents can access note metadata, including stored location, through their effective notebook/note permissions; no separate location grant is required. The owner can access it too. Other human collaborators and public visitors remain unable to view location. Enforce this on direct reads, history, metadata, projections, caches, and search results/counts. History access still requires effective edit permission. Do not place restricted location in publicly rendered content or discovery metadata.
-
-Never derive identity from caller-supplied account IDs. Recheck write access at commit time, including claim expiry and offline branch submission. Search results must be scoped before returning excerpts. Private bytes follow explicit access rules. Listing revisions, reading historical content, and comparing versions require effective edit permission; read-only human and agent members and public visitors can access only current content. File links must not expose permanent credentials.
-
-Confirmed: the backend may read/process note content for search and authorized agent operations. V1 does not require end-to-end encryption that prevents server access to content. Every operation still enforces note/notebook access rules, including the agent's collaborator membership and any explicit owner delegation; this decision does not make notes public. Local-cache privacy decisions are recorded under settled Q13.
+**Proposed enforcement:** one server-owned authorization layer serves UI, MCP, search, history, files, and publication. Derive identity from authenticated credentials, scope search before returning matches/counts/excerpts, and recheck writes at commit time. Enforce location privacy in history, caches, projections, and search; normal content editing does not make restricted metadata public. Private file URLs carry no permanent credentials. A move preview uses a versioned precondition so its warning matches the committed change.
 
 ## MCP foundation
 
@@ -80,7 +81,7 @@ MCP endpoints must work while the browser is closed. They access the current acc
 Proposed small, coherent model:
 
 - Notebooks: stable IDs, names, descriptions, permission manifests, effective access rights, and filing guidance.
-- Collections: personal saved-query views with stable IDs, names, definitions, and authorized matching notes; visible to MCP agents in the associated user context. They cannot be shared/published to other users and have no independent permission controls. Results follow the caller's notebook permissions and note overrides. They are distinct from notebook destinations. Trash is a special collection; access to it does not grant additional lifecycle permissions. V1 collection filters include text, title, notebook, creation date, last-edited date, and stored note location. Location is captured once at creation; authorized agent collaborators can access it and other note metadata under the effective notebook/note permissions. All notes and ordinary collections include matching trashed notes by default, with lifecycle permissions enforced separately.
+- Collections: personal saved-query IDs, names, definitions, and authorized results in the associated user context; no sharing or independent permissions. Include matching Trash by default, following document 02. A collection is not a filing destination.
 - Notes: stable ID, single notebook ID, title, metadata, accepted revision, outline, and document URL.
 - Content: readable text/Markdown with stable section/block targets; typed references for rich objects.
 - Revisions: explicit expected revision or target-version preconditions and compact committed receipts.
@@ -103,7 +104,7 @@ Names below are conceptual API names, not frozen wire schemas.
 | Edit note      | Bounded atomic batch of append/insert/replace/move/delete-content/metadata operations with explicit preconditions                                   |
 | Attach file    | Upload/finalize/reference workflow; no whole-body rewrite; explicit size/type limits                                                                |
 | History        | Browse revisions backward/forward, read/diff/restore; effective edit permission required; browsing never changes live content                       |
-| Share/publish  | Owner-only visibility and public-URL replacement operations, independent of ordinary save                                                           |
+| Share/publish  | Visibility changes require owner authority or explicit agent delegation; URL replacement requires owner authority; ordinary save is separate        |
 | Claim/release  | Claim only needed content; release/expiry; human-editor cancellation with agent-visible interruption and stale-write rejection                      |
 
 Prefer stable target IDs; never assume a heading label is unique. Destructive operations state their effects clearly. A tool that saves a private note does not implicitly publish it. Once a note is public, accepted edits automatically update the content at its public URL; no separate publish call is needed. Share/publish changes visibility rather than freezing a revision. Unknown or unsupported blocks remain preserved and readable by description.
@@ -132,6 +133,6 @@ Search/index latency and asynchronous processing must not make an acknowledged n
 
 ## Agent authentication and future sidebar
 
-Confirmed: agent content access is controlled by notebook/note sharing, not a separate connection permission layer. Proposed: independently revocable authentication credentials per connection, bound to the individual collaborator identity; supported authorization discovery/authentication remains an engineering gate. Removing notebook access must take effect without depending on a credential expiring. PAT versus OAuth availability, identity registration, owner-delegation representation, and rate limits remain Q14. Do not assume Better Auth's OAuth packages are automatically compatible with the Convex adapter.
+Confirmed: agent content access is controlled by notebook/note sharing, not a separate connection permission layer. Proposed: independently revocable authentication credentials per connection, bound to the individual collaborator identity; supported authorization discovery/authentication remains an engineering gate. Changes to effective content access must take effect without waiting for credentials to expire, while honoring explicit note overrides. PAT versus OAuth availability, identity registration, owner-delegation representation, and rate limits remain Q14. Do not assume Better Auth's OAuth packages are automatically compatible with the Convex adapter.
 
 The future sidebar uses the same note operations, claims, and history. It adds conversation state and agent execution, not another persistence authority. Model providers, account credentials, billing, execution environment, and whether agent conversations are shared are Q12. Note contents are data; reading a note does not authorize instructions embedded within it.

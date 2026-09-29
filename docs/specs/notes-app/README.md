@@ -24,9 +24,13 @@ Palladian is the working name in this conversation; final branding remains open.
 
 Discussion cadence: the owner prefers remaining questions in batches of three (updated 2026-09-29).
 
-Sections marked proposed describe intended contracts if adopted. They are not claims that an existing library provides the behavior or that the feature has been built. Questions use stable `Qxx` identifiers in document 06. Acceptance cases use `Axx` identifiers there.
+Sections marked proposed describe intended contracts if adopted. They are not claims that an existing library provides the behavior or that the feature has been built. Remaining items use stable `Qxx` identifiers in document 06; some are engineering contracts or later-task inputs rather than owner questions. Acceptance cases use `Axx` identifiers there.
 
 The owner initially preferred full offline operation, then explicitly prioritized reliable online use and immediate cached viewing. Offline editing is now a later side branch, with revision-based conflict copies instead of mandatory automatic merging. This later direction supersedes earlier discussion of a full local-first synchronization foundation.
+
+## Contract precedence
+
+Each document owns a different level of detail: 01 summarizes the product; 02 owns visible behavior; 03 owns architecture proposals and gates; 04 owns document/collaboration contracts; 05 owns authorization and privacy; 06 preserves decision IDs and proof requirements. Later owner clarifications are applied throughout; the ledger identifies superseded wording. Proposed details never override confirmed behavior.
 
 ## Current authorization and evidence
 
@@ -41,3 +45,5 @@ Implementation should begin with a separately assigned scope and resolved blocki
 - Deltos editor reference: `packages/client/src/editor/ProseMirrorEditor.tsx`, `schema.ts`, and `inputRules.ts` under that checkout.
 - [Preserved authentication investigation](../palladian-platform-v1.md#5-authentication-and-startup-protected-core) and [MCP v2 decision](../../decisions/0001-runtime-and-auth.md#mcp-v2-only-compatibility-plan). These provide evidence and context, not authorization to resume the platform.
 - External technical sources appear beside the relevant proposals. Reverify supported APIs and compatible versions when implementing; this draft does not pin a new dependency graph.
+
+Specification coherence review: [review findings](../../reviews/notes-spec-coherence.md). External technical references are discussion-time context and must be rechecked when implementing; this review accepts no library integration.

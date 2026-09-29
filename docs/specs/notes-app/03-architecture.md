@@ -23,7 +23,7 @@ This is a responsibility diagram, not a requirement that browser traffic pass th
 
 ## Proposed stack
 
-The owner suggested React, TanStack Router, Tailwind, Better Auth, Cloudflare, and Convex. The online-first direction was accepted; exact package selections remain proposals except for the confirmed MCP v2 target and Cloudflare Email Service for password-reset delivery.
+The owner suggested React, TanStack Router, Tailwind, Better Auth, Cloudflare, and Convex. The online-first direction was accepted; package selections remain proposals except for the confirmed MCP v2 target and Cloudflare Email Service. Initial app hosting on a default Worker domain is also confirmed.
 
 | Layer          | Candidate                                         | Decision/gate                                                                               |
 | -------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------- |
@@ -44,15 +44,15 @@ The owner suggested React, TanStack Router, Tailwind, Better Auth, Cloudflare, a
 
 No new versions are pinned in this documentation task. When implementing, use the host baseline for Node/pnpm/Playwright/uv and verify library compatibility/security. Preserve required generated types; do not reuse old version pins merely because archived code compiled.
 
-## Three kinds of local state
+## Local state
 
-| State                 | Meaning                                                  | Recovery behavior                                                                                  |
-| --------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Confirmed snapshots   | Last received server versions, titles, previews, content | Replaceable/rebuildable; account-scoped                                                            |
-| Pending-edit journal  | Work not yet acknowledged by the server                  | Must not be evicted as ordinary cache; retain until acknowledgement or deliberate recovery/discard |
-| Future offline drafts | Deliberate disconnected edits plus their base revisions  | Reconcile or create a conflict copy according to document 04                                       |
+| State                 | Meaning                                                      | Recovery behavior                                                                                                                       |
+| --------------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Confirmed snapshots   | Last received server versions, titles, previews, content     | Replaceable/rebuildable; account-scoped                                                                                                 |
+| Pending-edit journal  | Unacknowledged edits and new drafts created while connecting | Retain through ordinary failures; clear only after acknowledgement, deliberate discard, or the revocation/deletion rules in document 05 |
+| Future offline drafts | Deliberate disconnected edits plus their base revisions      | Reconcile or create a conflict copy according to document 04                                                                            |
 
-Never label journal data as a server-confirmed snapshot. Include note ID, base revision, operation/request IDs, account scope, and schema version. Avoid long debounces that make mobile process termination lose acknowledged local work. Browser storage can fail or be evicted; surface save failures and do not claim universal durability against device/browser data deletion.
+Never label journal data as a server-confirmed snapshot. Include note or local draft ID, base revision when applicable, operation/request IDs, account scope, and schema version. New-note drafts do not require an existing server revision. Avoid long debounces that make mobile process termination lose acknowledged local work. Browser storage can fail or be evicted; surface save failures and do not claim universal durability against device/browser data deletion.
 
 ## Performance boundaries
 
@@ -77,26 +77,25 @@ A file upload and a database transaction cannot be assumed atomic together. Use 
 
 ## Technical gates
 
-| Gate | What must be demonstrated                                                                                                                                                                                                                                                    |
-| ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| G01  | Natural text selection, composition, paste, embeds, shortcuts, and acceptable editor startup in the primary iPhone Safari installed PWA and desktop Chrome/Firefox using the selected engine                                                                                 |
-| G02  | Centralized collaborative edits; authorizing and validating affected content; claim enforcement and human cancellation with agent-visible interruption; agent transforms; cache-to-live handoff; pending-edit recovery; bounded history/storage costs                        |
-| G03  | Supported Better Auth/Convex arrangement; long-lived sessions; expired short-lived token recovery; late responses/account switches; independent agent grants; invitation acceptance verifies the invited email; emailed password-reset flow through Cloudflare Email Service |
-| G04  | MCP SDK v2 protocol/auth compatibility with Codex CLI, Claude Code, Hermes, and Codex over the CLI through Presidium; exercise each actual environment, not just an SDK unit test                                                                                            |
-| G05  | Representative library/document/file limits, costs, backups, and successful restore; storage limits cannot be removed from tests to make the component fit                                                                                                                   |
+| Gate | What must be demonstrated                                                                                                                                                                                                                                                                     |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G01  | Natural text selection, composition, paste, embeds, shortcuts, and acceptable editor startup in the primary iPhone Safari installed PWA and desktop Chrome/Firefox using the selected engine                                                                                                  |
+| G02  | Centralized collaborative edits; authorizing and validating affected content; claim enforcement and human cancellation with agent-visible interruption; agent transforms; cache-to-live handoff; pending-edit recovery; bounded history/storage costs                                         |
+| G03  | Supported Better Auth/Convex arrangement; long-lived sessions; expired short-lived token recovery; late responses/account switches; independently revocable agent credentials; invitation acceptance verifies the invited email; emailed password-reset flow through Cloudflare Email Service |
+| G04  | MCP SDK v2 protocol/auth compatibility with Codex CLI, Claude Code, Hermes, and Codex over the CLI through Presidium; exercise each actual environment, not just an SDK unit test                                                                                                             |
+| G05  | Representative library/document/file limits, costs, backups, and successful restore; storage limits cannot be removed from tests to make the component fit                                                                                                                                    |
 
 If a gate fails, record the concrete limitation and compare alternatives. Do not silently restore the full local-first architecture or weaken the owner's behavior requirements.
 
-## Technical references checked during discussion
+## Technical references recorded during discussion
 
 - [Convex synchronization](https://www.convex.dev/sync): realtime subscriptions are not a complete durable offline sync engine.
-- [ProseMirror sync component](https://github.com/get-convex/prosemirror-sync/blob/main/README.md): candidate supports server-side transforms; its current README lists durability/presence/size limitations. Specifically investigate the 1 MB document ceiling and failed unmount flush. Presence, lock enforcement, and robust recovery are not assumed turnkey.
+- [ProseMirror sync component](https://github.com/get-convex/prosemirror-sync/blob/main/README.md): the discussion-time README describes server-side transforms and durability/presence/size limitations; recheck at implementation. Specifically investigate the 1 MB document ceiling and failed unmount flush. Presence, lock enforcement, and robust recovery are not assumed turnkey.
 - [Tiptap integration performance](https://tiptap.dev/docs/guides/performance): isolate editor rendering from unrelated React updates.
 - [TanStack Router splitting](https://tanstack.com/router/latest/docs/guide/code-splitting): use splitting without introducing network-dependent cached navigation.
 - [Better Auth/Convex React guide](https://labs.convex.dev/better-auth/framework-guides/react): cross-domain transport and compatible versions need deliberate verification.
 - [MCP SDK v2](https://ts.sdk.modelcontextprotocol.io/v2/): SDK/protocol target is distinct from an app manifest.
 - [Browser storage](https://developer.mozilla.org/en-US/docs/Web/API/Storage_API/Storage_quotas_and_eviction_criteria): offline availability requires capacity and persistence handling.
-
 - [Cloudflare Email Service](https://developers.cloudflare.com/email-service/) and [sending setup](https://developers.cloudflare.com/email-service/get-started/send-emails/), checked 2026-09-28: outbound transactional sending supports password resets through Workers bindings, REST, or SMTP. Docs label Email Sending beta on Workers Paid; domain setup requires Cloudflare DNS and sender-domain onboarding. G03 must verify the selected account/domain and actual recipient delivery before acceptance. Provider selection does not authorize plan purchases or DNS changes.
 
 ## Initial hosting and pricing

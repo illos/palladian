@@ -1,87 +1,58 @@
 # 01 — Product
 
-## Purpose
+## Purpose and priorities
 
-Build a clean notes app that opens quickly on a phone, supports dependable online editing and collaboration, and is as coherent for an authenticated agent to use as it is for a person.
+Build a clean notes app that opens quickly on a phone, supports dependable online editing and collaboration, and gives authenticated agents a fast, coherent interface.
 
-The app must avoid Deltos's failure mode: locally available notes hidden behind a multi-second authentication/network spinner, even on a fast internet connection. Download bandwidth alone does not satisfy startup performance.
+Deltos hid downloaded notes behind a multi-second authentication/network spinner even on fast internet. Palladian must display cached navigation, titles, and content without a server round trip. Home uses a small local index; opening one note must not hydrate the whole library. Existing notes may briefly remain read-only until live editing is ready. New note opens immediately for typing into a local draft while connecting.
 
-## Confirmed priorities
+Online editing is the primary working path. Rich viewers, agent tools, indexing, remote updates, and notifications stay off the launch and interaction paths. Automatically cache all accessible current note text for offline viewing; images and PDFs lazy-load. Offline editing comes later as a separate adapter. Divergence creates two copies for user resolution, using revision ancestry rather than device-clock ordering; preserve device edit times as provenance.
 
-1. Launch, navigation, note titles, and downloaded note content appear without a server round trip. Existing cached notes may briefly remain read-only while live editing becomes ready; reading and navigation remain available throughout (confirmed Q03).
-2. Online writing, saving, and collaboration are the primary working path.
-3. Rich embeds, agent tools, remote updates, and sync notifications must not block or degrade ordinary note use.
-4. Automatically download and retain all note text for fast opening and offline viewing. Pictures and PDFs load lazily when needed (confirmed Q04). Previously downloaded notes remain viewable without connectivity.
-5. Offline editing is a later optional branch. It cannot sit between launch and the ordinary online experience.
-6. History preserves work. Divergent offline and online versions can become two copies for the user to resolve.
-7. Device-recorded edit times are preserved. Revision ancestry, not clock ordering, determines divergence.
-8. Accepting an emailed invitation verifies the invited email address without a separate verification email. V1 sign-in uses email and password, with password-reset links delivered through Cloudflare Email Service; passkeys, magic-link sign-in, and two-factor authentication are deferred to a later release. A successful password reset automatically signs out other devices; the reset flow asks whether to disconnect connected AI agents. Authentication should otherwise stay out of the way: no routine weekly login, no false logout due to connectivity, and no device-session failure disconnecting agents.
+## Confirmed release direction
 
-## Confirmed feature direction
+| Area            | V1 requirement                                                                                                  |
+| --------------- | --------------------------------------------------------------------------------------------------------------- |
+| Accounts        | Owner plus invited collaborators; no public signup; email/password, emailed invitations and password reset      |
+| Notes/editor    | Continuous Apple Notes-style rich text, first-line title, Markdown input shortcuts                              |
+| Organization    | Flat notebooks, personal query collections, All notes and Trash, search                                         |
+| History         | Lifetime reconstructable revisions while a note exists; editor access; permanent deletion clears all history    |
+| Sharing         | Private, invited read/edit members, public read-only URLs showing latest accepted content                       |
+| Collaboration   | Online human/agent editing with necessary-scope agent claims and human cancellation, subject to technical proof |
+| External agents | Fast MCP discovery, search, creation, targeted editing, attachments, history, and authorized publishing         |
+| Files           | Separate unversioned images, PDFs, documents, and miscellaneous objects referenced from notes                   |
 
-The first usable release is for **the owner plus invited collaborators** (confirmed during specification drafting). Public signup is outside the initial scope. Notebooks are libraries of notes, private by default. Each notebook and note has a permissions manifest: private, private with invited members, or public to anyone with the URL. Members may be users or individual AI agents, each with read-only or edit access. Public URL access is read-only and shows the latest saved content automatically; editing requires invited edit access. Explicit note permissions override notebook defaults. Only the owner can invite members or change sharing permissions. Notes created in a notebook belong to its owner, including notes created by invited users or agents; history preserves creator attribution. V1 notebook moves are owner-only and limited to notebooks with the same owner; ownership transfers are deferred. Destination permissions apply unless explicit note-level overrides exist, which remain intact. Warn before a move when collaborators will lose access. Public links have no automatic expiry; current visibility, Trash state, and URL replacement still control availability (settled Q06).
+Confirmed v1 formatting: headings, bold, italic, strikethrough, links, ordered/unordered lists, checklists, quotes, code, images, and file attachments. Ordinary writing is one continuous surface with natural cross-paragraph mobile selection. Stable internal block IDs must not create isolated paragraph text boxes. Optional specialized embeds fit inside that surface; their advanced scope remains Q05.
 
-| Area            | Desired product behavior                                                           | Release commitment                                             |
-| --------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| Notes           | Simple, clean writing and organization                                             | Core                                                           |
-| Editor          | Apple Notes-like continuous rich text, Markdown shortcuts, optional complex embeds | V1 formatting set confirmed; advanced embeds open              |
-| History         | Recoverable revisions and restore                                                  | Core foundation                                                |
-| Sharing         | Shareable links and access control                                                 | Modes confirmed; remaining semantics open                      |
-| Collaboration   | Realtime editing where possible                                                    | Requested; editor/backend gate                                 |
-| External agents | Fast search, creation, editing, attachment, and publishing through MCP             | Required in v1                                                 |
-| Accounts        | User accounts, reliable authentication, security                                   | Core; invited accounts; email/password v1; emailed reset links |
-| Files           | Pictures, PDFs, documents, miscellaneous files                                     | Requested; limits and previews open                            |
-| Reminders       | Reminders associated with notes                                                    | V2 target confirmed; delivery and scheduling behavior open     |
-| Agent sidebar   | Converse with an agent and edit a note together                                    | Confirmed later; outside v1                                    |
-| Offline editing | Preserve local revisions; fork copies on divergence                                | Later extension                                                |
-| Native iOS      | Possible React Native application                                                  | Long term, not a first-release commitment                      |
+Typing `#HEADER` followed by Tab converts the paragraph to H1 containing `HEADER`. Space-triggered mobile companions are proposed. The first line supplies the title; an empty first line displays **Untitled** without inserting text. There is no independent title field. Note lists sort by most recently edited; other sorts come later.
 
-Proposed first usable release: private notes, basic organization/search, history, account/session reliability, attachments, external MCP, and a narrow sharing/collaboration flow. Reminders are a confirmed v2 target and do not block the first usable release. Remaining overall first-release scope is Q02; reminder delivery details (Q07) can be settled for v2.
+**Deferred:** reminders target v2. Offline editing, sidebar agent chat, passkeys, magic-link login, two-factor authentication, editable tables, folders, and explicit offline attachment downloads come later without an assigned release. Native iOS/React Native is a possible long-term direction. V1 has no tags, pinning, or separate archive feature; an ordinary notebook can serve as an archive. No future tag feature is committed.
 
-Confirmed: Deltos note import is a manual job run by an agent. Provide the ordinary MCP note-creation and attachment operations needed for that workflow; an automatic in-app migration wizard is not a v1 requirement. The actual import source/scope and timing remain to be assigned.
+Q02 consolidates a delivery plan around these requirements; it does not downgrade confirmed features. Deltos import is a separately assigned manual agent job using ordinary MCP operations, without a required in-app migration wizard.
 
-Confirmed: individual agents appear as potential collaborators and receive access by being shared with through notebook permissions and explicit note overrides, just like other collaborators. Connecting an agent does not create a separate app-wide read-only/edit permission. The owner may explicitly delegate trusted-agent authority to publish, change sharing, move notes, or permanently delete; ordinary edit membership alone does not grant those owner actions. The delegation representation remains an engineering contract under Q14.
+## Ownership and organization
 
-## Organization
+A note belongs to one notebook and to that notebook's owner, regardless of its creator; preserve actual creator attribution. Notebooks are private by default, flat, and never nested. Moves are between notebooks with the same owner; ownership transfer is outside v1. Preserve note IDs/history/objects and explicit permission overrides. Warn before a move that removes effective collaborator access.
 
-Confirmed: notebooks form a flat list and never nest inside other notebooks. Folders may be considered later as a separate organizational feature; they are not in the first release. Each note belongs to one notebook at a time. Collections are a separate classifier: saved queries that display matching notes programmatically using criteria such as search text, title, date, and location. Every user starts with an **All notes** collection, which includes notes they own and notes shared with them, and can create additional collections. A note can match multiple collections while remaining in one notebook. Collection results do not transfer ownership or override note/notebook permissions.
+Notebook permissions provide defaults; explicit note permissions override them. Invited members are individual users or AI agents with read/edit rights. Agent authentication alone grants no private content. Owners may explicitly delegate trusted agents to publish, change sharing, move notes, or permanently delete; ordinary edit membership is insufficient. URL replacement requires its specified owner authority. See [authorization](05-identity-and-mcp.md#authorization).
 
-Confirmed for the first release: collections are personal to a user and cannot be shared or published to other users, but are visible to MCP agents operating in that user context. Collections have no separate permission controls. Notebook permissions and individual note overrides govern access to matching notes. Confirmed: Trash acts as a special collection. V1 filters cover text, title, notebook, creation date, last-edited date, and location. The app asks for location access and stores location with the note for searching. Capture location once at note creation; later content edits do not automatically update it. Users can manually change or remove the stored location. Stored location is visible to the owner and agents with effective note access; other human collaborators and public visitors do not receive it. Notes work normally without location when permission is denied or location is unavailable. All notes and ordinary collections include matching trashed notes by default; Trash is also available as its own special collection. Exact operators and precision remain Q05.
+Collections are personal saved queries, visible to MCP agents in the associated user context but not shareable/publishable to other users. They have no independent ACL and never grant note access. Every user starts with **All notes**, including owned/shared notes and matching Trash. A note can match multiple collections without being copied. Trash is also a special collection. Confirmed query fields are text, title, notebook, creation date, last-edited date, and location.
 
-Confirmed: the first line of the note automatically supplies its title. Confirmed v1 scope: no tags, editable tables, pinning, or separate archive feature. Users can move notes between notebooks and create an ordinary notebook for archiving; its name does not give it special lifecycle behavior. Note lists use most recently edited first; additional sorting options are deferred to a later release. Tables are deferred with no release assigned; tags have no committed future scope.
+Location is captured once at creation when available; content edits do not recapture it. Users can change/remove it manually. Denied/unavailable location does not impair normal note use. Owners and agents with effective access can read it; other human collaborators and public visitors cannot. Query operators and precision remain Q05.
 
-Confirmed: v1 supports headings, bold/italic/strikethrough, links, ordered/unordered lists, checklists, quotes, code, images, and file attachments. External agent access through MCP is required in v1; the in-app agent chat sidebar comes later.
+## Sharing, privacy, and lifecycle
 
-## Editor intent
+Public URLs show latest accepted live content, read-only, without automatic expiry; subsequent saves need no republish action. Public pages are indexable by default. Trashing hides the public link; restore re-enables its current URL only if visibility still allows. Owner URL replacement permanently invalidates the old URL. Read-only members/public visitors cannot view history; effective edit access is required.
 
-Internal block identities must not dictate the visible interaction model. Ordinary writing is one continuous surface: select across paragraphs, copy mixed content, and move the cursor naturally. Rich embedded objects have their own controls when needed.
+Trash retention choices are **1 day, 1 week, 30 days (default), 90 days, forever**. The note owner's current policy applies to existing and future Trash. Editors may trash/restore; permanent deletion requires owner authority, including explicit agent delegation. It clears the note and its entire history. Separate object-reference rules preserve attachments used by another active note; historical references do not keep trashed bytes forever. See [behavior](02-behavior.md) and [documents](04-documents.md).
 
-Typing `#HEADER` followed by Tab converts that paragraph into a level-one heading containing `HEADER`. This exact shortcut is owner-requested. Conventional space-triggered shortcuts are proposed companions for mobile keyboards.
+No routine weekly login or false logout due to connectivity. Expiry preserves cached viewing; voluntary logout and learned device revocation clear account caches. Effective note-access loss removes affected content and disallows unsaved-work export. Voluntary logout offers save/export/discard for accessible pending work. Device security is sufficient for v1 local storage. Backend processing for search and authorized agents is allowed; v1 does not require end-to-end encryption. Password reset signs out other devices and asks whether to disconnect agents. See [identity](05-identity-and-mcp.md).
 
-Agent paragraph checkout is a desired collaboration direction: indicate which section the agent owns and temporarily prevent conflicting edits there. Expiry, takeover, granularity, and handling in-flight edits require an explicit contract and proof.
+## Clients, scale, and constraints
 
-## Content privacy
+Primary target: installed Safari PWA on the owner's **iPhone 15 Plus**; test other sizes where possible. Support desktop Chrome and Firefox. Expect hundreds to low thousands of notes per user, usually a couple of pages of text. Test progressively longer notes for usable opening, selection, scrolling, editing, and saving; these expectations are not quotas or maximum lengths.
 
-Confirmed: the backend may process note content for search and authorized agent operations. V1 does not require end-to-end encryption that prevents the backend from reading content. Note and notebook permissions continue to govern user and agent access. Explicit sign-out clears the account's cached notes and downloaded attachments from the app on that device.
+MCP acceptance targets: Codex CLI, Claude Code, Hermes, and Codex CLI through Presidium. Use TypeScript SDK v2 targeting protocol `2026-07-28`; actual compatibility is G04. Agent success means bounded reads/writes, few calls, understandable results, and one-write conversation creation once its destination is known.
 
-## Constraints
+Initial app URL uses the default Cloudflare Worker domain; pricing stays with the owner. No commercially licensed self-hosted solution. Deltos stays read-only; preserve the shelved platform and its archive. Implementation, import, deployment, and infrastructure changes require separately assigned scopes.
 
-- No commercially licensed self-hosted backend as a required solution or reassuring exit plan. Hosted services are not categorically excluded.
-- Use MCP TypeScript SDK v2 targeting protocol `2026-07-28`. Legacy compatibility is a separate evidence-driven decision.
-- Fast agent use means efficient discovery, few calls, bounded content, and understandable writes; mere availability of an MCP endpoint is insufficient.
-- Keep Deltos read-only. Migration of existing notes, reuse of source, production deployment, and retirement of old services require explicit scopes.
-- Do not bring back the shelved app-hosting platform, arbitrary app execution, per-app hosting architecture, or its old phase roadmap.
-
-## What this draft does not assume
-
-Notebooks and note-level permission overrides are confirmed. Further organization details, local-cache privacy policies, file quotas, and remaining retention details are unresolved. Initial hosting uses the default Cloudflare Worker domain; pricing decisions remain with the owner. Ownership transfers are deferred beyond v1. The old single-owner auth plan cannot decide those for the new app.
-
-## Supported clients
-
-Confirmed: Safari as an installed PWA is the primary target, with Chrome and Firefox on desktop supported. The primary mobile acceptance environment is the owner’s real iPhone 15 Plus running the installed PWA; test across additional sizes where possible. Native iOS remains a possible later direction. Exact OS/browser versions, additional size coverage, benchmark fixtures, and performance budgets remain Q10.
-
-## Success
-
-A returning user sees actual notes promptly on their phone. Ordinary typing stays responsive while the app reconnects or an agent works. Accepted saves are durable, pending edits are recoverable, and history makes mistakes reversible. An authenticated agent can save a normal-sized conversation in one write once its destination is known, then change a section without rewriting the whole note.
-
-Confirmed expected scale: hundreds to low thousands of notes per user. This is a performance workload target, not an account quota or hard note limit. Most notes are expected to contain a couple of pages of text. Longer notes must also be possible and usable, with explicit usability testing; this does not establish a maximum document size. Exact benchmark counts and note lengths, numeric performance budgets, remain to be established and measured; see Q10 and A01–A04.
+Remaining decisions and technical proofs are listed in [document 06](06-decisions-and-acceptance.md#remaining-decisions-and-engineering-contracts). Accepted saves must be durable and ordinary pending work recoverable, subject to explicit discard, revocation, and permanent-deletion policies.
