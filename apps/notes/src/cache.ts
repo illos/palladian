@@ -17,6 +17,10 @@ export interface NoteBody {
 export interface Draft extends NoteBody {
   updatedAt: number;
 }
+export interface ActivationFence {
+  epoch: number;
+  localEpoch: number;
+}
 export interface CacheFence {
   accountId: string;
   epoch: number;
@@ -34,6 +38,7 @@ class NotesDatabase extends Dexie {
     { accountId: string; epoch: number; blocked: boolean },
     string
   >;
+  privacy!: Table<{ key: string; epoch: number }, string>;
   constructor(name: string) {
     super(name);
     this.version(1).stores({
@@ -41,6 +46,7 @@ class NotesDatabase extends Dexie {
       bodies: "[accountId+id], accountId",
       drafts: "[accountId+id], accountId",
       accounts: "accountId",
+      privacy: "key",
     });
   }
 }
@@ -49,9 +55,11 @@ class NotesDatabase extends Dexie {
 export class NotesStore {
   private readonly db: NotesDatabase;
   private readonly epochs = new Map<string, number>();
+  private activationEpoch = 0;
   private readonly blocked = new Set<string>();
   private readonly listeners = new Set<(event: CacheEvent) => void>();
   private readonly channel: BroadcastChannel | null;
+  private readonly draftQueues = new Map<string, Promise<void>>();
   constructor(name = "palladian-notes-foundation") {
     this.db = new NotesDatabase(name);
     this.channel =
@@ -67,6 +75,7 @@ export class NotesStore {
           "accountId" in value &&
           typeof value.accountId === "string"
         ) {
+          this.activationEpoch++;
           this.blocked.add(value.accountId);
           this.epochs.set(value.accountId, this.epoch(value.accountId) + 1);
           this.notify({ accountId: value.accountId, invalidated: true });
@@ -122,26 +131,39 @@ export class NotesStore {
       ? body
       : undefined;
   }
-  async writeDraft(draft: Draft): Promise<void> {
+  writeDraft(draft: Draft): Promise<void> {
     const epoch = this.epoch(draft.accountId);
-    this.assertWritable(draft.accountId, epoch);
-    const persistedEpoch = await this.db.accounts.get(draft.accountId);
-    await this.db.transaction(
-      "rw",
-      this.db.drafts,
-      this.db.summaries,
-      this.db.accounts,
-      async () => {
-        await this.assertPersistent(
-          draft.accountId,
-          persistedEpoch?.epoch ?? 0,
-        );
+    const fence = this.captureFence(draft.accountId);
+    const key = JSON.stringify([draft.accountId, draft.id]);
+    const previous = this.draftQueues.get(key) ?? Promise.resolve();
+    const write = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const captured = await fence;
         this.assertWritable(draft.accountId, epoch);
-        await this.db.drafts.put(draft);
-        await this.db.summaries.put({ ...summary(draft), kind: "draft" });
-      },
-    );
-    this.notify();
+        await this.db.transaction(
+          "rw",
+          this.db.drafts,
+          this.db.summaries,
+          this.db.accounts,
+          async () => {
+            await this.assertPersistent(draft.accountId, captured.epoch);
+            this.assertWritable(draft.accountId, epoch);
+            await this.db.drafts.put(draft);
+            await this.db.summaries.put({ ...summary(draft), kind: "draft" });
+          },
+        );
+        this.notify();
+      });
+    // Observe fence rejection immediately even if an older write is queued.
+    void fence.catch(() => undefined);
+    this.draftQueues.set(key, write);
+    void write
+      .finally(() => {
+        if (this.draftQueues.get(key) === write) this.draftQueues.delete(key);
+      })
+      .catch(() => undefined);
+    return write;
   }
   async captureFence(accountId: string): Promise<CacheFence> {
     const account = await this.db.accounts.get(accountId);
@@ -182,6 +204,7 @@ export class NotesStore {
   }
   /** Fence writes immediately, then clear transactionally. Re-enable only on a new authorized login. */
   async clearAccount(accountId: string): Promise<void> {
+    this.activationEpoch++;
     this.blocked.add(accountId);
     this.epochs.set(accountId, this.epoch(accountId) + 1);
     this.notify({ accountId, invalidated: true });
@@ -192,7 +215,13 @@ export class NotesStore {
       this.db.bodies,
       this.db.drafts,
       this.db.accounts,
+      this.db.privacy,
       async () => {
+        const privacy = await this.db.privacy.get("activation");
+        await this.db.privacy.put({
+          key: "activation",
+          epoch: (privacy?.epoch ?? 0) + 1,
+        });
         const account = await this.db.accounts.get(accountId);
         await this.db.accounts.put({
           accountId,
@@ -214,15 +243,39 @@ export class NotesStore {
   invalidateAccount(accountId: string) {
     return this.clearAccount(accountId);
   }
-  async allowAccount(accountId: string) {
-    await this.db.transaction("rw", this.db.accounts, async () => {
-      const account = await this.db.accounts.get(accountId);
-      await this.db.accounts.put({
-        accountId,
-        epoch: (account?.epoch ?? 0) + 1,
-        blocked: false,
-      });
-    });
+  async captureActivationFence(): Promise<ActivationFence> {
+    const localEpoch = this.activationEpoch;
+    const privacy = await this.db.privacy.get("activation");
+    return { epoch: privacy?.epoch ?? 0, localEpoch };
+  }
+  async allowAccount(
+    accountId: string,
+    fence: ActivationFence,
+    isCurrent: () => boolean,
+  ) {
+    const assertCurrent = () => {
+      if (!isCurrent() || this.activationEpoch !== fence.localEpoch)
+        throw new Error("Session activation was superseded.");
+    };
+    assertCurrent();
+    await this.db.transaction(
+      "rw",
+      this.db.accounts,
+      this.db.privacy,
+      async () => {
+        const privacy = await this.db.privacy.get("activation");
+        const account = await this.db.accounts.get(accountId);
+        assertCurrent();
+        if ((privacy?.epoch ?? 0) !== fence.epoch)
+          throw new Error("Session activation was invalidated.");
+        await this.db.accounts.put({
+          accountId,
+          epoch: (account?.epoch ?? 0) + 1,
+          blocked: false,
+        });
+      },
+    );
+    assertCurrent();
     this.blocked.delete(accountId);
   }
   private async assertPersistent(accountId: string, epoch: number) {

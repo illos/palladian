@@ -2,7 +2,11 @@ import type { NotesStore } from "./cache";
 import { textDocument } from "./editor";
 /** Disposable synthetic records only. Caller must gate this module to development. */
 export async function seedFixture(store: NotesStore, accountId: string) {
-  await store.allowAccount(accountId);
+  await store.allowAccount(
+    accountId,
+    await store.captureActivationFence(),
+    () => true,
+  );
   const fence = await store.captureFence(accountId);
   await store.cacheAccepted(
     {
