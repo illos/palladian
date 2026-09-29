@@ -49,6 +49,8 @@ Confirmed: effective edit access permits moving a shared note to Trash and resto
 
 Only the owner can administer invitations, change member roles, or change public/private visibility. Enforce this in UI and MCP operations; an invited editor, human or agent, cannot escalate its own or another member's permissions. Agent authentication and any owner-authorized credential scope remain Q14; ordinary agent edit membership is insufficient for permission changes.
 
+Confirmed: trashed notes are unavailable through public links, including through public notebook listings. Public attachment access through a trashed note must not bypass that lifecycle check. Previously downloaded copies cannot be recalled by this server-side access change.
+
 Never derive identity from caller-supplied account IDs. Recheck write access at commit time, including claim expiry and offline branch submission. Search results must be scoped before returning excerpts. Private bytes follow explicit access rules. Listing revisions, reading historical content, and comparing versions require effective edit permission; read-only human and agent members and public visitors can access only current content. File links must not expose permanent credentials.
 
 Confirmed: the backend may read/process note content for search and authorized agent operations. V1 does not require end-to-end encryption that prevents server access to content. Every operation still enforces note/notebook access rules, including agent-specific permissions; this decision does not make notes public. Remaining local-cache privacy choices are Q13.
