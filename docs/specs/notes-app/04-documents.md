@@ -43,7 +43,15 @@ Local timestamps are caller-supplied provenance, not authorization evidence. Act
 
 Confirmed: uploaded images, PDFs, and other files are separate, unversioned objects. A note revision stores an object reference, not a copy of its bytes. If the same image remains attached through 400 note revisions, all 400 revisions refer to the same uploaded object; creating a revision does not upload or store the image again. Note restoration reuses that object identity, including restoring it from Trash when still available.
 
-Notes have version history; uploaded objects have only deletion and retention governed by Trash. An object's historical references do not create file versions or extend its Trash retention. This does not specify deduplication across separately submitted uploads. Multi-note reference handling and any future file-replacement operation remain to be defined.
+Notes have version history; uploaded objects have only deletion and retention governed by Trash. An object's historical references do not create file versions or extend its Trash retention. This does not specify deduplication across separately submitted uploads. Object ownership/access across different owners and any future file-replacement operation remain to be defined.
+
+Confirmed object lifecycle rules:
+
+- Count current references in active notes separately from historical references. Removing one reference keeps the object active while another active note still uses it; removing its last active reference moves it to Trash.
+- Trashing a note immediately trashes its attached objects unless another active note uses them. Historical references alone do not keep an object active.
+- Restoring a note/version that uses a still-trashed object restores that same object to active use. If the object was already permanently deleted, preserve its reference position and show an “attachment permanently deleted” placeholder.
+
+Proposed implementation: serialize or otherwise coordinate reference changes, note lifecycle changes, object restore, and purge decisions so concurrent actions cannot purge an object still in active use. Retry-safe operations must not reset Trash deadlines accidentally. Prove this behavior in G02/G05; no implementation is accepted yet.
 
 ## Online editing
 
@@ -82,8 +90,8 @@ Proposed:
 - Keep authorship and human/agent provenance. Current read access does not grant historical access; history requires effective edit permission as confirmed above.
 - Restore creates a new current revision referring to the restored source; it does not erase subsequent history.
 - A user can compare a version with its predecessor or the common base of two branches.
-- Confirmed: attachment objects have their own Trash lifecycle under the same configured retention policy. Restoring a note version that references a still-trashed object restores the object to active use. Historical references do not exempt object bytes from permanent deletion under that policy; this supersedes the earlier proposal to retain bytes for every historical reference. Retain the note's historical object references, without promising that purged bytes can be recovered. The user experience for missing objects and multi-note reference rules remains Q11.
-- Confirmed: Trash retention is user-configurable, defaulting to automatic permanent deletion after 30 days in Trash. Editors may trash and restore shared notes; only the note owner may manually delete them permanently. Automatic cleanup follows the note owner's retention setting, regardless of which collaborator trashes the note. Other Trash periods, object ownership/reference edge cases, note/object deletion cascades, and permanent-deletion cleanup remain Q11. Temporary collaboration steps may be compacted only if retained history remains reconstructable and recovery options are preserved; compaction cannot expire note history.
+- Confirmed: attachment objects have their own Trash lifecycle under the same configured retention policy. Restoring a note version that references a still-trashed object restores the object to active use. Historical references do not exempt object bytes from permanent deletion under that policy; this supersedes the earlier proposal to retain bytes for every historical reference. Retain the note's historical object references, without promising that purged bytes can be recovered. After permanent object deletion, a restored note shows an “attachment permanently deleted” placeholder; another active note's current reference keeps an object out of Trash.
+- Confirmed: Trash retention is user-configurable, defaulting to automatic permanent deletion after 30 days in Trash. Editors may trash and restore shared notes; only the note owner may manually delete them permanently. Automatic cleanup follows the note owner's retention setting, regardless of which collaborator trashes the note. Other Trash periods, object ownership across different owners, and permanent-deletion cleanup remain Q11. Temporary collaboration steps may be compacted only if retained history remains reconstructable and recovery options are preserved; compaction cannot expire note history.
 
 ## Later offline editing
 
