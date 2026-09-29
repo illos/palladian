@@ -123,6 +123,9 @@ importers:
       '@playwright/test':
         specifier: 1.63.0
         version: 1.63.0
+      '@types/bun':
+        specifier: 1.4.2
+        version: 1.4.2
       '@types/node':
         specifier: 26.4.0
         version: 26.4.0
@@ -189,6 +192,10 @@ importers:
       prosemirror-transform:
         specifier: 1.12.2
         version: 1.12.2
+    devDependencies:
+      '@types/node':
+        specifier: 26.4.0
+        version: 26.4.0
 
 packages:
 

@@ -8,3 +8,6 @@ playwright-report/
 test-results/
 *.log
 .worktrees/
+
+# Workspace symlinks and local browser evidence
+**/node_modules

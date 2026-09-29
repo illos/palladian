@@ -6,7 +6,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tools.json",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "test:browser": "playwright test --config playwright.config.ts"
   },
@@ -34,6 +34,7 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.1.1",
     "typescript": "7.0.2",
-    "vite": "8.2.2"
+    "vite": "8.2.2",
+    "@types/bun": "1.4.2"
   }
 }
