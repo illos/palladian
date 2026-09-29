@@ -43,11 +43,15 @@ G03 requires actual delivery through the selected sender domain and a complete r
 
 Confirmed: authorization must represent individual agents as members, not just a blanket provider label such as Codex or Claude. Both notes and notebooks have permission manifests; explicit note settings take precedence over notebook defaults. The agent identity and credential-linking representation remains an implementation design, with connection authentication covered by Q14.
 
+Confirmed: individual agents appear as potential collaborators in sharing controls. Notebook read/edit membership and note overrides determine their content access, with no parallel agent-specific permission system or connection-wide read-only default. Agent authentication identifies the collaborator; it does not itself grant private-note access.
+
+Confirmed: the owner can explicitly authorize a trusted agent to publish, change sharing, move notes, or permanently delete. Treat those authorized actions as delegated owner authority while retaining agent authorship. Ordinary read/edit membership remains insufficient. Record the delegation through the same ownership/permission authority rather than a second MCP-only content ACL; exact representation, operation selection, and revocation mechanics remain Q14. Earlier owner-only rules permit this explicit trusted-agent delegation for the named operations.
+
 Proposed: one server-owned authorization layer shared by editor operations, MCP, file access, search, history, and publication. Permission checks cover the effective note/notebook permissions, not just whether a caller is logged in. Notebook membership cannot bypass a more restrictive note override, including through listings, search excerpts, direct reads, files, or MCP.
 
 Confirmed: effective edit access permits moving a shared note to Trash and restoring it. Manual permanent deletion requires note ownership; read-only/public access permits none of these operations. Apply the same checks to UI and MCP requests; an agent's edit membership does not grant owner powers. Automatic retention cleanup remains a separate lifecycle operation, not an editor permission. The note owner's Trash retention setting governs shared notes, regardless of which collaborator moves them to Trash.
 
-Only the owner can administer invitations, change member roles, or change public/private visibility. Enforce this in UI and MCP operations; an invited editor, human or agent, cannot escalate its own or another member's permissions. Agent authentication and any owner-authorized credential scope remain Q14; ordinary agent edit membership is insufficient for permission changes.
+The owner, or an agent explicitly delegated the relevant owner action, can administer invitations, change member roles, or change public/private visibility. Enforce this in UI and MCP operations; an invited editor, human or agent, cannot escalate its own or another member's permissions. Agent authentication and the owner-delegation representation remain Q14; ordinary agent edit membership is insufficient for permission changes.
 
 Confirmed: trashed notes are unavailable through public links, including through public notebook listings. Public attachment access through a trashed note must not bypass that lifecycle check. Restoring a note makes its current public link available again only if effective visibility is public; previously invalidated URLs stay invalid. Public URL replacement requires owner authority in both UI and MCP; ordinary editor membership is insufficient. Previously downloaded copies cannot be recalled by this server-side access change.
 
@@ -57,7 +61,7 @@ Confirmed: stored note location is owner-only even when the note itself is share
 
 Never derive identity from caller-supplied account IDs. Recheck write access at commit time, including claim expiry and offline branch submission. Search results must be scoped before returning excerpts. Private bytes follow explicit access rules. Listing revisions, reading historical content, and comparing versions require effective edit permission; read-only human and agent members and public visitors can access only current content. File links must not expose permanent credentials.
 
-Confirmed: the backend may read/process note content for search and authorized agent operations. V1 does not require end-to-end encryption that prevents server access to content. Every operation still enforces note/notebook access rules, including agent-specific permissions; this decision does not make notes public. Remaining local-cache privacy choices are Q13.
+Confirmed: the backend may read/process note content for search and authorized agent operations. V1 does not require end-to-end encryption that prevents server access to content. Every operation still enforces note/notebook access rules, including the agent's collaborator membership and any explicit owner delegation; this decision does not make notes public. Remaining local-cache privacy choices are Q13.
 
 ## MCP foundation
 
@@ -126,6 +130,6 @@ Search/index latency and asynchronous processing must not make an acknowledged n
 
 ## Agent authentication and future sidebar
 
-Proposed: independently revocable scoped grants for each connection; support intended clients through tested authorization discovery and consent. PAT versus OAuth availability, exact scopes, rate limits, and trusted-client defaults are Q14. Do not assume Better Auth's OAuth packages are automatically compatible with the Convex adapter.
+Confirmed: agent content access is controlled by notebook/note sharing, not a separate connection permission layer. Proposed: independently revocable authentication credentials per connection, bound to the individual collaborator identity; supported authorization discovery/authentication remains an engineering gate. Removing notebook access must take effect without depending on a credential expiring. PAT versus OAuth availability, identity registration, owner-delegation representation, and rate limits remain Q14. Do not assume Better Auth's OAuth packages are automatically compatible with the Convex adapter.
 
 The future sidebar uses the same note operations, claims, and history. It adds conversation state and agent execution, not another persistence authority. Model providers, account credentials, billing, execution environment, and whether agent conversations are shared are Q12. Note contents are data; reading a note does not authorize instructions embedded within it.

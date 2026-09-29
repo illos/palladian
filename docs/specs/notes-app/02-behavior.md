@@ -116,6 +116,8 @@ Confirmed: reminders target v2 and are outside the first usable release. Deliver
 
 ## Agent collaboration
 
+Confirmed: agents appear in the collaborator picker and can be shared into notebooks or notes. Their ordinary content access follows the same notebook permissions and note overrides as humans; there is no separate agent-connection read-only/edit default. Owners can explicitly authorize trusted agents for owner actions such as publication, sharing administration, notebook moves, and permanent deletion. This is owner delegation, not a power implied by edit access.
+
 Confirmed: agents claim only the content needed for their work, expanding across multiple paragraphs when necessary without claiming unrelated paragraphs. Human editors can cancel an agent claim and resume editing; the agent must be alerted that its edit was interrupted. Authorized agents edit directly by default, with history supporting review, correction, and recovery instead of a mandatory approval queue.
 
 Confirmed: MCP exposes note history so an authorized editor agent can move backward and forward through revisions, inspect earlier content, compare changes, and restore content. This uses the same editor-only history permissions as the app.

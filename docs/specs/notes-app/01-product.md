@@ -40,6 +40,8 @@ Proposed first usable release: private notes, basic organization/search, history
 
 Confirmed: Deltos note import is a manual job run by an agent. Provide the ordinary MCP note-creation and attachment operations needed for that workflow; an automatic in-app migration wizard is not a v1 requirement. The actual import source/scope and timing remain to be assigned.
 
+Confirmed: individual agents appear as potential collaborators and receive access by being shared with through notebook permissions and explicit note overrides, just like other collaborators. Connecting an agent does not create a separate app-wide read-only/edit permission. The owner may explicitly delegate trusted-agent authority to publish, change sharing, move notes, or permanently delete; ordinary edit membership alone does not grant those owner actions. The delegation representation remains an engineering contract under Q14.
+
 ## Organization
 
 Confirmed: notebooks form a flat list and never nest inside other notebooks. Folders may be considered later as a separate organizational feature; they are not in the first release. Each note belongs to one notebook at a time. Collections are a separate classifier: saved queries that display matching notes programmatically using criteria such as search text, title, date, and location. Every user starts with an **All notes** collection, which includes notes they own and notes shared with them, and can create additional collections. A note can match multiple collections while remaining in one notebook. Collection results do not transfer ownership or override note/notebook permissions.
