@@ -1,0 +1,293 @@
+:root {
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  color: #2b302b;
+  background: #f6f5f0;
+  font-synthesis: none;
+  font-weight: 400;
+  font-size: 16px;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+button,
+input {
+  font: inherit;
+}
+button {
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+button:focus-visible,
+input:focus-visible,
+.ProseMirror:focus-visible {
+  outline: 2px solid #547763;
+  outline-offset: 3px;
+}
+.notes-app {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  min-height: 100dvh;
+}
+.library {
+  display: flex;
+  flex-direction: column;
+  background: #efeee7;
+  border-right: 1px solid #dcddd3;
+  padding: 28px 18px 16px;
+  max-height: 100dvh;
+}
+.library-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.wordmark {
+  font-family: Georgia, serif;
+  font-size: 24px;
+  letter-spacing: -0.7px;
+}
+.library-header button {
+  font-size: 28px;
+  width: 44px;
+  height: 44px;
+}
+.library h1 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 32px 10px 15px;
+  color: #596255;
+}
+.search input {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #dcddd3;
+  border-radius: 8px;
+  background: #f7f6f1;
+  min-height: 44px;
+}
+.note-list {
+  overflow: auto;
+  flex: 1;
+  margin-top: 16px;
+}
+.note-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 15px 12px;
+  border-radius: 7px;
+  margin-bottom: 5px;
+  min-height: 76px;
+}
+.note-row:hover {
+  background: #e7e8df;
+}
+.note-row.selected {
+  background: #dde6d9;
+}
+.note-row strong,
+.note-row span,
+.note-row small {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.note-row strong {
+  font-size: 15px;
+}
+.note-row span {
+  margin-top: 7px;
+  font-size: 13px;
+  color: #72796d;
+}
+.note-row small {
+  font-size: 11px;
+  color: #547763;
+  margin-top: 6px;
+}
+.library footer {
+  font-size: 12px;
+  color: #687263;
+  border-top: 1px solid #d9dccf;
+  padding: 10px 8px 0;
+}
+.library footer button {
+  padding: 8px 8px 8px 0;
+  min-height: 44px;
+  font-size: 12px;
+  text-decoration: underline;
+}
+.note-surface {
+  background: #fcfbf7;
+  min-width: 0;
+  max-height: 100dvh;
+  overflow: auto;
+}
+.foundation-banner {
+  font-size: 12px;
+  color: #697160;
+  border-bottom: 1px solid #e8e8de;
+  padding: 12px 24px;
+  background: #f5f5ed;
+}
+.welcome {
+  max-width: 600px;
+  margin: 14vh auto;
+  padding: 40px;
+}
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  font-size: 11px;
+  color: #78876b;
+}
+.welcome h2 {
+  font-family: Georgia, serif;
+  font-weight: 400;
+  font-size: 42px;
+  line-height: 1.15;
+  letter-spacing: -1px;
+}
+.welcome p {
+  line-height: 1.65;
+  color: #727969;
+}
+.welcome button {
+  margin-top: 22px;
+  background: #48634b;
+  color: white;
+  border-radius: 7px;
+  padding: 12px 22px;
+  min-height: 44px;
+}
+.note-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-height: 54px;
+  padding: 10px 36px;
+  color: #77816e;
+  font-size: 12px;
+}
+.back-button {
+  display: none;
+}
+.editor-host {
+  max-width: 850px;
+  margin: auto;
+  padding: 25px 56px 120px;
+}
+.ProseMirror {
+  outline: none;
+  line-height: 1.65;
+  min-height: 60vh;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.ProseMirror p {
+  margin: 0.65em 0;
+}
+.ProseMirror p:first-child,
+.ProseMirror h1 {
+  font-size: 34px;
+  font-family: Georgia, serif;
+  line-height: 1.3;
+  margin: 0 0 26px;
+}
+.ProseMirror blockquote {
+  margin-left: 0;
+  padding-left: 20px;
+  border-left: 3px solid #b7c7af;
+  color: #64705b;
+}
+.ProseMirror pre {
+  padding: 16px;
+  background: #efeee6;
+  border-radius: 5px;
+  overflow-x: auto;
+}
+.ProseMirror img {
+  max-width: 100%;
+}
+.error {
+  background: #fff0e4;
+  color: #8a492f;
+  padding: 14px 24px;
+  margin: 0;
+  font-size: 14px;
+}
+.empty-list {
+  padding: 12px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #76816f;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+@media (max-width: 700px) {
+  .notes-app {
+    display: block;
+  }
+  .library {
+    border: 0;
+    min-height: 100dvh;
+    padding-top: max(20px, env(safe-area-inset-top));
+  }
+  .note-surface {
+    display: none;
+  }
+  .has-note .library {
+    display: none;
+  }
+  .has-note .note-surface {
+    display: block;
+    min-height: 100dvh;
+  }
+  .back-button {
+    display: inline-block;
+    font-size: 14px;
+    min-height: 44px;
+  }
+  .note-toolbar {
+    padding: 4px 18px;
+    flex-wrap: wrap;
+    gap: 3px 18px;
+  }
+  .editor-host {
+    padding: 20px 24px 100px;
+  }
+  .foundation-banner {
+    padding-top: max(12px, env(safe-area-inset-top));
+  }
+  .ProseMirror p:first-child,
+  .ProseMirror h1 {
+    font-size: 30px;
+  }
+  .welcome {
+    padding: 24px;
+  }
+  .welcome h2 {
+    font-size: 34px;
+  }
+}
