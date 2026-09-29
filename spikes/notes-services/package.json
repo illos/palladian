@@ -1,0 +1,7 @@
+{
+  "name": "@palladian/notes-services-proof",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "convex dev", "typecheck": "tsc --noEmit -p convex/tsconfig.json", "prove": "node prove.mjs" },
+  "dependencies": { "@convex-dev/better-auth": "0.12.5", "better-auth": "1.6.30", "convex": "1.45.0" }
+}
