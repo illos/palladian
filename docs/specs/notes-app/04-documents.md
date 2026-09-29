@@ -75,7 +75,7 @@ Proposed:
 - Restore creates a new current revision referring to the restored source; it does not erase subsequent history.
 - A user can compare a version with its predecessor or the common base of two branches.
 - Attachments needed by retained revisions remain recoverable. Blob garbage collection must respect history and publication references.
-- Confirmed: Trash retention is user-configurable, defaulting to automatic permanent deletion after 30 days in Trash. Editors may trash and restore shared notes; only the note owner may manually delete them permanently. Automatic cleanup follows the retention policy. Other available periods, shared-note policy ownership, history/file retention, and compaction remain Q11. Long-term history and temporary collaboration steps can have different retention policies, but discarded steps must not silently destroy recovery options.
+- Confirmed: Trash retention is user-configurable, defaulting to automatic permanent deletion after 30 days in Trash. Editors may trash and restore shared notes; only the note owner may manually delete them permanently. Automatic cleanup follows the note owner's retention setting, regardless of which collaborator trashes the note. Other available periods, history/file retention, and compaction remain Q11. Long-term history and temporary collaboration steps can have different retention policies, but discarded steps must not silently destroy recovery options.
 
 ## Later offline editing
 
