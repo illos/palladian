@@ -18,7 +18,9 @@ Proposed representation: a collection stores its user association, name, and a v
 
 These are conceptual records, not a finalized database schema.
 
-Confirmed: notes created in a notebook belong to the notebook owner. Record the creating user or agent separately as authorship/provenance; do not assign ownership from the actor who submits creation. Ownership transfer and cross-owner notebook moves remain Q06.
+Confirmed: notes created in a notebook belong to the notebook owner. Record the creating user or agent separately as authorship/provenance; do not assign ownership from the actor who submits creation. Only the owner may move a note between notebooks, and both notebooks must have that same owner in v1. Preserve the note ID, history, object references, and explicit note permission overrides; inherited permissions resolve against the destination notebook. Ownership transfer and cross-owner moves are deferred. Warn before a move if effective collaborator access will be lost.
+
+Proposed: validate ownership and destination access at commit time, and update membership plus permission-derived projections consistently. Compute access-loss warnings from the effective source and destination policies, including note overrides; do not silently turn inherited source access into explicit note grants. Handle changes between preview and commit without applying a stale access-impact preview.
 
 | Record                  | Essential meaning                                                                                                                                                    |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

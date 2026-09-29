@@ -19,7 +19,7 @@ The app must avoid Deltos's failure mode: locally available notes hidden behind 
 
 ## Confirmed feature direction
 
-The first usable release is for **the owner plus invited collaborators** (confirmed during specification drafting). Public signup is outside the initial scope. Notebooks are libraries of notes, private by default. Each notebook and note has a permissions manifest: private, private with invited members, or public to anyone with the URL. Members may be users or individual AI agents, each with read-only or edit access. Public URL access is read-only and shows the latest saved content automatically; editing requires invited edit access. Explicit note permissions override notebook defaults. Only the owner can invite members or change sharing permissions. Notes created in a notebook belong to its owner, including notes created by invited users or agents; history preserves creator attribution. Remaining ownership-transfer and link details are Q06.
+The first usable release is for **the owner plus invited collaborators** (confirmed during specification drafting). Public signup is outside the initial scope. Notebooks are libraries of notes, private by default. Each notebook and note has a permissions manifest: private, private with invited members, or public to anyone with the URL. Members may be users or individual AI agents, each with read-only or edit access. Public URL access is read-only and shows the latest saved content automatically; editing requires invited edit access. Explicit note permissions override notebook defaults. Only the owner can invite members or change sharing permissions. Notes created in a notebook belong to its owner, including notes created by invited users or agents; history preserves creator attribution. V1 notebook moves are owner-only and limited to notebooks with the same owner; ownership transfers are deferred. Destination permissions apply unless explicit note-level overrides exist, which remain intact. Warn before a move when collaborators will lose access. Remaining link details are Q06.
 
 | Area            | Desired product behavior                                                           | Release commitment                                             |
 | --------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------- |
@@ -68,7 +68,7 @@ Confirmed: the backend may process note content for search and authorized agent 
 
 ## What this draft does not assume
 
-Notebooks and note-level permission overrides are confirmed. Further organization details, ownership transfer, local-cache privacy policies, file quotas, retention, and production domain are unresolved. The old single-owner auth plan cannot decide those for the new app.
+Notebooks and note-level permission overrides are confirmed. Further organization details, local-cache privacy policies, file quotas, remaining retention details, and production domain are unresolved. Ownership transfers are deferred beyond v1. The old single-owner auth plan cannot decide those for the new app.
 
 ## Supported clients
 
