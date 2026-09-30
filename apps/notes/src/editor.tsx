@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Schema } from "prosemirror-model";
 import { schema as basicSchema } from "prosemirror-schema-basic";
 import {
@@ -34,11 +34,108 @@ export { emptyDocument, textDocument } from "./document";
 
 type Tool = {
   label: string;
-  glyph?: string;
+  glyph?: ReactNode;
   command: Command;
   active?: (state: EditorState) => boolean;
 };
 type ToolGroup = "Style" | "Format" | "Lists";
+
+// Geometry from the read-only Deltos icon reference; only supported editor tools.
+function EditorGlyph({
+  name,
+}: {
+  name: "undo" | "redo" | "code" | "bullet-list" | "numbered-list" | "quote";
+}) {
+  const numberedStyle = {
+    fontSize: "7px",
+    fontFamily: "'IBM Plex Mono', monospace",
+    fill: "currentColor",
+    stroke: "none",
+  } as const;
+  return (
+    <svg
+      width={20}
+      height={20}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={
+        name === "undo" || name === "redo" || name === "code" ? 1.7 : 1.6
+      }
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {name === "undo" ? (
+        <>
+          <path d="M4 10h10a5 5 0 0 1 0 10h-4" />
+          <path d="M8 6l-4 4 4 4" />
+        </>
+      ) : name === "redo" ? (
+        <>
+          <path d="M20 10H10a5 5 0 0 0 0 10h4" />
+          <path d="M16 6l4 4-4 4" />
+        </>
+      ) : name === "code" ? (
+        <>
+          <path d="M9 8l-4 4 4 4" />
+          <path d="M15 8l4 4-4 4" />
+        </>
+      ) : name === "quote" ? (
+        <>
+          <path d="M7 7H4v4c0 2 1 3 3 3" />
+          <path d="M16 7h-3v4c0 2 1 3 3 3" />
+        </>
+      ) : (
+        <>
+          <line x1="9" y1="6.5" x2="20" y2="6.5" />
+          <line x1="9" y1="12" x2="20" y2="12" />
+          <line x1="9" y1="17.5" x2="20" y2="17.5" />
+          {name === "bullet-list" ? (
+            <>
+              <circle
+                cx="4.5"
+                cy="6.5"
+                r="1.4"
+                fill="currentColor"
+                stroke="none"
+              />
+              <circle
+                cx="4.5"
+                cy="12"
+                r="1.4"
+                fill="currentColor"
+                stroke="none"
+              />
+              <circle
+                cx="4.5"
+                cy="17.5"
+                r="1.4"
+                fill="currentColor"
+                stroke="none"
+              />
+            </>
+          ) : (
+            <>
+              <text x="2" y="9" style={numberedStyle}>
+                1
+              </text>
+              <text x="2.6" y="14.4" style={numberedStyle}>
+                2
+              </text>
+              <text x="2.4" y="20" style={numberedStyle}>
+                3
+              </text>
+            </>
+          )}
+        </>
+      )}
+    </svg>
+  );
+}
+const boldGlyph = <strong style={{ fontWeight: 600 }}>B</strong>;
+const italicGlyph = <em style={{ fontFamily: "Georgia, serif" }}>I</em>;
+
 function inNode(state: EditorState, name: string) {
   for (let depth = state.selection.$from.depth; depth > 0; depth--) {
     if (state.selection.$from.node(depth).type.name === name) return true;
@@ -63,7 +160,7 @@ function blockStyle(label: string, type: string, level?: number): Tool {
       (!level || state.selection.$from.parent.attrs.level === level),
   };
 }
-function listTool(label: string, type: string, glyph: string): Tool {
+function listTool(label: string, type: string, glyph: ReactNode): Tool {
   return {
     label,
     glyph,
@@ -85,29 +182,37 @@ const toolGroups: Record<ToolGroup, Tool[]> = {
   Format: [
     {
       label: "Bold",
-      glyph: "B",
+      glyph: boldGlyph,
       command: toggleMark(notesSchema.marks.strong!),
       active: (state) => markActive(state, "strong"),
     },
     {
       label: "Italic",
-      glyph: "I",
+      glyph: italicGlyph,
       command: toggleMark(notesSchema.marks.em!),
       active: (state) => markActive(state, "em"),
     },
     {
       label: "Inline code",
-      glyph: "</>",
+      glyph: <EditorGlyph name="code" />,
       command: toggleMark(notesSchema.marks.code!),
       active: (state) => markActive(state, "code"),
     },
   ],
   Lists: [
-    listTool("Bulleted list", "bullet_list", "•"),
-    listTool("Numbered list", "ordered_list", "1."),
+    listTool(
+      "Bulleted list",
+      "bullet_list",
+      <EditorGlyph name="bullet-list" />,
+    ),
+    listTool(
+      "Numbered list",
+      "ordered_list",
+      <EditorGlyph name="numbered-list" />,
+    ),
     {
       label: "Quote",
-      glyph: "❞",
+      glyph: <EditorGlyph name="quote" />,
       command: (state, dispatch, view) =>
         inNode(state, "blockquote")
           ? lift(state, dispatch, view)
@@ -117,8 +222,8 @@ const toolGroups: Record<ToolGroup, Tool[]> = {
   ],
 };
 const historyTools: Tool[] = [
-  { label: "Undo", glyph: "↶", command: undo },
-  { label: "Redo", glyph: "↷", command: redo },
+  { label: "Undo", glyph: <EditorGlyph name="undo" />, command: undo },
+  { label: "Redo", glyph: <EditorGlyph name="redo" />, command: redo },
 ];
 
 export function NoteEditor({
@@ -296,7 +401,13 @@ export function NoteEditor({
                 setMobileGroup((current) => (current === group ? null : group))
               }
             >
-              {group === "Style" ? "Aa" : group === "Format" ? "BI" : "☷"}
+              {group === "Style" ? (
+                "Aa"
+              ) : group === "Format" ? (
+                boldGlyph
+              ) : (
+                <EditorGlyph name="bullet-list" />
+              )}
               <span className="mobile-tool-label">{group}</span>
             </button>
           ))}
