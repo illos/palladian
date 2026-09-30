@@ -1,0 +1,229 @@
+/* ── Appearance picker (Lane 5 → hifi preview-card redesign) ──────────────────────────────────────────
+   Palette & Mode render as little app-screen PREVIEW CARDS; Type as per-typeface pills. Selected = accent
+   RING (cards) / soft --sel fill (pills) — the earlier --ink inversion was dropped as too jarring, so a
+   selected card NEVER tints its background or recolors its preview internals. Preview hexes are intentional
+   literals (previews of OTHER palettes / of real light-vs-dark), not the active theme — do not tokenize. */
+.appearance {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+.appearance__group {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.appearance__group-label {
+  /* mono eyebrow — invariant: Plex Mono, uppercase, tracked, --faint */
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* ── shared card shell (palette + mode) ── */
+.appearance__cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.appearance__card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 9px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--paper);
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+/* Selected: accent ring ONLY (preview internals stay intact) + label goes --ink / 600. */
+.appearance__card.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.appearance__card.is-active .appearance__card-label {
+  color: var(--ink);
+  font-weight: 600;
+}
+.appearance__card-foot {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-left: 1px;
+}
+.appearance__card-label {
+  font-family: var(--ff);
+  font-size: 13px;
+  color: var(--secondary);
+  font-weight: 500;
+  padding-left: 1px;
+}
+.appearance__card-foot .appearance__card-label {
+  padding-left: 0;
+}
+
+/* ── palette preview window (118×62): nav strip + content area, all in THAT palette's own light hex ──
+   A per-palette CSS var map keyed on data-palette feeds the preview internals — a true preview of that
+   palette regardless of the active theme (deliberately literal, like a swatch chip). */
+.appearance__card--palette[data-palette="bone"] {
+  --pv-nav: #eae4d8;
+  --pv-paper: #faf7f0;
+  --pv-ink: #25201a;
+  --pv-muted: #c9bea8;
+  --pv-accent: #a8662f;
+  --pv-border: #e0d8c8;
+}
+.appearance__card--palette[data-palette="graphite"] {
+  --pv-nav: #f0f1f3;
+  --pv-paper: #ffffff;
+  --pv-ink: #1a1c1f;
+  --pv-muted: #c3c7cd;
+  --pv-accent: #3b5bdb;
+  --pv-border: #e5e7eb;
+}
+.appearance__card--palette[data-palette="manila"] {
+  --pv-nav: #e8e6dd;
+  --pv-paper: #f8f7f0;
+  --pv-ink: #2b2722;
+  --pv-muted: #cac2b0;
+  --pv-accent: #9e3b2e;
+  --pv-border: #dfdace;
+}
+.appearance__card--palette[data-palette="ember"] {
+  --pv-nav: #f2f2f4;
+  --pv-paper: #ffffff;
+  --pv-ink: #17171a;
+  --pv-muted: #c6c6cc;
+  --pv-accent: #ee431c;
+  --pv-border: #e7e7eb;
+}
+.appearance__preview {
+  width: 118px;
+  height: 62px;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  border: 1px solid var(--pv-border);
+}
+.appearance__preview-nav {
+  width: 24px;
+  background: var(--pv-nav);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 5px;
+}
+.appearance__preview-bar {
+  width: 8px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--pv-muted);
+}
+.appearance__preview-bar--accent {
+  width: 11px;
+  background: var(--pv-accent);
+}
+.appearance__preview-content {
+  flex: 1;
+  background: var(--pv-paper);
+  padding: 8px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.appearance__preview-title {
+  width: 64%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--pv-ink);
+}
+.appearance__preview-line {
+  width: 90%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--pv-muted);
+}
+.appearance__preview-pill {
+  width: 44px;
+  height: 9px;
+  border-radius: 4px;
+  background: var(--pv-accent);
+  margin-top: 2px;
+}
+.appearance__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--pv-accent);
+}
+
+/* ── mode preview screen (98×58) — theme-agnostic, real light vs. dark (hardcoded literals) ── */
+.appearance__screen {
+  position: relative;
+  width: 98px;
+  height: 58px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.appearance__screen--light {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+}
+.appearance__screen--dark {
+  background: #202225;
+  border: 1px solid #2c2f33;
+}
+.appearance__screen--system {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+}
+/* System = a dark overlay clipped to the bottom-right triangle over the light base → a diagonal 50/50 split. */
+.appearance__scr-split {
+  position: absolute;
+  inset: 0;
+  background: #202225;
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+}
+.appearance__scr-bar {
+  position: absolute;
+  border-radius: 3px;
+}
+
+/* ── type · voice pills — each label in its own typeface (font-family set inline for the specimen) ── */
+.appearance__pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+.appearance__pill {
+  padding: 11px 17px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--paper);
+  color: var(--body);
+  line-height: 1;
+  font-weight: 400;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+/* Selected pill: soft --sel fill + accent border + 1px inset accent ring, text --ink / 600. */
+.appearance__pill.is-active {
+  background: var(--sel);
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.appearance__footnote {
+  font-family: var(--ff);
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--secondary);
+  margin: 22px 0 0;
+}
