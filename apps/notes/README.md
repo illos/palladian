@@ -2,6 +2,8 @@
 
 A runnable cached notes surface and recovery journal, with isolated real-service auth/sync proofs. This is not the complete v1: existing cached notes are read-only, and new drafts are local until the server editor path is integrated.
 
+The supported surfaces follow Deltos's layout, typography, and theme tokens with Palladian branding. Settings → Appearance offers four palettes, four type families, and light/dark/system mode. Appearance is restored before first paint without an authentication request; opening Settings preserves the current draft editor. See the [visual implementation evidence](../../docs/reviews/notes-design-implementation.md) and [independent visual review](../../docs/reviews/notes-design-astra-review.md).
+
 From the repository root, install with the pinned host Node/pnpm baseline, then:
 
 ```sh
