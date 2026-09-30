@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import type { Plugin } from "vite";
 /** Only build-owned public assets enter the shell cache; never API/auth responses. */
 export function offlineShell(): Plugin {
@@ -15,6 +15,8 @@ export function offlineShell(): Plugin {
           "/",
           "/index.html",
           "/manifest.webmanifest",
+          "/theme-bootstrap.js",
+          ...readdirSync(new URL("./public/fonts/", import.meta.url)).filter(file => file.endsWith(".woff2")).sort().map(file => "/fonts/" + file),
           ...files.map((file) => "/" + file),
         ]),
       ];
@@ -22,6 +24,7 @@ export function offlineShell(): Plugin {
       digest.update(
         readFileSync(new URL("./public/manifest.webmanifest", import.meta.url)),
       );
+      for (const path of assets.filter(path => path.startsWith("/fonts/") || path === "/theme-bootstrap.js")) digest.update(path).update(readFileSync(new URL("./public" + path, import.meta.url)));
       for (const file of files.sort()) {
         const item = bundle[file];
         if (!item) throw new Error("Build asset missing");
