@@ -6,6 +6,20 @@ export function offlineShell(): Plugin {
   return {
     name: "notes-offline-shell",
     enforce: "post",
+    transformIndexHtml: {
+      order: "pre",
+      handler(html) {
+        return html.replace(
+          '<script id="notes-theme-bootstrap"></script>',
+          '<script id="notes-theme-bootstrap">' +
+            readFileSync(
+              new URL("./public/theme-bootstrap.js", import.meta.url),
+              "utf8",
+            ) +
+            "</script>",
+        );
+      },
+    },
     generateBundle(_options, bundle) {
       const files = Object.keys(bundle).filter(
         (file) => !file.endsWith(".map"),
@@ -16,7 +30,10 @@ export function offlineShell(): Plugin {
           "/index.html",
           "/manifest.webmanifest",
           "/theme-bootstrap.js",
-          ...readdirSync(new URL("./public/fonts/", import.meta.url)).filter(file => file.endsWith(".woff2")).sort().map(file => "/fonts/" + file),
+          ...readdirSync(new URL("./public/fonts/", import.meta.url))
+            .filter((file) => file.endsWith(".woff2"))
+            .sort()
+            .map((file) => "/fonts/" + file),
           ...files.map((file) => "/" + file),
         ]),
       ];
@@ -24,7 +41,12 @@ export function offlineShell(): Plugin {
       digest.update(
         readFileSync(new URL("./public/manifest.webmanifest", import.meta.url)),
       );
-      for (const path of assets.filter(path => path.startsWith("/fonts/") || path === "/theme-bootstrap.js")) digest.update(path).update(readFileSync(new URL("./public" + path, import.meta.url)));
+      for (const path of assets.filter(
+        (path) => path.startsWith("/fonts/") || path === "/theme-bootstrap.js",
+      ))
+        digest
+          .update(path)
+          .update(readFileSync(new URL("./public" + path, import.meta.url)));
       for (const file of files.sort()) {
         const item = bundle[file];
         if (!item) throw new Error("Build asset missing");

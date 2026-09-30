@@ -228,10 +228,12 @@ const historyTools: Tool[] = [
 
 export function NoteEditor({
   document,
+  editedLabel,
   editable,
   onChange,
 }: {
   document: string;
+  editedLabel?: string | undefined;
   editable: boolean;
   onChange: (document: string, text: string) => void;
 }) {
@@ -372,7 +374,10 @@ export function NoteEditor({
           {historyTools.map(renderTool)}
         </div>
       </div>
-      <div ref={host} className="editor-host" />
+      <div className="editor-host">
+        {editedLabel && <p className="edited-date">{editedLabel}</p>}
+        <div ref={host} />
+      </div>
       <div
         className="mobile-editor-tools"
         role="toolbar"

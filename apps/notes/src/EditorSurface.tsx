@@ -5,11 +5,13 @@ import type { NoteEditor } from "./editor";
 let editorModule: Promise<typeof import("./editor")> | undefined;
 export function EditorSurface({
   document,
+  editedLabel,
   text,
   editable,
   onChange,
 }: {
   document: string;
+  editedLabel?: string;
   text: string;
   editable: boolean;
   onChange: (document: string, text: string) => void;
@@ -83,12 +85,14 @@ export function EditorSurface({
       )}
       {Editor ? (
         <Editor
+          editedLabel={editedLabel}
           document={latestDocument.current}
           editable={editable}
           onChange={onChange}
         />
       ) : plainEditable ? (
         <div className="editor-host">
+          {editedLabel && <p className="edited-date">{editedLabel}</p>}
           <textarea
             className="draft-fallback"
             aria-label="Note content"
@@ -103,6 +107,7 @@ export function EditorSurface({
         </div>
       ) : (
         <div className="editor-host">
+          {editedLabel && <p className="edited-date">{editedLabel}</p>}
           <div
             className="cached-text"
             role="textbox"

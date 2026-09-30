@@ -2,7 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 export default defineConfig({
   testDir: "../../tests/browser",
-  testMatch: "notes-foundation.spec.ts",
+  testMatch: ["notes-foundation.spec.ts", "notes-design.spec.ts"],
   fullyParallel: true,
   reporter: "list",
   use: { baseURL: "http://localhost:5178", trace: "off" },

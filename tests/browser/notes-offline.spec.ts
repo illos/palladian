@@ -133,9 +133,9 @@ for (const librarySize of [1, 2000])
         (path) =>
           path === "/" ||
           path === "/index.html" ||
-            path === "/manifest.webmanifest" ||
-            path === "/theme-bootstrap.js" ||
-            path.startsWith("/fonts/") ||
+          path === "/manifest.webmanifest" ||
+          path === "/theme-bootstrap.js" ||
+          path.startsWith("/fonts/") ||
           path.startsWith("/assets/"),
       ),
     ).toBe(true);

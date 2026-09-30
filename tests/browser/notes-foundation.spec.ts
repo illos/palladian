@@ -94,7 +94,10 @@ test("same-account retry preserves the draft and subsequent save feedback", asyn
         window as unknown as { __notesHarness: { session: { retry(): void } } }
       ).__notesHarness.session.retry(),
     );
-  } else await page.getByRole("button", { name: "Retry connection" }).click();
+  } else {
+    await page.locator(".connection-footer summary").click();
+    await page.getByRole("button", { name: "Retry connection" }).click();
+  }
   await expect(editor).toContainText("Keep this draft");
   await editor.press("End");
   await editor.pressSequentially(" after retry");
@@ -347,7 +350,7 @@ test("another tab's revocation removes visible cached content", async ({
 
 test("cached text and draft typing do not wait for the rich editor chunk", async ({
   page,
-}) => {
+}, testInfo) => {
   await page.route("**/src/editor.tsx*", (route) => route.abort("failed"));
   await seed(page);
   await page.getByRole("button", { name: /Welcome to your notes/ }).click();
@@ -356,6 +359,8 @@ test("cached text and draft typing do not wait for the rich editor chunk", async
   ).toContainText("Opening it does not need a session token");
   const back = page.getByRole("button", { name: "‹ All notes" });
   if (await back.isVisible()) await back.click();
+  if (testInfo.project.name.includes("mobile"))
+    await page.getByRole("button", { name: "All notes", exact: true }).click();
   await page
     .getByRole("button", { name: "New note", exact: true })
     .first()
