@@ -1,10 +1,20 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Schema } from "prosemirror-model";
 import { schema as basicSchema } from "prosemirror-schema-basic";
-import { addListNodes } from "prosemirror-schema-list";
-import { EditorState } from "prosemirror-state";
+import {
+  addListNodes,
+  liftListItem,
+  wrapInList,
+} from "prosemirror-schema-list";
+import { EditorState, type Command } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
-import { baseKeymap, setBlockType, toggleMark } from "prosemirror-commands";
+import {
+  baseKeymap,
+  lift,
+  setBlockType,
+  toggleMark,
+  wrapIn,
+} from "prosemirror-commands";
 import { history, undo, redo } from "prosemirror-history";
 import { keymap } from "prosemirror-keymap";
 import { inputRules, textblockTypeInputRule } from "prosemirror-inputrules";
@@ -21,6 +31,96 @@ export function validateDocument(document: string) {
   return node;
 }
 export { emptyDocument, textDocument } from "./document";
+
+type Tool = {
+  label: string;
+  glyph?: string;
+  command: Command;
+  active?: (state: EditorState) => boolean;
+};
+type ToolGroup = "Style" | "Format" | "Lists";
+function inNode(state: EditorState, name: string) {
+  for (let depth = state.selection.$from.depth; depth > 0; depth--) {
+    if (state.selection.$from.node(depth).type.name === name) return true;
+  }
+  return false;
+}
+function markActive(state: EditorState, name: string) {
+  const mark = notesSchema.marks[name]!;
+  return state.selection.empty
+    ? !!mark.isInSet(state.storedMarks ?? state.selection.$from.marks())
+    : state.doc.rangeHasMark(state.selection.from, state.selection.to, mark);
+}
+function blockStyle(label: string, type: string, level?: number): Tool {
+  return {
+    label,
+    command: setBlockType(
+      notesSchema.nodes[type]!,
+      level ? { level } : undefined,
+    ),
+    active: (state) =>
+      state.selection.$from.parent.type.name === type &&
+      (!level || state.selection.$from.parent.attrs.level === level),
+  };
+}
+function listTool(label: string, type: string, glyph: string): Tool {
+  return {
+    label,
+    glyph,
+    command: (state, dispatch, view) =>
+      inNode(state, type)
+        ? liftListItem(notesSchema.nodes.list_item!)(state, dispatch, view)
+        : wrapInList(notesSchema.nodes[type]!)(state, dispatch, view),
+    active: (state) => inNode(state, type),
+  };
+}
+const toolGroups: Record<ToolGroup, Tool[]> = {
+  Style: [
+    blockStyle("Title", "heading", 1),
+    blockStyle("Heading", "heading", 2),
+    blockStyle("Subhead", "heading", 3),
+    blockStyle("Body", "paragraph"),
+    blockStyle("Mono", "code_block"),
+  ],
+  Format: [
+    {
+      label: "Bold",
+      glyph: "B",
+      command: toggleMark(notesSchema.marks.strong!),
+      active: (state) => markActive(state, "strong"),
+    },
+    {
+      label: "Italic",
+      glyph: "I",
+      command: toggleMark(notesSchema.marks.em!),
+      active: (state) => markActive(state, "em"),
+    },
+    {
+      label: "Inline code",
+      glyph: "</>",
+      command: toggleMark(notesSchema.marks.code!),
+      active: (state) => markActive(state, "code"),
+    },
+  ],
+  Lists: [
+    listTool("Bulleted list", "bullet_list", "•"),
+    listTool("Numbered list", "ordered_list", "1."),
+    {
+      label: "Quote",
+      glyph: "❞",
+      command: (state, dispatch, view) =>
+        inNode(state, "blockquote")
+          ? lift(state, dispatch, view)
+          : wrapIn(notesSchema.nodes.blockquote!)(state, dispatch, view),
+      active: (state) => inNode(state, "blockquote"),
+    },
+  ],
+};
+const historyTools: Tool[] = [
+  { label: "Undo", glyph: "↶", command: undo },
+  { label: "Redo", glyph: "↷", command: redo },
+];
+
 export function NoteEditor({
   document,
   editable,
@@ -30,6 +130,8 @@ export function NoteEditor({
   editable: boolean;
   onChange: (document: string, text: string) => void;
 }) {
+  const [toolbarState, setToolbarState] = useState<EditorState | null>(null);
+  const [mobileGroup, setMobileGroup] = useState<ToolGroup | null>(null);
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const callback = useRef(onChange);
@@ -95,6 +197,7 @@ export function NoteEditor({
       },
       dispatchTransaction(transaction) {
         editor.updateState(editor.state.apply(transaction));
+        setToolbarState(editor.state);
         if (transaction.docChanged)
           callback.current(
             JSON.stringify(editor.state.doc.toJSON()),
@@ -107,6 +210,7 @@ export function NoteEditor({
       },
     });
     view.current = editor;
+    setToolbarState(editor.state);
     return () => {
       editor.destroy();
       view.current = null;
@@ -116,5 +220,95 @@ export function NoteEditor({
   useEffect(() => {
     view.current?.setProps({ editable: () => editable });
   }, [editable]);
-  return <div ref={host} className="editor-host" />;
+  const runTool = (tool: Tool) => {
+    const editor = view.current;
+    if (!editable || !editor || !tool.command(editor.state)) return;
+    tool.command(editor.state, editor.dispatch, editor);
+    editor.focus();
+  };
+  const renderTool = (tool: Tool) => {
+    const enabled =
+      editable && toolbarState !== null && tool.command(toolbarState);
+    const active = toolbarState !== null && !!tool.active?.(toolbarState);
+    return (
+      <button
+        key={tool.label}
+        type="button"
+        className={`editor-tool ${active ? "is-active" : ""}`}
+        aria-label={tool.label}
+        title={tool.label}
+        aria-pressed={tool.active ? active : undefined}
+        disabled={!enabled}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => runTool(tool)}
+      >
+        <span aria-hidden={!!tool.glyph}>{tool.glyph ?? tool.label}</span>
+      </button>
+    );
+  };
+  return (
+    <>
+      <div
+        className="formatting-toolbar"
+        role="toolbar"
+        aria-label="Note formatting"
+      >
+        {(Object.keys(toolGroups) as ToolGroup[]).map((group) => (
+          <div
+            className="editor-tool-group"
+            key={group}
+            role="group"
+            aria-label={group}
+          >
+            {toolGroups[group].map(renderTool)}
+          </div>
+        ))}
+        <div className="editor-history" role="group" aria-label="Edit history">
+          {historyTools.map(renderTool)}
+        </div>
+      </div>
+      <div ref={host} className="editor-host" />
+      <div
+        className="mobile-editor-tools"
+        role="toolbar"
+        aria-label="Mobile note formatting"
+      >
+        {mobileGroup && (
+          <div
+            className="mobile-tool-subrow"
+            role="group"
+            aria-label={mobileGroup}
+          >
+            {toolGroups[mobileGroup].map(renderTool)}
+          </div>
+        )}
+        <div className="mobile-tool-groups">
+          {(Object.keys(toolGroups) as ToolGroup[]).map((group) => (
+            <button
+              key={group}
+              type="button"
+              className={`editor-tool-group-toggle ${mobileGroup === group ? "is-active" : ""}`}
+              aria-label={`${group} tools`}
+              aria-expanded={mobileGroup === group}
+              disabled={!editable}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() =>
+                setMobileGroup((current) => (current === group ? null : group))
+              }
+            >
+              {group === "Style" ? "Aa" : group === "Format" ? "BI" : "☷"}
+              <span className="mobile-tool-label">{group}</span>
+            </button>
+          ))}
+          <div
+            className="editor-history"
+            role="group"
+            aria-label="Edit history"
+          >
+            {historyTools.map(renderTool)}
+          </div>
+        </div>
+      </div>
+    </>
+  );
 }
