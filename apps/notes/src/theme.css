@@ -1,0 +1,519 @@
+/* Exact live Deltos palette/type tokens; copied read-only 2026-09-30.
+   Palladian fresh-device default is Graphite × Sans × light. */
+/* ---- IBM Plex Sans (default voice) — precached ---- */
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/ibm-plex-sans-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/ibm-plex-sans-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/ibm-plex-sans-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/ibm-plex-sans-700.woff2") format("woff2");
+}
+
+/* ---- IBM Plex Mono (metadata — ALWAYS) — precached ---- */
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/ibm-plex-mono-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/ibm-plex-mono-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/ibm-plex-mono-600.woff2") format("woff2");
+}
+
+/* ---- Newsreader δ-wordmark subset (invariant — ALWAYS loaded, brand glyph) ----
+   unicode-range scopes this face to just δ, so it never competes with the FULL Newsreader faces that
+   load lazily with the Serif voice (src/styles/fonts/newsreader.css). The browser picks this subset for
+   δ and the lazy full faces for everything else — so the brand δ is Newsreader serif under EVERY voice.
+   (Subset provenance: Google Fonts greek subset of Newsreader 600, 5.5KB — within the δ-budget; the box
+   lacks pip/fonttools + Google's literal text-subset endpoint 400s on server fetch, so the greek subset
+   is shipped scoped to δ. See public/fonts/README.md.) */
+@font-face {
+  font-family: "Newsreader";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/newsreader-delta.woff2") format("woff2");
+  unicode-range: U+03B4;
+}
+
+/* DEFAULT voice fallback vars so text renders correctly before [data-voice] is applied (mirrors Sans). */
+:root {
+  --mono:
+    "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace; /* metadata — invariant */
+  --ff: "IBM Plex Sans", system-ui, sans-serif;
+  --h1: 33px;
+  --h1w: 700;
+  --h2: 19px;
+  --note: 16.5px;
+  --line: 1.62;
+  --lt: 14.5px;
+  --ltw: 600;
+  --nav-item: 14.5px;
+  --nav-itemw: 500;
+  --quote: 16.5px;
+  --list-note: 14.5px;
+  /* Glyph colour for content ON var(--accent) (checklist check, primary-button text). DEFAULT white,
+     which clears WCAG 3:1 on 6 of the 8 palette×mode accents; the bone-dark + ember-dark accents are
+     light enough that white drops below 3:1, so those combos override --on-accent to a near-black (a11y
+     #64). Variabilized like --sync — not a brand constant. */
+  --on-accent: #fff;
+}
+
+/* ============================================================================
+   COLOR TOKENS — each palette authored ONCE light + ONCE dark.
+   - light selector matches data-mode=light AND data-mode=system (default light context)
+   - explicit dark selector matches data-mode=dark
+   - @media(prefers-color-scheme: dark) re-points data-mode=system → that palette's dark hex
+   ========================================================================== */
+
+/* ---------- BONE ---------- */
+[data-palette="bone"][data-mode="light"],
+[data-palette="bone"][data-mode="system"] {
+  --paper: #faf7f0;
+  --list: #f3eee4;
+  --nav: #eae4d8;
+  --border: #e0d8c8;
+  --ink: #25201a;
+  --body: #3a332a;
+  --secondary: #8a8170;
+  --faint: #a0967f;
+  --sel: #ebe1cf;
+  --accent: #a8662f;
+  --handle: #d8cfbd;
+  --sync: #7fa86b;
+}
+[data-palette="bone"][data-mode="dark"] {
+  --paper: #26211a;
+  --list: #221e18;
+  --nav: #1c1813;
+  --border: #332e25;
+  --ink: #ede6d8;
+  --body: #d8d0c0;
+  --secondary: #9c9484;
+  --faint: #857c6a;
+  --sel: #2e281f;
+  --accent: #c98a4a;
+  --handle: #3a3429;
+  --sync: #8fbe78;
+  --on-accent: #1a1410; /* white-on-#C98A4A = 2.91:1 (<3) → near-black 6.27:1 (a11y #64) */
+}
+
+/* ---------- GRAPHITE ---------- */
+[data-palette="graphite"][data-mode="light"],
+[data-palette="graphite"][data-mode="system"] {
+  --paper: #ffffff;
+  --list: #f7f8fa;
+  --nav: #f0f1f3;
+  --border: #e5e7eb;
+  --ink: #1a1c1f;
+  --body: #33373d;
+  --secondary: #6b7177;
+  --faint: #8a9099;
+  --sel: #e7ebf3;
+  --accent: #3b5bdb;
+  --handle: #d2d6dc;
+  --sync: #3ba776;
+}
+[data-palette="graphite"][data-mode="dark"] {
+  --paper: #202225;
+  --list: #1b1d1f;
+  --nav: #161719;
+  --border: #2c2f33;
+  --ink: #e6e8eb;
+  --body: #c4c8cd;
+  --secondary: #8b9197;
+  --faint: #777e85;
+  --sel: #23304d;
+  --accent: #5b7bff;
+  --handle: #34383d;
+  --sync: #42c28c;
+}
+
+/* ---------- MANILA ---------- */
+[data-palette="manila"][data-mode="light"],
+[data-palette="manila"][data-mode="system"] {
+  --paper: #f8f7f0;
+  --list: #f2f0e7;
+  --nav: #e8e6dd;
+  --border: #dfdace;
+  --ink: #2b2722;
+  --body: #423c33;
+  --secondary: #877f70;
+  --faint: #a89f8c;
+  --sel: #eae0cf;
+  --accent: #9e3b2e;
+  --handle: #d5cfc0;
+  --sync: #7b9a66;
+}
+[data-palette="manila"][data-mode="dark"] {
+  --paper: #25221b;
+  --list: #201e18;
+  --nav: #1a1813;
+  --border: #322d24;
+  --ink: #e8e2d4;
+  --body: #cbc3b3;
+  --secondary: #968d7c;
+  --faint: #857c6a;
+  --sel: #2d281f;
+  --accent: #c75a48;
+  --handle: #3a3429;
+  --sync: #8fae74;
+}
+
+/* ---------- EMBER (default palette) ---------- */
+[data-palette="ember"][data-mode="light"],
+[data-palette="ember"][data-mode="system"] {
+  --paper: #ffffff;
+  --list: #f7f7f8;
+  --nav: #f2f2f4;
+  --border: #e7e7eb;
+  --ink: #17171a;
+  --body: #36363b;
+  --secondary: #6e6e76;
+  --faint: #a0a0a8;
+  --sel: #fbeae4;
+  --accent: #ee431c;
+  --handle: #d6d6da;
+  --sync: #1fa971;
+}
+[data-palette="ember"][data-mode="dark"] {
+  --paper: #1a1a1d;
+  --list: #161618;
+  --nav: #111113;
+  --border: #2a2a2e;
+  --ink: #f0f0f2;
+  --body: #c8c8ce;
+  --secondary: #9a9aa3;
+  --faint: #6e6e77;
+  --sel: #2e211d;
+  --accent: #ff6242;
+  --handle: #34343a;
+  --sync: #34c98a;
+  --on-accent: #1a1410; /* white-on-#FF6242 = 2.97:1 (<3) → near-black 6.15:1 (a11y #64) */
+}
+
+/* ---------- SYSTEM → DARK re-point ----------
+   When the OS prefers dark, data-mode="system" adopts each palette's DARK hex.
+   Explicit data-mode="light"/"dark" are unaffected (user override wins). */
+@media (prefers-color-scheme: dark) {
+  [data-palette="bone"][data-mode="system"] {
+    --paper: #26211a;
+    --list: #221e18;
+    --nav: #1c1813;
+    --border: #332e25;
+    --ink: #ede6d8;
+    --body: #d8d0c0;
+    --secondary: #9c9484;
+    --faint: #857c6a;
+    --sel: #2e281f;
+    --accent: #c98a4a;
+    --handle: #3a3429;
+    --sync: #8fbe78;
+    --on-accent: #1a1410; /* system-dark bone: same <3:1 white-on-accent as explicit dark (a11y #64) */
+  }
+  [data-palette="graphite"][data-mode="system"] {
+    --paper: #202225;
+    --list: #1b1d1f;
+    --nav: #161719;
+    --border: #2c2f33;
+    --ink: #e6e8eb;
+    --body: #c4c8cd;
+    --secondary: #8b9197;
+    --faint: #777e85;
+    --sel: #23304d;
+    --accent: #5b7bff;
+    --handle: #34383d;
+    --sync: #42c28c;
+  }
+  [data-palette="manila"][data-mode="system"] {
+    --paper: #25221b;
+    --list: #201e18;
+    --nav: #1a1813;
+    --border: #322d24;
+    --ink: #e8e2d4;
+    --body: #cbc3b3;
+    --secondary: #968d7c;
+    --faint: #857c6a;
+    --sel: #2d281f;
+    --accent: #c75a48;
+    --handle: #3a3429;
+    --sync: #8fae74;
+  }
+  [data-palette="ember"][data-mode="system"] {
+    --paper: #1a1a1d;
+    --list: #161618;
+    --nav: #111113;
+    --border: #2a2a2e;
+    --ink: #f0f0f2;
+    --body: #c8c8ce;
+    --secondary: #9a9aa3;
+    --faint: #6e6e77;
+    --sel: #2e211d;
+    --accent: #ff6242;
+    --handle: #34343a;
+    --sync: #34c98a;
+    --on-accent: #1a1410; /* system-dark ember: same <3:1 white-on-accent as explicit dark (a11y #64) */
+  }
+}
+
+/* ============================================================================
+   TYPE VOICES (independent of palette/mode). var map:
+     --ff body/UI font · --h1/--h1w note title · --h2 heading · --note/--line body
+     --lt/--ltw list-row title · --nav-item/--nav-itemw nav item · --quote · --list-note
+   ========================================================================== */
+
+[data-voice="serif"] {
+  --ff: "Newsreader", Georgia, serif;
+  --h1: 36px;
+  --h1w: 600;
+  --h2: 21px;
+  --note: 17.5px;
+  --line: 1.65;
+  --lt: 15px;
+  --ltw: 600;
+  --nav-item: 15px;
+  --nav-itemw: 400;
+  --quote: 19px;
+  --list-note: 15px;
+}
+
+[data-voice="sans"] {
+  /* DEFAULT VOICE */
+  --ff: "IBM Plex Sans", system-ui, sans-serif;
+  --h1: 33px;
+  --h1w: 700;
+  --h2: 19px;
+  --note: 16.5px;
+  --line: 1.62;
+  --lt: 14.5px;
+  --ltw: 600;
+  --nav-item: 14.5px;
+  --nav-itemw: 500;
+  --quote: 18px;
+  --list-note: 14.5px;
+}
+
+[data-voice="mono"] {
+  --ff: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --h1: 27px;
+  --h1w: 600;
+  --h2: 17px;
+  /* iOS Safari auto-zooms a focused contenteditable whose font-size < 16px; the packet's 15px body
+     would zoom. Bumped to 16px per the Lane-0 directive — never use maximum-scale to mask it. */
+  --note: 16px;
+  --line: 1.75;
+  --lt: 13.5px;
+  --ltw: 600;
+  --nav-item: 13.5px;
+  --nav-itemw: 400;
+  --quote: 15px;
+  --list-note: 13.5px;
+}
+
+[data-voice="grotesk"] {
+  --ff: "Space Grotesk", system-ui, sans-serif;
+  --h1: 32px;
+  --h1w: 600;
+  --h2: 19px;
+  --note: 16px;
+  --line: 1.58;
+  --lt: 14.5px;
+  --ltw: 500;
+  --nav-item: 14.5px;
+  --nav-itemw: 500;
+  --quote: 18px;
+  --list-note: 14.5px;
+}
+
+/* Derived heading rules (apply wherever the editor / list render these nodes). */
+.dt-h2,
+h2[data-editor] {
+  font-size: var(--h2);
+  font-weight: 600;
+  color: var(--ink);
+}
+.dt-h3,
+h3[data-editor] {
+  font-size: calc(var(--h2) * 0.84);
+  font-weight: 600;
+  color: var(--ink);
+}
+.dt-note-title,
+h1[data-editor] {
+  font-family: var(--ff);
+  font-size: var(--h1);
+  font-weight: var(--h1w);
+  color: var(--ink);
+  line-height: 1.15;
+  letter-spacing: -0.015em; /* note-title negative tracking */
+}
+
+/* ============================================================================
+   INVARIANTS — never vary by palette/mode/voice (packet §The Theme System).
+   ========================================================================== */
+
+/* (a) Metadata is ALWAYS IBM Plex Mono — dates, counts, section labels (NOTEBOOKS), the
+       "deltos" wordmark text, sync-status text. Small; labels uppercase + ~1.5px tracking. */
+.dt-meta {
+  font-family: var(--mono);
+  font-size: 11px; /* metadata range 10–11px */
+  color: var(--secondary);
+}
+.dt-meta--faint {
+  color: var(--faint);
+}
+.dt-label {
+  /* section labels e.g. NOTEBOOKS */
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* (b) Synced dot is ALWAYS green (--sync), NEVER the accent. "Saved" must not read as "alert". */
+.dt-sync-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sync);
+}
+
+/* (c) The δ wordmark GLYPH is ALWAYS Newsreader serif in the accent color, regardless of voice.
+       (The "deltos" text beside it is Plex Mono — invariant a.) Newsreader is deferred to Lane 5;
+       until then δ falls back to Georgia serif, which renders it correctly. */
+.dt-wordmark-delta {
+  font-family: "Newsreader", Georgia, serif;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* (d) Highlight mark: accent-tinted background, text stays inherit. */
+mark,
+.dt-mark {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: inherit;
+}
+
+/* Full Newsreader faces — Serif voice. Lazy: imported by themeStore (FONT_CHUNK.serif) on first Serif
+   selection, then SW-cached cache-first forever (/fonts/ rule in sw.ts). The δ-subset face (tokens.css)
+   covers the brand wordmark always; these cover body/headings/blockquote when Serif is the active voice. */
+@font-face {
+  font-family: "Newsreader";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/newsreader-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Newsreader";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/newsreader-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Newsreader";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/newsreader-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Newsreader";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/newsreader-400-italic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Newsreader";
+  font-style: italic;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/newsreader-500-italic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Newsreader";
+  font-style: italic;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/newsreader-600-italic.woff2") format("woff2");
+}
+
+/* Full Space Grotesk faces — Grotesk voice. Lazy: imported by themeStore (FONT_CHUNK.grotesk) on first
+   Grotesk selection, then SW-cached cache-first forever (/fonts/ rule in sw.ts). */
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/space-grotesk-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/space-grotesk-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/space-grotesk-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/space-grotesk-700.woff2") format("woff2");
+}
+
+html {
+  color-scheme: light;
+  background: var(--paper);
+}
+html[data-mode="dark"] {
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  html[data-mode="system"] {
+    color-scheme: dark;
+  }
+}
