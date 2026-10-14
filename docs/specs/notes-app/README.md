@@ -14,6 +14,7 @@ Palladian is the working name in this conversation; final branding remains open.
 | [04 — Documents, collaboration, and history](04-documents.md)   | Revisions, live editing, agent checkout, and later offline conflict copies        |
 | [05 — Identity and MCP](05-identity-and-mcp.md)                 | Session reliability, authorization, and efficient agent operations                |
 | [06 — Decisions and acceptance](06-decisions-and-acceptance.md) | Missing information, recommended defaults, build gates, and evidence requirements |
+| [07 — Delivery plan](07-delivery-plan.md)                       | First-release architecture and order of work (adopted 2026-10-14)                 |
 
 ## How to interpret this draft
 
