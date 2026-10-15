@@ -312,7 +312,11 @@ export class LiveController {
     for (const row of snapshot.shared)
       if (!fenced.includes(row.id))
         this.queueFetch(accountId, row.id, row.editedAt);
-    void this.recheckAccess(accountId, fenced);
+    // Held notes wait for the server's answer, including after a failed check.
+    const held = await this.store.heldMarkers(accountId);
+    void this.recheckAccess(accountId, [
+      ...new Set([...fenced, ...held.keys()]),
+    ]);
     for (const [id, stop] of this.feeds)
       if (!ids.has(id)) {
         stop();
@@ -369,17 +373,21 @@ export class LiveController {
 
   /**
    * Notes fenced after a revocation reappeared in a feed or snapshot, which may
-   * be older than the revocation. Ask the server through a mutation, which no
-   * local subscription can answer, and lift a fence only if its marker is
-   * unchanged since before the request and the answer is for this account.
+   * be older than the revocation, or are held while access is in doubt. Ask the
+   * server through a mutation, which no local subscription can answer. Act on
+   * a fence only if its marker is unchanged since before the request and the
+   * answer is for this account: access lifts it, and a denial removes the work
+   * a held fence kept.
    */
   private async recheckAccess(accountId: string, ids: string[]) {
     if (!ids.length) return;
     let fence: CacheFence;
     let markers: Map<string, string>;
+    let held: Map<string, string>;
     try {
       fence = await this.store.captureFence(accountId);
       markers = await this.store.revocationMarkers(accountId, ids);
+      held = await this.store.heldMarkers(accountId);
     } catch {
       return;
     }
@@ -392,12 +400,15 @@ export class LiveController {
       } catch {
         continue;
       }
-      if (
-        !verdict.summary ||
-        verdict.subject !== accountId ||
-        this.state.accountId !== accountId
-      )
+      if (verdict.subject !== accountId || this.state.accountId !== accountId)
         continue;
+      if (!verdict.summary) {
+        if (held.get(id) === marker)
+          await this.store
+            .purgeHeld(accountId, [{ id, marker }], fence)
+            .catch(() => undefined);
+        continue;
+      }
       try {
         await this.store.allowNotes(accountId, [{ id, marker }], fence);
         const still = await this.store.cacheSummaries(
@@ -538,6 +549,16 @@ export class LiveController {
     noteId: string,
     draft: Draft,
   ) {
+    await this.store.withRecoveryLock(accountId, noteId, () =>
+      this.recoverCreated(accountId, noteId, draft),
+    );
+  }
+
+  private async recoverCreated(
+    accountId: string,
+    noteId: string,
+    draft: Draft,
+  ) {
     const id = noteId as Id<"notes">;
     const content = await this.client.query(api.notes.content, { noteId: id });
     if (!content || this.state.accountId !== accountId) return;
@@ -580,10 +601,15 @@ export class LiveController {
     let steps = diffSteps(current, local);
     if (!steps || steps.length > MAX_STEPS_PER_SEND)
       steps = [diffStep(current, local)!];
-    if (this.openNotes.has(noteId)) return;
-    // Record the client ID before sending, so a lost reply is recognized.
+    // Send only while this exact draft is still saved and its note closed,
+    // recording the client ID first so a lost reply is recognized.
     const sending: Draft = { ...draft, clientId };
-    if (!draft.clientId && !(await this.store.replaceDraftIf(draft, sending)))
+    if (
+      this.openNotes.has(noteId) ||
+      !(await this.store.replaceDraftIf(draft, sending)) ||
+      this.openNotes.has(noteId) ||
+      this.state.accountId !== accountId
+    )
       return;
     const pushed = await this.client.mutation(api.notes.push, {
       noteId: id,
@@ -622,13 +648,17 @@ export class LiveController {
     return true;
   }
 
-  /** The server's note is current for this draft: cache it and retire the draft. */
+  /**
+   * The server's note is current for this draft: cache it and retire the
+   * draft. An open note is settled by the sync after it closes.
+   */
   private async settleCreated(
     accountId: string,
     noteId: string,
     content: { doc: string; revision: number },
     expected: Draft,
   ) {
+    if (this.openNotes.has(noteId)) return;
     const fence = await this.store.captureFence(accountId);
     await this.store.settleDraft(
       accountId,

@@ -138,7 +138,7 @@ describe("note access fences", () => {
         updatedAt: 1,
         notebookId: "gone",
       });
-      const revoked = await store.reconcileAccess(
+      const { revoked } = await store.reconcileAccess(
         "account",
         new Set(["mine"]),
         new Set(["shared"]),

@@ -181,16 +181,17 @@ export function App({
         setOpen(null);
       }
       const shown = openRef.current;
-      if (
-        event.revokedNotes &&
-        event.accountId === accountId &&
-        shown &&
-        event.revokedNotes.includes(shown.id)
-      ) {
+      const revoked = !!shown && !!event.revokedNotes?.includes(shown.id);
+      const held = !!shown && !!event.heldNotes?.includes(shown.id);
+      if (event.accountId === accountId && shown && (revoked || held)) {
         shown.channel?.close();
         openRequest.current++;
         setOpen(null);
-        setError("You no longer have access to that note.");
+        setError(
+          revoked
+            ? "You no longer have access to that note."
+            : "Checking your access to that note. Its unsaved changes are kept until the server answers.",
+        );
       }
       void refresh();
     });
