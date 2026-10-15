@@ -33,20 +33,22 @@ async function importSigningKey(source: string): Promise<SigningKey> {
     // Never echo the secret's contents.
     throw new Error("AGENT_JWT_PRIVATE_KEY is not valid JSON.");
   }
+  const { kty, crv, x, y, d, kid } = jwk;
   if (
-    jwk.kty !== "EC" ||
-    jwk.crv !== "P-256" ||
-    typeof jwk.d !== "string" ||
-    typeof jwk.kid !== "string" ||
-    !jwk.kid
+    kty !== "EC" ||
+    crv !== "P-256" ||
+    typeof x !== "string" ||
+    typeof y !== "string" ||
+    typeof d !== "string" ||
+    typeof kid !== "string" ||
+    !kid
   )
     throw new Error(
       "AGENT_JWT_PRIVATE_KEY must be a private P-256 JWK with a kid.",
     );
-  const { kid, ...material } = jwk;
   const key = await crypto.subtle.importKey(
     "jwk",
-    { kty: material.kty, crv: material.crv, x: material.x, y: material.y, d: material.d },
+    { kty, crv, x, y, d },
     { name: "ECDSA", namedCurve: "P-256" },
     false,
     ["sign"],
