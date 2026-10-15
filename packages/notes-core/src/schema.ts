@@ -1,6 +1,8 @@
 import {
   Schema,
   type DOMOutputSpec,
+  type Fragment,
+  type Mark,
   type Node as ProseMirrorNode,
   type NodeSpec,
   type MarkSpec,
@@ -303,56 +305,78 @@ export class UnsafeDocumentError extends Error {}
  * `Node.check()` validates structure only; this enforces the same link and
  * image rules as parsing, and sane values for every other attribute.
  */
+function unsafe(message: string): never {
+  throw new UnsafeDocumentError(message);
+}
+
+/** Validate one mark's attributes. */
+export function assertSafeMark(mark: Mark): void {
+  if (mark.type.name !== "link") return;
+  if (!isSafeHref(mark.attrs.href))
+    unsafe("Links must use http, https or mailto.");
+  if (!optionalText(mark.attrs.title, 500)) unsafe("Invalid link title.");
+}
+
+/** Validate one node's own attributes and marks (not its children). */
+export function assertSafeNode(node: ProseMirrorNode): void {
+  for (const mark of node.marks) assertSafeMark(mark);
+  if (hasBlockId(node)) {
+    const id = node.attrs.id;
+    if (id !== null && (typeof id !== "string" || !ID_PATTERN.test(id)))
+      unsafe("Invalid block identity.");
+  }
+  switch (node.type.name) {
+    case "image":
+      if (!isSafeImageSource(node.attrs.src))
+        unsafe("Images must use https or an attachment reference.");
+      if (
+        !optionalText(node.attrs.alt, 1000) ||
+        !optionalText(node.attrs.title, 500)
+      )
+        unsafe("Invalid image text.");
+      break;
+    case "heading":
+      if (![1, 2, 3].includes(node.attrs.level))
+        unsafe("Invalid heading level.");
+      break;
+    case "ordered_list":
+      if (
+        !Number.isSafeInteger(node.attrs.order) ||
+        node.attrs.order < 0 ||
+        node.attrs.order > 1_000_000
+      )
+        unsafe("Invalid list start.");
+      break;
+    case "task_item":
+      if (typeof node.attrs.checked !== "boolean")
+        unsafe("Invalid checklist state.");
+      break;
+    case "code_block":
+      if (
+        typeof node.attrs.language !== "string" ||
+        !LANGUAGE_PATTERN.test(node.attrs.language)
+      )
+        unsafe("Invalid code language.");
+      break;
+  }
+}
+
+/**
+ * Attribute validation for documents arriving from clients as JSON or steps.
+ * `Node.check()` validates structure only; this enforces the same link and
+ * image rules as parsing, and sane values for every other attribute.
+ */
 export function assertSafeDocument(doc: ProseMirrorNode): void {
-  const fail = (message: string): never => {
-    throw new UnsafeDocumentError(message);
-  };
   doc.descendants((node) => {
-    for (const mark of node.marks) {
-      if (mark.type.name !== "link") continue;
-      if (!isSafeHref(mark.attrs.href))
-        fail("Links must use http, https or mailto.");
-      if (!optionalText(mark.attrs.title, 500)) fail("Invalid link title.");
-    }
-    if (hasBlockId(node)) {
-      const id = node.attrs.id;
-      if (id !== null && (typeof id !== "string" || !ID_PATTERN.test(id)))
-        fail("Invalid block identity.");
-    }
-    switch (node.type.name) {
-      case "image":
-        if (!isSafeImageSource(node.attrs.src))
-          fail("Images must use https or an attachment reference.");
-        if (
-          !optionalText(node.attrs.alt, 1000) ||
-          !optionalText(node.attrs.title, 500)
-        )
-          fail("Invalid image text.");
-        break;
-      case "heading":
-        if (![1, 2, 3].includes(node.attrs.level))
-          fail("Invalid heading level.");
-        break;
-      case "ordered_list":
-        if (
-          !Number.isSafeInteger(node.attrs.order) ||
-          node.attrs.order < 0 ||
-          node.attrs.order > 1_000_000
-        )
-          fail("Invalid list start.");
-        break;
-      case "task_item":
-        if (typeof node.attrs.checked !== "boolean")
-          fail("Invalid checklist state.");
-        break;
-      case "code_block":
-        if (
-          typeof node.attrs.language !== "string" ||
-          !LANGUAGE_PATTERN.test(node.attrs.language)
-        )
-          fail("Invalid code language.");
-        break;
-    }
+    assertSafeNode(node);
+    return true;
+  });
+}
+
+/** Validate every node in a fragment, such as the content a step inserts. */
+export function assertSafeFragment(fragment: Fragment): void {
+  fragment.descendants((node) => {
+    assertSafeNode(node);
     return true;
   });
 }

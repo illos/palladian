@@ -4,6 +4,7 @@ import {
   D1KV,
   purgeAbandonedClients,
   recentRegistrations,
+  reserveRegistration,
   type D1Like,
 } from "../src/d1-kv.ts";
 
@@ -123,5 +124,54 @@ describe("consent and registration hygiene", () => {
     expect(await kv.get("client:abandoned")).toBeNull();
     expect(await kv.get("client:connected")).not.toBeNull();
     expect(await kv.get("client:fresh")).not.toBeNull();
+  });
+});
+
+describe("review round 2 regressions", () => {
+  test("concurrent reservations never exceed the hourly ceiling", async () => {
+    const db = fakeD1();
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => reserveRegistration(db, 5)),
+    );
+    expect(results.filter(Boolean)).toHaveLength(5);
+    expect(await reserveRegistration(db, 5)).toBe(false);
+  });
+
+  test("an expired read never deletes a concurrent replacement", async () => {
+    const inner = fakeD1();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let observed!: () => void;
+    const seen = new Promise<void>((resolve) => (observed = resolve));
+    let intercept = false;
+    const db: D1Like = {
+      exec: (query) => inner.exec(query),
+      prepare: (query) => ({
+        bind: (...values) => {
+          const bound = inner.prepare(query).bind(...values);
+          return {
+            ...bound,
+            first: async <T>() => {
+              const row = await bound.first<T>();
+              if (intercept && query.startsWith("SELECT value")) {
+                intercept = false;
+                observed();
+                await gate;
+              }
+              return row;
+            },
+          };
+        },
+      }),
+    };
+    const kv = new D1KV(db);
+    await kv.put("token", "expired", { expiration: 1 });
+    intercept = true;
+    const stale = kv.get("token");
+    await seen;
+    await kv.put("token", "fresh", { expirationTtl: 3600 });
+    release();
+    expect(await stale).toBeNull();
+    expect(await kv.get("token")).toBe("fresh");
   });
 });

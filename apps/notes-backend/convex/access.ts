@@ -165,22 +165,35 @@ export async function loadNotebook(
   return { notebook, role };
 }
 
-/** Notebooks the caller owns or belongs to, with their role. Bounded. */
-export async function accessibleNotebooks(ctx: Ctx, principal: Principal) {
+const NOTEBOOK_LIMIT = 500;
+
+/**
+ * Notebooks the caller owns or belongs to, with their role, and whether the
+ * list is complete. Callers that delete local data must not treat a truncated
+ * list as authoritative.
+ */
+export async function notebookInventory(ctx: Ctx, principal: Principal) {
   const owned = await ctx.db
     .query("notebooks")
     .withIndex("by_owner", (q) => q.eq("ownerId", principal._id))
-    .take(500);
+    .take(NOTEBOOK_LIMIT + 1);
   const memberships = await ctx.db
     .query("notebookMembers")
     .withIndex("by_principal", (q) => q.eq("principalId", principal._id))
-    .take(500);
-  const result: { notebook: Doc<"notebooks">; role: Role }[] = owned.map(
-    (notebook) => ({ notebook, role: "owner" as const }),
-  );
-  for (const member of memberships) {
+    .take(NOTEBOOK_LIMIT + 1);
+  const complete =
+    owned.length <= NOTEBOOK_LIMIT && memberships.length <= NOTEBOOK_LIMIT;
+  const entries: { notebook: Doc<"notebooks">; role: Role }[] = owned
+    .slice(0, NOTEBOOK_LIMIT)
+    .map((notebook) => ({ notebook, role: "owner" as const }));
+  for (const member of memberships.slice(0, NOTEBOOK_LIMIT)) {
     const notebook = await ctx.db.get(member.notebookId);
-    if (notebook) result.push({ notebook, role: member.role });
+    if (notebook) entries.push({ notebook, role: member.role });
   }
-  return result;
+  return { entries, complete };
+}
+
+/** Notebooks the caller owns or belongs to, with their role. Bounded. */
+export async function accessibleNotebooks(ctx: Ctx, principal: Principal) {
+  return (await notebookInventory(ctx, principal)).entries;
 }

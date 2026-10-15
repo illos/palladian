@@ -1,4 +1,5 @@
 import {
+  applySafeStep,
   assertSafeDocument,
   assignBlockIds,
   blockIdProblems,
@@ -7,6 +8,7 @@ import {
   notesSchema,
   parseStoredDoc,
   plainText,
+  UnsafeDocumentError,
 } from "@palladian/notes-core";
 import type { Node as ProseMirrorNode } from "prosemirror-model";
 import { Step, Transform } from "prosemirror-transform";
@@ -156,11 +158,21 @@ export async function commitSteps(
   // Checkpoints land on every interval boundary, even inside a large batch, so
   // any revision is rebuilt from at most one interval of steps.
   const checkpoints: { revision: number; doc: ProseMirrorNode }[] = [];
+  // Each step is validated for what it introduces, so every revision in the
+  // batch, including persisted checkpoints, stays within the safety contract.
   const apply = (step: Step) => {
-    const result = step.apply(doc);
-    if (!result.doc)
-      fail("invalid", result.failed ?? "A step could not be applied.");
-    doc = result.doc;
+    try {
+      doc = applySafeStep(doc, step);
+    } catch (error) {
+      fail(
+        "invalid",
+        error instanceof UnsafeDocumentError
+          ? "The edit would produce an invalid or unsafe note."
+          : error instanceof Error
+            ? error.message
+            : "A step could not be applied.",
+      );
+    }
     if (++revision % CHECKPOINT_INTERVAL === 0)
       checkpoints.push({ revision, doc });
   };
@@ -201,9 +213,7 @@ export async function commitSteps(
       noteId: args.note._id,
       revision: checkpoint.revision,
       doc:
-        checkpoint.revision === revision
-          ? json
-          : JSON.stringify(checkpoint.doc.toJSON()),
+        checkpoint.revision === revision ? json : serializeDoc(checkpoint.doc),
     });
   await ctx.db.patch(args.content._id, {
     doc: json,

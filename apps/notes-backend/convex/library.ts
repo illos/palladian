@@ -3,6 +3,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
 import {
   accessibleNotebooks,
+  notebookInventory,
   fail,
   getPrincipal,
   noteRole,
@@ -26,7 +27,7 @@ const notebookView = v.object({
 });
 
 async function notebookViews(ctx: QueryCtx, principal: Principal) {
-  const entries = await accessibleNotebooks(ctx, principal);
+  const { entries, complete } = await notebookInventory(ctx, principal);
   const owners = new Map<Id<"principals">, string>();
   const views = [];
   for (const { notebook, role } of entries) {
@@ -45,17 +46,22 @@ async function notebookViews(ctx: QueryCtx, principal: Principal) {
       isDefault: principal.defaultNotebookId === notebook._id,
     });
   }
-  return views.sort((a, b) => a.name.localeCompare(b.name));
+  return {
+    views: views.sort((a, b) => a.name.localeCompare(b.name)),
+    complete,
+  };
 }
+
+const GRANT_LIMIT = 2000;
 
 /** Notes shared individually, outside notebooks the caller belongs to. */
 async function sharedSummaries(ctx: QueryCtx, principal: Principal) {
   const grants = await ctx.db
     .query("noteMembers")
     .withIndex("by_principal", (q) => q.eq("principalId", principal._id))
-    .take(500);
+    .take(GRANT_LIMIT + 1);
   const result = [];
-  for (const grant of grants) {
+  for (const grant of grants.slice(0, GRANT_LIMIT)) {
     if (grant.role === "none") continue;
     const note = await ctx.db.get(grant.noteId);
     if (!note) continue;
@@ -63,7 +69,7 @@ async function sharedSummaries(ctx: QueryCtx, principal: Principal) {
     if (notebook && (await notebookRole(ctx, principal, notebook))) continue;
     result.push(toSummary(note, grant.role));
   }
-  return result;
+  return { notes: result, complete: grants.length <= GRANT_LIMIT };
 }
 
 /** Notebooks the caller can open. Changes only when notebooks or access change. */
@@ -73,7 +79,7 @@ export const notebooks = query({
   handler: async (ctx) => {
     const principal = await getPrincipal(ctx);
     if (!principal) return [];
-    return await notebookViews(ctx, principal);
+    return (await notebookViews(ctx, principal)).views;
   },
 });
 
@@ -89,14 +95,19 @@ export const access = query({
     v.object({
       notebooks: v.array(notebookView),
       shared: v.array(noteSummary),
+      // False when either list was truncated: clients must not revoke from it.
+      complete: v.boolean(),
     }),
   ),
   handler: async (ctx) => {
     const principal = await getPrincipal(ctx);
     if (!principal) return null;
+    const notebooks = await notebookViews(ctx, principal);
+    const shared = await sharedSummaries(ctx, principal);
     return {
-      notebooks: await notebookViews(ctx, principal),
-      shared: await sharedSummaries(ctx, principal),
+      notebooks: notebooks.views,
+      shared: shared.notes,
+      complete: notebooks.complete && shared.complete,
     };
   },
 });
@@ -180,7 +191,7 @@ export const shared = query({
   handler: async (ctx) => {
     const principal = await getPrincipal(ctx);
     if (!principal) return [];
-    return await sharedSummaries(ctx, principal);
+    return (await sharedSummaries(ctx, principal)).notes;
   },
 });
 
@@ -221,39 +232,57 @@ async function grantedOnly(
 export const recent = query({
   args: {
     notebookId: v.optional(v.id("notebooks")),
+    // Cursor: edit time and ID of the last note seen, ordered newest first.
     before: v.optional(v.number()),
+    beforeId: v.optional(v.id("notes")),
     limit: v.optional(v.number()),
     includeTrashed: v.optional(v.boolean()),
   },
   returns: v.object({
     notes: v.array(noteSummary),
     nextBefore: v.union(v.number(), v.null()),
+    nextBeforeId: v.union(v.id("notes"), v.null()),
   }),
   handler: async (ctx, args) => {
     const principal = await requirePrincipal(ctx);
     const limit = Math.min(100, Math.max(1, Math.floor(args.limit ?? 25)));
     const before = args.before ?? Number.MAX_SAFE_INTEGER;
+    // Notes are ordered by edit time, then ID, both descending; equal times
+    // continue from the last ID rather than being skipped.
+    const isAfterCursor = (note: Doc<"notes">) =>
+      note.editedAt < before ||
+      (note.editedAt === before &&
+        args.beforeId !== undefined &&
+        note._id < args.beforeId);
     const candidates: Doc<"notes">[] = [];
     let fullPage = false;
     for (const id of await memberNotebooks(ctx, principal, args.notebookId)) {
       const rows = await ctx.db
         .query("notes")
         .withIndex("by_notebook_and_edited", (q) =>
-          q.eq("notebookId", id).lt("editedAt", before),
+          q.eq("notebookId", id).lte("editedAt", before),
         )
         .order("desc")
-        .take(limit * 2);
-      if (rows.length === limit * 2) fullPage = true;
-      candidates.push(...rows);
+        .take(limit * 2 + 1);
+      if (rows.length === limit * 2 + 1) fullPage = true;
+      candidates.push(...rows.filter(isAfterCursor));
     }
     for (const { note } of await grantedOnly(ctx, principal, args.notebookId))
-      if (note.editedAt < before) candidates.push(note);
-    candidates.sort((a, b) => b.editedAt - a.editedAt);
+      if (isAfterCursor(note)) candidates.push(note);
+    candidates.sort((a, b) =>
+      b.editedAt !== a.editedAt
+        ? b.editedAt - a.editedAt
+        : b._id < a._id
+          ? -1
+          : b._id > a._id
+            ? 1
+            : 0,
+    );
     const notes = [];
-    let examined: number | null = null;
+    let examined: Doc<"notes"> | null = null;
     for (const note of candidates) {
       if (notes.length >= limit) break;
-      examined = note.editedAt;
+      examined = note;
       if (note.lifecycle === "trashed" && !args.includeTrashed) continue;
       const role = await noteRole(ctx, principal, note);
       if (role) notes.push(toSummary(note, role));
@@ -261,10 +290,15 @@ export const recent = query({
     // More may exist whenever a notebook returned a full candidate page or the
     // scan stopped early; the cursor continues from the last note examined.
     const more =
-      candidates.length > 0 &&
-      (fullPage || notes.length >= limit) &&
-      examined !== null;
-    return { notes, nextBefore: more ? examined : null };
+      examined !== null &&
+      (fullPage ||
+        notes.length >= limit ||
+        candidates.indexOf(examined) < candidates.length - 1);
+    return {
+      notes,
+      nextBefore: more && examined ? examined.editedAt : null,
+      nextBeforeId: more && examined ? examined._id : null,
+    };
   },
 });
 

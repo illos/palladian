@@ -64,7 +64,8 @@ describe("note access fences", () => {
         a.writeDraft({ ...note, updatedAt: 3, baseRevision: 0 }),
       ).rejects.toThrow(/removed/);
       expect(await b.read("account", "note")).toBeUndefined();
-      // Access granted again by the server lifts the fence.
+      // A fresh server access check issued after the revocation lifts the fence.
+      await b.allowNotes("account", ["note"], Date.now() + 1);
       await b.cacheSummaries(
         "account",
         [

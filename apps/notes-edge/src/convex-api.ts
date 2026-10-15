@@ -99,10 +99,15 @@ export const fns = {
       {
         notebookId?: Id<"notebooks">;
         before?: number;
+        beforeId?: Id<"notes">;
         limit?: number;
         includeTrashed?: boolean;
       },
-      { notes: NoteSummary[]; nextBefore: number | null }
+      {
+        notes: NoteSummary[];
+        nextBefore: number | null;
+        nextBeforeId: Id<"notes"> | null;
+      }
     >("library:recent"),
     search: makeFunctionReference<
       "query",

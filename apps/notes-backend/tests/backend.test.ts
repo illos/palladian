@@ -1267,9 +1267,106 @@ describe("review regressions", () => {
       page = await member.as.query(api.library.recent, {
         limit: 1,
         before: page.nextBefore,
+        ...(page.nextBeforeId ? { beforeId: page.nextBeforeId } : {}),
       });
       seen.push(...page.notes);
     }
     expect(seen.map((n) => n.id)).toEqual([visible.noteId]);
+  });
+});
+
+describe("review round 2 regressions", () => {
+  test("recent notes with equal edit times are all listed", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const ids = [];
+    for (let i = 0; i < 3; i++)
+      ids.push(
+        (
+          await owner.as.mutation(api.notes.createFromMarkdown, {
+            markdown: "Same " + i,
+          })
+        ).noteId,
+      );
+    const seen: string[] = [];
+    let page = await owner.as.query(api.library.recent, { limit: 1 });
+    seen.push(...page.notes.map((n) => n.id));
+    while (page.nextBefore !== null) {
+      page = await owner.as.query(api.library.recent, {
+        limit: 1,
+        before: page.nextBefore,
+        ...(page.nextBeforeId ? { beforeId: page.nextBeforeId } : {}),
+      });
+      seen.push(...page.notes.map((n) => n.id));
+    }
+    expect(seen.sort()).toEqual([...ids].sort());
+  });
+
+  test("the access snapshot reports truncation instead of omitting grants silently", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const reader = await human(t, "Bo");
+    const { noteId } = await owner.as.mutation(api.notes.createFromMarkdown, {
+      markdown: "Shared",
+    });
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 2000; i++) {
+        const other = await ctx.db.insert("notes", {
+          notebookId: owner.notebookId,
+          ownerId: owner.id,
+          creatorId: owner.id,
+          title: "Hidden",
+          preview: "",
+          createdAt: i,
+          editedAt: i,
+          lifecycle: "active",
+          restricted: false,
+          seq: 0,
+        });
+        await ctx.db.insert("noteMembers", {
+          noteId: other,
+          principalId: reader.id,
+          role: "none",
+          grantedBy: owner.id,
+          createdAt: i,
+        });
+      }
+    });
+    await owner.as.mutation(api.sharing.setNoteMember, {
+      noteId,
+      principalId: reader.id,
+      role: "read",
+    });
+    const snapshot = (await reader.as.query(api.library.access, {}))!;
+    expect(snapshot.complete).toBe(false);
+  });
+
+  test("a batch whose intermediate revision is unsafe is rejected", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const { noteId } = await owner.as.mutation(api.notes.create, {
+      clientKey: "k",
+      doc: docJson("Plain text"),
+    });
+    const content = (await owner.as.query(api.notes.content, { noteId }))!;
+    const steps = await stepsFor(content.doc, (tr) => {
+      tr.addMark(
+        1,
+        6,
+        notesSchema.marks.link!.create({ href: "javascript:alert(1)" }),
+      );
+      tr.removeMark(1, 6, notesSchema.marks.link!);
+    });
+    await expect(
+      owner.as.mutation(api.notes.push, {
+        noteId,
+        revision: 0,
+        steps,
+        clientId: "c",
+      }),
+    ).rejects.toThrow(/unsafe/);
+    expect(
+      (await owner.as.query(api.notes.content, { noteId }))!.revision,
+    ).toBe(0);
   });
 });

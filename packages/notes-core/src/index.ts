@@ -4,6 +4,7 @@ export {
   isSafeHref,
   isSafeImageSource,
   assertSafeDocument,
+  assertSafeNode,
   UnsafeDocumentError,
 } from "./schema.ts";
 export type { NotesSchema } from "./schema.ts";
@@ -40,5 +41,6 @@ export {
   emptyDoc,
   parseStoredDoc,
   diffStep,
+  applySafeStep,
   DOC_JSON_LIMIT,
 } from "./document.ts";

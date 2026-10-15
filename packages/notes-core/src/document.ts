@@ -1,7 +1,23 @@
 import { Slice, type Node as ProseMirrorNode } from "prosemirror-model";
-import { ReplaceStep, Transform, type Step } from "prosemirror-transform";
+import {
+  AddMarkStep,
+  AddNodeMarkStep,
+  AttrStep,
+  DocAttrStep,
+  ReplaceAroundStep,
+  ReplaceStep,
+  Transform,
+  type Step,
+} from "prosemirror-transform";
 import { assignBlockIds } from "./ids.ts";
-import { assertSafeDocument, notesSchema } from "./schema.ts";
+import {
+  assertSafeDocument,
+  assertSafeFragment,
+  assertSafeMark,
+  assertSafeNode,
+  notesSchema,
+  UnsafeDocumentError,
+} from "./schema.ts";
 
 /** Serialized document ceiling, under Convex's 1 MiB document limit. */
 export const DOC_JSON_LIMIT = 700_000;
@@ -44,4 +60,28 @@ export function diffStep(
   const result = precise.apply(from);
   if (result.doc && result.doc.eq(to)) return precise;
   return new ReplaceStep(0, from.content.size, new Slice(to.content, 0, 0));
+}
+
+/**
+ * Apply one step and validate only what it introduced, so every intermediate
+ * revision of a batch is as safe as a validated document (given a safe start).
+ */
+export function applySafeStep(
+  doc: ProseMirrorNode,
+  step: Step,
+): ProseMirrorNode {
+  if (step instanceof DocAttrStep)
+    throw new UnsafeDocumentError("Notes have no document attributes.");
+  if (step instanceof ReplaceStep || step instanceof ReplaceAroundStep)
+    assertSafeFragment(step.slice.content);
+  if (step instanceof AddMarkStep || step instanceof AddNodeMarkStep)
+    assertSafeMark(step.mark);
+  const result = step.apply(doc);
+  if (!result.doc)
+    throw new Error(result.failed ?? "A step could not be applied.");
+  if (step instanceof AttrStep) {
+    const node = result.doc.nodeAt(step.pos);
+    if (node) assertSafeNode(node);
+  }
+  return result.doc;
 }

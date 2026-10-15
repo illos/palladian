@@ -474,11 +474,12 @@ export class NotesStore {
     removed: string[],
     fence: CacheFence,
     cursor?: { key: string; value: number },
-  ): Promise<void> {
+  ): Promise<string[]> {
     if (fence.accountId !== accountId)
       throw new Error("Account cache fence does not match.");
     const epoch = this.epoch(accountId);
     this.assertWritable(accountId, epoch);
+    const fenced: string[] = [];
     await this.db.transaction(
       "rw",
       [
@@ -493,8 +494,12 @@ export class NotesStore {
         await this.assertPersistent(accountId, fence.epoch);
         this.assertWritable(accountId, epoch);
         for (const row of rows) {
-          // The server just confirmed access: lift any earlier fence.
-          await this.db.revoked.delete([accountId, row.id]);
+          // A summary may be older than a revocation; only a fresh access check
+          // (allowNotes) lifts a fence. Report fenced rows instead of caching them.
+          if (await this.db.revoked.get([accountId, row.id])) {
+            fenced.push(row.id);
+            continue;
+          }
           const draft = await this.db.drafts.get([accountId, row.id]);
           const previous = await this.db.summaries.get([accountId, row.id]);
           await this.db.summaries.put({
@@ -524,6 +529,24 @@ export class NotesStore {
     );
     this.announceRevoked(accountId, removed);
     this.notify();
+    return fenced;
+  }
+  /**
+   * Lift fences for notes the server confirmed accessible by a request issued
+   * at `checkedAt`; a fence recorded later than that request stays.
+   */
+  async allowNotes(
+    accountId: string,
+    ids: string[],
+    checkedAt: number,
+  ): Promise<void> {
+    await this.db.transaction("rw", [this.db.revoked], async () => {
+      for (const id of ids) {
+        const marker = await this.db.revoked.get([accountId, id]);
+        if (marker && marker.at < checkedAt)
+          await this.db.revoked.delete([accountId, id]);
+      }
+    });
   }
   /** Delete a note's local copies and record a persistent fence. Inside a transaction. */
   private async fenceNotes(accountId: string, ids: string[]) {
@@ -690,7 +713,20 @@ export class NotesStore {
       .where("accountId")
       .equals(accountId)
       .toArray();
-    return rows.filter((draft) => draft.baseRevision === undefined);
+    return rows.filter(
+      (draft) => draft.baseRevision === undefined && draft.created !== true,
+    );
+  }
+  /** Drafts created on the server whose content has not been reconciled yet. */
+  async adoptedDrafts(accountId: string): Promise<Draft[]> {
+    if (this.blocked.has(accountId)) return [];
+    const rows = await this.db.drafts
+      .where("accountId")
+      .equals(accountId)
+      .toArray();
+    return rows.filter(
+      (draft) => draft.baseRevision === undefined && draft.created === true,
+    );
   }
   /**
    * Retire a journal entry once the server accepted everything in it, keeping
@@ -768,7 +804,9 @@ export class NotesStore {
         const draft = await this.db.drafts.get([accountId, localId]);
         const row = await this.db.summaries.get([accountId, localId]);
         const body = await this.db.bodies.get([accountId, localId]);
-        if (draft) await this.db.drafts.put({ ...draft, id: noteId });
+        // Adopted drafts are created: they are reconciled, never created again.
+        if (draft)
+          await this.db.drafts.put({ ...draft, id: noteId, created: true });
         if (row) await this.db.summaries.put({ ...row, id: noteId });
         if (body) await this.db.bodies.put({ ...body, id: noteId });
         await this.db.drafts.delete([accountId, localId]);
@@ -782,7 +820,7 @@ export class NotesStore {
       this.recoveryDrafts.delete(oldKey);
       this.recoveryFences.delete(oldKey);
       const newKey = JSON.stringify([accountId, noteId]);
-      this.recoveryDrafts.set(newKey, { ...memory, id: noteId });
+      this.recoveryDrafts.set(newKey, { ...memory, id: noteId, created: true });
       if (fenceValue) this.recoveryFences.set(newKey, fenceValue);
     }
     this.notify();

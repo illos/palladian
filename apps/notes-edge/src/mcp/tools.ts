@@ -140,6 +140,21 @@ const editSchema = z.union([
     ),
 ]);
 
+/** list_notes cursor: "<editedAt>:<noteId>" as returned in next_cursor. */
+function parseCursor(cursor: string | undefined) {
+  if (!cursor) return {};
+  const at = cursor.indexOf(":");
+  const before = Number(cursor.slice(0, at));
+  const id = cursor.slice(at + 1);
+  if (
+    at <= 0 ||
+    !Number.isSafeInteger(before) ||
+    !/^[A-Za-z0-9_-]{1,64}$/.test(id)
+  )
+    return {};
+  return { before, beforeId: asId<"notes">(id) };
+}
+
 function iso(ms: number | null): string | null {
   return ms === null ? null : new Date(ms).toISOString();
 }
@@ -304,13 +319,14 @@ export function createNotesServer(context: ToolContext): McpServer {
     {
       title: "List recent notes",
       description:
-        "Browse notes shared with you, most recently edited first. To see older notes, pass the returned next_before as before.",
+        "Browse notes shared with you, most recently edited first. To see older notes, pass the returned next_cursor as cursor.",
       inputSchema: z.object({
         notebook_id: notebookId.optional().describe("List only this notebook."),
-        before: z
-          .number()
+        cursor: z
+          .string()
+          .max(200)
           .optional()
-          .describe("next_before from a previous call, to continue."),
+          .describe("next_cursor from a previous call, to continue."),
         limit: z
           .number()
           .int()
@@ -332,7 +348,7 @@ export function createNotesServer(context: ToolContext): McpServer {
             ...(args.notebook_id
               ? { notebookId: asId<"notebooks">(args.notebook_id) }
               : {}),
-            ...(args.before !== undefined ? { before: args.before } : {}),
+            ...parseCursor(args.cursor),
             ...(args.limit !== undefined ? { limit: args.limit } : {}),
             ...(args.include_trashed !== undefined
               ? { includeTrashed: args.include_trashed }
@@ -347,9 +363,13 @@ export function createNotesServer(context: ToolContext): McpServer {
         let text = notes.length
           ? notes.map(noteLine).join("\n")
           : "No notes found.";
-        if (page.nextBefore !== null)
-          text += `\nMore notes: call list_notes with before=${page.nextBefore}.`;
-        return ok(text, { notes, next_before: page.nextBefore });
+        const nextCursor =
+          page.nextBefore !== null && page.nextBeforeId !== null
+            ? `${page.nextBefore}:${page.nextBeforeId}`
+            : null;
+        if (nextCursor)
+          text += `\nMore notes: call list_notes with cursor="${nextCursor}".`;
+        return ok(text, { notes, next_cursor: nextCursor });
       }),
   );
 

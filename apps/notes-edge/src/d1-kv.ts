@@ -68,7 +68,13 @@ export class D1KV {
       .first<Pick<Row, "value" | "expiration">>();
     if (!row) return null;
     if (row.expiration !== null && row.expiration <= now()) {
-      await this.delete(key);
+      // Remove only if still expired: a concurrent replacement must survive.
+      await this.db
+        .prepare(
+          "DELETE FROM oauth_kv WHERE key = ? AND expiration IS NOT NULL AND expiration <= ?",
+        )
+        .bind(key, now())
+        .run();
       return null;
     }
     const type = typeof options === "string" ? options : options?.type;
@@ -165,6 +171,11 @@ export async function purgeAbandonedClients(
   olderThanSeconds = 86_400,
 ) {
   await db.exec(SCHEMA);
+  await db.exec(QUOTA_SCHEMA);
+  await db
+    .prepare("DELETE FROM oauth_registration_quota WHERE hour < ?")
+    .bind(Math.floor(now() / 3600) - 48)
+    .run();
   await db
     .prepare(
       "DELETE FROM oauth_kv WHERE key LIKE 'client:%' " +
@@ -176,7 +187,28 @@ export async function purgeAbandonedClients(
     .run();
 }
 
-/** Registrations recorded in the last hour, for a hard cap on anonymous DCR. */
+const QUOTA_SCHEMA =
+  "CREATE TABLE IF NOT EXISTS oauth_registration_quota (hour INTEGER PRIMARY KEY, n INTEGER NOT NULL)";
+
+/**
+ * Atomically reserve one registration in the current hour. A single UPSERT
+ * increments the counter only while it is under the ceiling, so concurrent
+ * requests can never exceed it. Reservations are not refunded on failure.
+ */
+export async function reserveRegistration(db: D1Like, ceiling: number) {
+  await db.exec(QUOTA_SCHEMA);
+  const hour = Math.floor(now() / 3600);
+  const row = await db
+    .prepare(
+      "INSERT INTO oauth_registration_quota (hour, n) VALUES (?, 1) " +
+        "ON CONFLICT(hour) DO UPDATE SET n = n + 1 WHERE n < ? RETURNING n",
+    )
+    .bind(hour, ceiling)
+    .first<{ n: number }>();
+  return row !== null;
+}
+
+/** Registrations recorded in the last hour (for monitoring and tests). */
 export async function recentRegistrations(db: D1Like, windowSeconds = 3600) {
   await db.exec(SCHEMA);
   const row = await db

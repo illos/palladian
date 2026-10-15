@@ -9,7 +9,7 @@ import {
   handleDeny,
   handleRequestInfo,
 } from "./consent.ts";
-import { D1KV, purgeAbandonedClients, recentRegistrations } from "./d1-kv.ts";
+import { D1KV, purgeAbandonedClients, reserveRegistration } from "./d1-kv.ts";
 import {
   MCP_PATH,
   publicOrigin,
@@ -130,7 +130,7 @@ const REGISTRATIONS_PER_HOUR = 300;
 
 /**
  * Bound anonymous registrations: a per-address limit slows bursts (Cloudflare's
- * limiter is approximate), and an exact hourly ceiling in D1 bounds storage
+ * limiter is approximate), and an atomic hourly reservation in D1 bounds storage
  * together with the daily purge. Connected clients are unaffected.
  */
 async function registrationAllowed(request: Request, deployed: DeployedEnv) {
@@ -141,9 +141,7 @@ async function registrationAllowed(request: Request, deployed: DeployedEnv) {
       return false;
   }
   if (deployed.OAUTH_DB)
-    return (
-      (await recentRegistrations(deployed.OAUTH_DB)) < REGISTRATIONS_PER_HOUR
-    );
+    return reserveRegistration(deployed.OAUTH_DB, REGISTRATIONS_PER_HOUR);
   return true;
 }
 

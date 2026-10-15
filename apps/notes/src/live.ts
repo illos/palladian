@@ -292,16 +292,20 @@ export class LiveController {
       })),
       fence,
     );
-    await this.store.cacheSummaries(
+    const fenced = await this.store.cacheSummaries(
       accountId,
       snapshot.shared.map(toRemote),
       [],
       fence,
     );
-    // Anything cached that this snapshot no longer covers is revoked.
-    await this.store.reconcileAccess(accountId, ids, shared, fence);
+    // Anything cached that a complete snapshot no longer covers is revoked; a
+    // truncated snapshot never implies revocation.
+    if (snapshot.complete)
+      await this.store.reconcileAccess(accountId, ids, shared, fence);
     for (const row of snapshot.shared)
-      this.queueFetch(accountId, row.id, row.editedAt);
+      if (!fenced.includes(row.id))
+        this.queueFetch(accountId, row.id, row.editedAt);
+    void this.recheckAccess(accountId, fenced);
     for (const [id, stop] of this.feeds)
       if (!ids.has(id)) {
         stop();
@@ -333,7 +337,7 @@ export class LiveController {
         void (async () => {
           try {
             const fence = await this.store.captureFence(accountId);
-            await this.store.cacheSummaries(
+            const fenced = await this.store.cacheSummaries(
               accountId,
               page.notes.map(toRemote),
               page.removed as string[],
@@ -341,7 +345,9 @@ export class LiveController {
               { key, value: page.cursor },
             );
             for (const note of page.notes)
-              this.queueFetch(accountId, note.id, note.editedAt);
+              if (!fenced.includes(note.id))
+                this.queueFetch(accountId, note.id, note.editedAt);
+            void this.recheckAccess(accountId, fenced);
           } catch {
             handled = false;
             return;
@@ -352,6 +358,40 @@ export class LiveController {
       },
     );
     this.feeds.set(notebookId, stop);
+  }
+
+  /**
+   * Notes fenced after a revocation reappeared in a feed or snapshot, which may
+   * be older than the revocation. Ask the server now; only an answer to a
+   * request issued after the fence lifts it.
+   */
+  private async recheckAccess(accountId: string, ids: string[]) {
+    for (const id of ids) {
+      const checkedAt = Date.now();
+      let meta;
+      try {
+        meta = await this.client.query(api.notes.get, {
+          noteId: id as Id<"notes">,
+        });
+      } catch {
+        continue;
+      }
+      if (!meta || this.state.accountId !== accountId) continue;
+      try {
+        await this.store.allowNotes(accountId, [id], checkedAt);
+        const fence = await this.store.captureFence(accountId);
+        const still = await this.store.cacheSummaries(
+          accountId,
+          [toRemote(meta.summary)],
+          [],
+          fence,
+        );
+        if (!still.length)
+          this.queueFetch(accountId, id, meta.summary.editedAt);
+      } catch {
+        /* retried on the next update */
+      }
+    }
   }
 
   private queueFetch(accountId: string, noteId: string, updatedAt: number) {
@@ -406,6 +446,7 @@ export class LiveController {
       for (const draft of await this.store.localDrafts(accountId)) {
         if (this.openNotes.has(draft.id) || this.state.accountId !== accountId)
           continue;
+        // The local ID is the creation key: retries return the same note.
         const created = await this.client.mutation(api.notes.create, {
           clientKey: draft.id.slice(0, 64),
           doc: draft.document,
@@ -415,17 +456,23 @@ export class LiveController {
           deviceTime: draft.updatedAt,
         });
         const fence = await this.store.captureFence(accountId);
+        // Adoption marks the draft created, so it is never created again.
         await this.store.adoptServerId(
           accountId,
           draft.id,
           created.noteId,
           fence,
         );
-        await this.reconcileCreated(accountId, created.noteId, {
-          ...draft,
-          id: created.noteId,
-        });
-        this.queueFetch(accountId, created.noteId, draft.updatedAt);
+      }
+      for (const draft of await this.store.adoptedDrafts(accountId)) {
+        if (this.openNotes.has(draft.id) || this.state.accountId !== accountId)
+          continue;
+        try {
+          await this.reconcileCreated(accountId, draft.id, draft);
+          this.queueFetch(accountId, draft.id, draft.updatedAt);
+        } catch {
+          /* this draft waits for the next sync; others continue */
+        }
       }
     } catch {
       /* retried on the next connection or close of the open draft */
@@ -435,22 +482,30 @@ export class LiveController {
   }
 
   /**
-   * A creation may have been answered from an earlier attempt, so compare what
-   * the server kept with the local version and send any difference as an edit.
-   * Local work is retired only once the server holds the same content.
+   * A creation may have been answered from an earlier attempt. Compare the
+   * note's creation version (revision 0) with the local draft and keep any
+   * difference as an ordinary collaborative edit on that base: the editor's
+   * rebasing then preserves edits others made since, and a fixed client ID
+   * makes a resent step recognizable if an earlier send was accepted.
    */
   private async reconcileCreated(
     accountId: string,
     noteId: string,
     draft: Draft,
   ) {
-    const content = await this.client.query(api.notes.content, {
+    const origin = await this.client.query(api.history.read, {
       noteId: noteId as Id<"notes">,
+      revision: 0,
     });
-    if (!content || this.state.accountId !== accountId) return;
-    const server = parseStoredDoc(content.doc);
+    if (this.state.accountId !== accountId) return;
+    const base = parseStoredDoc(origin.doc);
     const local = parseStoredDoc(draft.document);
-    const settle = async (doc: string, revision: number) => {
+    if (sameContent(base, local)) {
+      // Nothing local beyond creation: the server's current note is the truth.
+      const content = await this.client.query(api.notes.content, {
+        noteId: noteId as Id<"notes">,
+      });
+      if (!content) return;
       const fence = await this.store.captureFence(accountId);
       await this.store.settleDraft(
         accountId,
@@ -458,47 +513,59 @@ export class LiveController {
         {
           accountId,
           id: noteId,
-          document: doc,
-          text: plainText(parseStoredDoc(doc)),
-          revision,
+          document: content.doc,
+          text: plainText(parseStoredDoc(content.doc)),
+          revision: content.revision,
         },
         draft.updatedAt,
         draft,
         fence,
       );
+      return;
+    }
+    const step = diffStep(base, local);
+    if (!step) return;
+    const clientId = draft.clientId ?? crypto.randomUUID().replace(/-/g, "");
+    const journal: Draft = {
+      ...draft,
+      baseDocument: origin.doc,
+      baseRevision: 0,
+      steps: [JSON.stringify(step.toJSON())],
+      clientId,
+      created: true,
     };
-    if (sameContent(server, local))
-      return settle(content.doc, content.revision);
-    const step = diffStep(server, local);
-    if (!step) return settle(content.doc, content.revision);
-    const json = JSON.stringify(step.toJSON());
+    // Journal before sending, with the identity the send will use.
+    await this.store.writeDraft(journal);
     try {
       const pushed = await this.client.mutation(api.notes.push, {
         noteId: noteId as Id<"notes">,
-        revision: content.revision,
-        steps: [json],
-        clientId: "sync-" + crypto.randomUUID().slice(0, 8),
+        revision: 0,
+        steps: journal.steps!,
+        clientId,
       });
-      if (pushed.status === "accepted") {
-        const after = await this.client.query(api.notes.content, {
-          noteId: noteId as Id<"notes">,
-        });
-        if (after) return settle(after.doc, after.revision);
-        return;
-      }
+      if (pushed.status !== "accepted") return; // Others edited; the editor rebases on open.
+      const content = await this.client.query(api.notes.content, {
+        noteId: noteId as Id<"notes">,
+      });
+      if (!content) return;
+      const fence = await this.store.captureFence(accountId);
+      await this.store.settleDraft(
+        accountId,
+        noteId,
+        {
+          accountId,
+          id: noteId,
+          document: content.doc,
+          text: plainText(parseStoredDoc(content.doc)),
+          revision: content.revision,
+        },
+        journal.updatedAt,
+        journal,
+        fence,
+      );
     } catch {
-      /* keep the work as a journal entry below */
+      /* the journal stays; opening the note resends with the same client ID */
     }
-    // Keep the difference as unconfirmed collaborative work on top of the
-    // server's version; opening the note sends and rebases it.
-    await this.store.writeDraft({
-      ...draft,
-      baseDocument: content.doc,
-      baseRevision: content.revision,
-      steps: [json],
-      clientId: crypto.randomUUID().replace(/-/g, ""),
-      created: true,
-    });
   }
 
   setOpen(noteId: string, open: boolean) {
