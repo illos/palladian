@@ -98,16 +98,11 @@ export const fns = {
       "query",
       {
         notebookId?: Id<"notebooks">;
-        before?: number;
-        beforeId?: Id<"notes">;
+        cursor?: string;
         limit?: number;
         includeTrashed?: boolean;
       },
-      {
-        notes: NoteSummary[];
-        nextBefore: number | null;
-        nextBeforeId: Id<"notes"> | null;
-      }
+      { notes: NoteSummary[]; nextCursor: string | null }
     >("library:recent"),
     search: makeFunctionReference<
       "query",

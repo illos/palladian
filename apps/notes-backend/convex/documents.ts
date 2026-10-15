@@ -173,8 +173,16 @@ export async function commitSteps(
             : "A step could not be applied.",
       );
     }
-    if (++revision % CHECKPOINT_INTERVAL === 0)
+    if (++revision % CHECKPOINT_INTERVAL === 0) {
+      // A checkpoint is read back with parseStoredDoc; hold it to the same bar.
+      try {
+        doc.check();
+        assertSafeDocument(doc);
+      } catch {
+        fail("invalid", "The edit would produce an invalid or unsafe note.");
+      }
       checkpoints.push({ revision, doc });
+    }
   };
   for (const step of args.steps) apply(step);
   // Repair IDs after concurrent splits or pastes; clients receive the fix as steps.

@@ -41,6 +41,8 @@ export {
   emptyDoc,
   parseStoredDoc,
   diffStep,
+  diffSteps,
+  contentKey,
   applySafeStep,
   DOC_JSON_LIMIT,
 } from "./document.ts";

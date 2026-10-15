@@ -1,4 +1,4 @@
-import { diffStep, parseStoredDoc } from "@palladian/notes-core/document";
+import { diffSteps, parseStoredDoc } from "@palladian/notes-core/document";
 import type { Node as ProseMirrorNode } from "prosemirror-model";
 import { plainText } from "@palladian/notes-core/projection";
 import { api } from "@palladian/notes-backend/api";
@@ -6,7 +6,7 @@ import { ConvexReactClient } from "convex/react";
 import { ConvexError } from "convex/values";
 import type { FunctionReference, FunctionReturnType } from "convex/server";
 import type { Id } from "@palladian/notes-backend/dataModel";
-import type { Draft, RemoteSummary, NotesStore } from "./cache";
+import type { CacheFence, Draft, RemoteSummary, NotesStore } from "./cache";
 import { TransportError, type NoteTransport, type StepBatch } from "./channel";
 import type { SessionController } from "./session";
 import type { createAuthService } from "./auth-service";
@@ -362,32 +362,45 @@ export class LiveController {
 
   /**
    * Notes fenced after a revocation reappeared in a feed or snapshot, which may
-   * be older than the revocation. Ask the server now; only an answer to a
-   * request issued after the fence lifts it.
+   * be older than the revocation. Ask the server through a mutation, which no
+   * local subscription can answer, and lift a fence only if its marker is
+   * unchanged since before the request and the answer is for this account.
    */
   private async recheckAccess(accountId: string, ids: string[]) {
-    for (const id of ids) {
-      const checkedAt = Date.now();
-      let meta;
+    if (!ids.length) return;
+    let fence: CacheFence;
+    let markers: Map<string, string>;
+    try {
+      fence = await this.store.captureFence(accountId);
+      markers = await this.store.revocationMarkers(accountId, ids);
+    } catch {
+      return;
+    }
+    for (const [id, marker] of markers) {
+      let verdict;
       try {
-        meta = await this.client.query(api.notes.get, {
+        verdict = await this.client.mutation(api.notes.verifyAccess, {
           noteId: id as Id<"notes">,
         });
       } catch {
         continue;
       }
-      if (!meta || this.state.accountId !== accountId) continue;
+      if (
+        !verdict.summary ||
+        verdict.subject !== accountId ||
+        this.state.accountId !== accountId
+      )
+        continue;
       try {
-        await this.store.allowNotes(accountId, [id], checkedAt);
-        const fence = await this.store.captureFence(accountId);
+        await this.store.allowNotes(accountId, [{ id, marker }], fence);
         const still = await this.store.cacheSummaries(
           accountId,
-          [toRemote(meta.summary)],
+          [toRemote(verdict.summary)],
           [],
           fence,
         );
         if (!still.length)
-          this.queueFetch(accountId, id, meta.summary.editedAt);
+          this.queueFetch(accountId, id, verdict.summary.editedAt);
       } catch {
         /* retried on the next update */
       }
@@ -483,10 +496,12 @@ export class LiveController {
 
   /**
    * A creation may have been answered from an earlier attempt. Compare the
-   * note's creation version (revision 0) with the local draft and keep any
-   * difference as an ordinary collaborative edit on that base: the editor's
-   * rebasing then preserves edits others made since, and a fixed client ID
-   * makes a resent step recognizable if an earlier send was accepted.
+   * note's creation version (revision 0) with the local draft and keep the
+   * differences as ordinary collaborative edits on that base, one step per
+   * changed region: the editor's rebasing then preserves edits others made
+   * since, and a fixed client ID makes resent steps recognizable if an earlier
+   * send was accepted. The journal replaces the draft only if no newer typing
+   * arrived meanwhile; otherwise the next sync starts from the newer draft.
    */
   private async reconcileCreated(
     accountId: string,
@@ -523,19 +538,21 @@ export class LiveController {
       );
       return;
     }
-    const step = diffStep(base, local);
-    if (!step) return;
+    const steps = diffSteps(base, local);
+    if (!steps.length) return;
     const clientId = draft.clientId ?? crypto.randomUUID().replace(/-/g, "");
     const journal: Draft = {
       ...draft,
       baseDocument: origin.doc,
       baseRevision: 0,
-      steps: [JSON.stringify(step.toJSON())],
+      steps: steps.map((step) => JSON.stringify(step.toJSON())),
       clientId,
       created: true,
     };
-    // Journal before sending, with the identity the send will use.
-    await this.store.writeDraft(journal);
+    // Journal before sending, with the identity the send will use, and only
+    // over the exact snapshot it was derived from.
+    if (this.openNotes.has(noteId)) return;
+    if (!(await this.store.replaceDraftIf(draft, journal))) return;
     try {
       const pushed = await this.client.mutation(api.notes.push, {
         noteId: noteId as Id<"notes">,

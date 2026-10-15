@@ -140,21 +140,6 @@ const editSchema = z.union([
     ),
 ]);
 
-/** list_notes cursor: "<editedAt>:<noteId>" as returned in next_cursor. */
-function parseCursor(cursor: string | undefined) {
-  if (!cursor) return {};
-  const at = cursor.indexOf(":");
-  const before = Number(cursor.slice(0, at));
-  const id = cursor.slice(at + 1);
-  if (
-    at <= 0 ||
-    !Number.isSafeInteger(before) ||
-    !/^[A-Za-z0-9_-]{1,64}$/.test(id)
-  )
-    return {};
-  return { before, beforeId: asId<"notes">(id) };
-}
-
 function iso(ms: number | null): string | null {
   return ms === null ? null : new Date(ms).toISOString();
 }
@@ -348,7 +333,7 @@ export function createNotesServer(context: ToolContext): McpServer {
             ...(args.notebook_id
               ? { notebookId: asId<"notebooks">(args.notebook_id) }
               : {}),
-            ...parseCursor(args.cursor),
+            ...(args.cursor ? { cursor: args.cursor } : {}),
             ...(args.limit !== undefined ? { limit: args.limit } : {}),
             ...(args.include_trashed !== undefined
               ? { includeTrashed: args.include_trashed }
@@ -363,10 +348,7 @@ export function createNotesServer(context: ToolContext): McpServer {
         let text = notes.length
           ? notes.map(noteLine).join("\n")
           : "No notes found.";
-        const nextCursor =
-          page.nextBefore !== null && page.nextBeforeId !== null
-            ? `${page.nextBefore}:${page.nextBeforeId}`
-            : null;
+        const nextCursor = page.nextCursor;
         if (nextCursor)
           text += `\nMore notes: call list_notes with cursor="${nextCursor}".`;
         return ok(text, { notes, next_cursor: nextCursor });

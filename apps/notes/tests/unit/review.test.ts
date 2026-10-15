@@ -65,7 +65,12 @@ describe("note access fences", () => {
       ).rejects.toThrow(/removed/);
       expect(await b.read("account", "note")).toBeUndefined();
       // A fresh server access check issued after the revocation lifts the fence.
-      await b.allowNotes("account", ["note"], Date.now() + 1);
+      const markers = await b.revocationMarkers("account", ["note"]);
+      await b.allowNotes(
+        "account",
+        [{ id: "note", marker: markers.get("note")! }],
+        fence,
+      );
       await b.cacheSummaries(
         "account",
         [

@@ -83,7 +83,8 @@ class NotesDatabase extends Dexie {
     [string, string]
   >;
   revoked!: Table<
-    { accountId: string; id: string; at: number },
+    // `nonce` changes with every revocation recorded for the note.
+    { accountId: string; id: string; at: number; nonce?: string },
     [string, string]
   >;
   constructor(name: string) {
@@ -217,12 +218,16 @@ export class NotesStore {
       ? body
       : undefined;
   }
-  writeDraft(draft: Draft): Promise<void> {
-    const epoch = this.epoch(draft.accountId);
-    if (this.blocked.has(draft.accountId))
+  writeDraft(written: Draft): Promise<void> {
+    const epoch = this.epoch(written.accountId);
+    if (this.blocked.has(written.accountId))
       return Promise.reject(new Error("Account access changed"));
-    const fence = this.captureFence(draft.accountId);
-    const key = JSON.stringify([draft.accountId, draft.id]);
+    const fence = this.captureFence(written.accountId);
+    const key = JSON.stringify([written.accountId, written.id]);
+    // A note created on the server stays created, whichever editor saves it.
+    let draft = this.recoveryDrafts.get(key)?.created
+      ? { ...written, created: true }
+      : written;
     // Keep the latest editor snapshot even when quota prevents a durable write.
     this.recoveryDrafts.set(key, { ...draft });
     this.recoveryFences.set(key, fence);
@@ -244,6 +249,16 @@ export class NotesStore {
             await this.assertPersistent(draft.accountId, captured.epoch);
             this.assertWritable(draft.accountId, epoch);
             await this.assertNotRevoked(draft.accountId, draft.id);
+            const existing = await this.db.drafts.get([
+              draft.accountId,
+              draft.id,
+            ]);
+            if (existing?.created && !draft.created) {
+              draft = { ...draft, created: true };
+              const latest = this.recoveryDrafts.get(key);
+              if (latest && latest.updatedAt === draft.updatedAt)
+                this.recoveryDrafts.set(key, { ...latest, created: true });
+            }
             await this.db.drafts.put(draft);
             const previous = await this.db.summaries.get([
               draft.accountId,
@@ -266,6 +281,58 @@ export class NotesStore {
     void write
       .finally(() => {
         if (this.draftQueues.get(key) === write) this.draftQueues.delete(key);
+      })
+      .catch(() => undefined);
+    return write;
+  }
+  /**
+   * Replace a draft only if it is still exactly `expected`, with no newer
+   * snapshot written meanwhile, durable or pending. Resolves whether it did.
+   */
+  replaceDraftIf(expected: Draft, next: Draft): Promise<boolean> {
+    const epoch = this.epoch(next.accountId);
+    if (this.blocked.has(next.accountId))
+      return Promise.reject(new Error("Account access changed"));
+    const fence = this.captureFence(next.accountId);
+    const key = JSON.stringify([next.accountId, next.id]);
+    const unchanged = (draft: Draft | undefined) =>
+      draft !== undefined &&
+      draft.updatedAt === expected.updatedAt &&
+      draft.document === expected.document &&
+      draft.baseRevision === expected.baseRevision;
+    const previous = this.draftQueues.get(key) ?? Promise.resolve();
+    const write = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const captured = await fence;
+        this.assertWritable(next.accountId, epoch);
+        const memory = this.recoveryDrafts.get(key);
+        if (memory && !unchanged(memory)) return false;
+        const replaced = await this.db.transaction(
+          "rw",
+          [this.db.drafts, this.db.accounts, this.db.revoked],
+          async () => {
+            await this.assertPersistent(next.accountId, captured.epoch);
+            this.assertWritable(next.accountId, epoch);
+            await this.assertNotRevoked(next.accountId, next.id);
+            const current = await this.db.drafts.get([next.accountId, next.id]);
+            if (!unchanged(current)) return false;
+            await this.db.drafts.put(next);
+            return true;
+          },
+        );
+        // Snapshots written while this was queued are newer; keep them.
+        if (replaced && unchanged(this.recoveryDrafts.get(key)))
+          this.recoveryDrafts.set(key, { ...next });
+        if (replaced) this.notify();
+        return replaced;
+      });
+    void fence.catch(() => undefined);
+    const settled = write.then(() => undefined);
+    this.draftQueues.set(key, settled);
+    void settled
+      .finally(() => {
+        if (this.draftQueues.get(key) === settled) this.draftQueues.delete(key);
       })
       .catch(() => undefined);
     return write;
@@ -532,21 +599,47 @@ export class NotesStore {
     return fenced;
   }
   /**
-   * Lift fences for notes the server confirmed accessible by a request issued
-   * at `checkedAt`; a fence recorded later than that request stays.
+   * The current revocation marker of each fenced note. Capture these before
+   * asking the server; `allowNotes` lifts only markers that are unchanged.
+   */
+  async revocationMarkers(
+    accountId: string,
+    ids: string[],
+  ): Promise<Map<string, string>> {
+    const markers = new Map<string, string>();
+    for (const id of ids) {
+      const marker = await this.db.revoked.get([accountId, id]);
+      if (marker) markers.set(id, marker.nonce ?? "");
+    }
+    return markers;
+  }
+  /**
+   * Lift fences the server has since confirmed accessible. Each confirmation
+   * names the marker captured before its request was sent; a revocation
+   * recorded since then replaced that marker and stays.
    */
   async allowNotes(
     accountId: string,
-    ids: string[],
-    checkedAt: number,
+    confirmed: { id: string; marker: string }[],
+    fence: CacheFence,
   ): Promise<void> {
-    await this.db.transaction("rw", [this.db.revoked], async () => {
-      for (const id of ids) {
-        const marker = await this.db.revoked.get([accountId, id]);
-        if (marker && marker.at < checkedAt)
-          await this.db.revoked.delete([accountId, id]);
-      }
-    });
+    if (fence.accountId !== accountId)
+      throw new Error("Account cache fence does not match.");
+    const epoch = this.epoch(accountId);
+    this.assertWritable(accountId, epoch);
+    await this.db.transaction(
+      "rw",
+      [this.db.revoked, this.db.accounts],
+      async () => {
+        await this.assertPersistent(accountId, fence.epoch);
+        this.assertWritable(accountId, epoch);
+        for (const { id, marker } of confirmed) {
+          const current = await this.db.revoked.get([accountId, id]);
+          if (current && (current.nonce ?? "") === marker)
+            await this.db.revoked.delete([accountId, id]);
+        }
+      },
+    );
   }
   /** Delete a note's local copies and record a persistent fence. Inside a transaction. */
   private async fenceNotes(accountId: string, ids: string[]) {
@@ -555,7 +648,12 @@ export class NotesStore {
       await this.db.summaries.delete([accountId, id]);
       await this.db.bodies.delete([accountId, id]);
       await this.db.drafts.delete([accountId, id]);
-      await this.db.revoked.put({ accountId, id, at });
+      await this.db.revoked.put({
+        accountId,
+        id,
+        at,
+        nonce: crypto.randomUUID(),
+      });
     }
   }
   private announceRevoked(accountId: string, ids: string[]) {

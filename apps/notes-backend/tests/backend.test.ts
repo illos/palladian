@@ -1263,11 +1263,10 @@ describe("review regressions", () => {
     }
     let page = await member.as.query(api.library.recent, { limit: 1 });
     const seen = [...page.notes];
-    while (page.nextBefore !== null && seen.length === 0) {
+    while (page.nextCursor !== null && seen.length === 0) {
       page = await member.as.query(api.library.recent, {
         limit: 1,
-        before: page.nextBefore,
-        ...(page.nextBeforeId ? { beforeId: page.nextBeforeId } : {}),
+        cursor: page.nextCursor,
       });
       seen.push(...page.notes);
     }
@@ -1291,11 +1290,10 @@ describe("review round 2 regressions", () => {
     const seen: string[] = [];
     let page = await owner.as.query(api.library.recent, { limit: 1 });
     seen.push(...page.notes.map((n) => n.id));
-    while (page.nextBefore !== null) {
+    while (page.nextCursor !== null) {
       page = await owner.as.query(api.library.recent, {
         limit: 1,
-        before: page.nextBefore,
-        ...(page.nextBeforeId ? { beforeId: page.nextBeforeId } : {}),
+        cursor: page.nextCursor,
       });
       seen.push(...page.notes.map((n) => n.id));
     }
@@ -1365,6 +1363,125 @@ describe("review round 2 regressions", () => {
         clientId: "c",
       }),
     ).rejects.toThrow(/unsafe/);
+    expect(
+      (await owner.as.query(api.notes.content, { noteId }))!.revision,
+    ).toBe(0);
+  });
+});
+
+describe("review round 3 regressions", () => {
+  async function listAll(
+    as: Awaited<ReturnType<typeof human>>["as"],
+    limit: number,
+    includeTrashed = false,
+  ) {
+    const seen: string[] = [];
+    let page = await as.query(api.library.recent, { limit, includeTrashed });
+    seen.push(...page.notes.map((n) => n.id));
+    for (let guard = 0; page.nextCursor !== null && guard < 100; guard++) {
+      page = await as.query(api.library.recent, {
+        limit,
+        includeTrashed,
+        cursor: page.nextCursor,
+      });
+      seen.push(...page.notes.map((n) => n.id));
+    }
+    return seen;
+  }
+
+  test("large groups of equal edit times page completely", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const ids: string[] = [];
+    for (let i = 0; i < 10; i++)
+      ids.push(
+        (
+          await owner.as.mutation(api.notes.createFromMarkdown, {
+            markdown: "Tie " + i,
+          })
+        ).noteId,
+      );
+    for (const limit of [1, 3, 25]) {
+      const seen = await listAll(owner.as, limit);
+      expect(new Set(seen).size).toBe(seen.length);
+      expect(seen.sort()).toEqual([...ids].sort());
+    }
+  });
+
+  test("paging across notebooks never skips rows past a full notebook page", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const other = await owner.as.mutation(api.notebooks.create, {
+      name: "Second",
+    });
+    // Notebook A: two newer trashed notes fill a one-note page, and its next
+    // live note is older than them but newer than notebook B's note.
+    const make = async (
+      editedAt: number,
+      notebookId?: Id<"notebooks">,
+      trashed = false,
+    ) => {
+      const { noteId } = await owner.as.mutation(api.notes.createFromMarkdown, {
+        markdown: "At " + editedAt,
+        ...(notebookId ? { notebookId } : {}),
+      });
+      if (trashed) await owner.as.mutation(api.notes.trash, { noteId });
+      await t.run((ctx) => ctx.db.patch(noteId, { editedAt }));
+      return noteId;
+    };
+    await make(10, undefined, true);
+    await make(9, undefined, true);
+    const a3 = await make(8);
+    const b1 = await make(7, other);
+    for (const limit of [1, 2]) {
+      const seen = await listAll(owner.as, limit);
+      expect(seen).toEqual([a3, b1]);
+    }
+    expect(await listAll(owner.as, 1, true)).toHaveLength(4);
+    await expect(
+      owner.as.query(api.library.recent, { cursor: "nonsense" }),
+    ).rejects.toThrow(/cursor/);
+  });
+
+  test("nested malformed content cannot reach a checkpoint", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const { noteId } = await owner.as.mutation(api.notes.create, {
+      clientKey: "k",
+      doc: docJson("Valid"),
+    });
+    const { Fragment, Slice } = await import("prosemirror-model");
+    const { ReplaceStep } = await import("prosemirror-transform");
+    const valid = markdownToDoc("Valid");
+    const invalid = notesSchema.nodes.blockquote!.create(
+      { id: "valid-id" },
+      notesSchema.text("bad"),
+    );
+    const steps = [
+      new ReplaceStep(
+        0,
+        valid.content.size,
+        new Slice(Fragment.from(invalid), 0, 0),
+      ),
+      ...Array.from(
+        { length: 99 },
+        () =>
+          new ReplaceStep(
+            0,
+            invalid.nodeSize,
+            new Slice(Fragment.from(invalid), 0, 0),
+          ),
+      ),
+      new ReplaceStep(0, invalid.nodeSize, new Slice(valid.content, 0, 0)),
+    ].map((step) => JSON.stringify(step.toJSON()));
+    await expect(
+      owner.as.mutation(api.notes.push, {
+        noteId,
+        revision: 0,
+        steps,
+        clientId: "c",
+      }),
+    ).rejects.toThrow(/invalid or unsafe/);
     expect(
       (await owner.as.query(api.notes.content, { noteId }))!.revision,
     ).toBe(0);

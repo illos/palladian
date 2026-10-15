@@ -1,6 +1,7 @@
 convex/_generated/
 apps/web/dist/
 apps/notes/dist/
+apps/notes/dist-offline/
 **/test-results/
 **/playwright-report/
 **/.convex/

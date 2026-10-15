@@ -345,3 +345,73 @@ test("diffStep turns one version into another", async () => {
   assert.ok(step.apply(a).doc!.eq(b));
   assert.equal(diffStep(a, a), null);
 });
+
+test("diffSteps keeps unchanged text between edits when rebased", async () => {
+  const { diffSteps } = await import("../src/index.ts");
+  const { EditorState } = await import("prosemirror-state");
+  const { collab, receiveTransaction, sendableSteps } =
+    await import("prosemirror-collab");
+  const base = markdownToDoc("Alpha middle Omega");
+  const start = EditorState.create({ doc: base });
+  const local = start.tr
+    .insertText("ALPHA", 1, 6)
+    .insertText("OMEGA", 14, 19).doc;
+  const remote = start.tr.insertText("COLLABORATOR", 7, 13);
+  const steps = diffSteps(base, local);
+  assert.ok(steps.length > 1);
+  let state = EditorState.create({
+    doc: base,
+    plugins: [collab({ version: 0, clientID: "me" })],
+  });
+  const tr = state.tr;
+  for (const step of steps) tr.step(step);
+  state = state.apply(tr);
+  assert.ok(state.doc.eq(local));
+  state = state.apply(receiveTransaction(state, remote.steps, ["them"]));
+  assert.equal(state.doc.textContent, "ALPHA COLLABORATOR OMEGA");
+  assert.ok(sendableSteps(state));
+});
+
+test("diffSteps reproduces structural and attribute changes exactly", async () => {
+  const { diffSteps } = await import("../src/index.ts");
+  const cases: [string, string][] = [
+    ["one\n\ntwo\n\nthree", "one\n\nthree"],
+    ["one\n\nthree", "one\n\ntwo\n\nthree"],
+    ["# Title\n\nbody", "## Title\n\nbody"],
+    ["- [ ] task\n- [ ] other", "- [x] task\n- [ ] other"],
+    ["plain words", "plain **bold** words"],
+    ["- a\n- b", "1. a\n2. b"],
+    ["", "Everything new\n\n> quoted"],
+    [sample, "Short"],
+  ];
+  for (const [before, after] of cases) {
+    const a = markdownToDoc(before);
+    const b = markdownToDoc(after);
+    const tr = new Transform(a);
+    for (const step of diffSteps(a, b)) tr.step(step);
+    assert.equal(
+      docToMarkdown(tr.doc),
+      docToMarkdown(b),
+      `${before} → ${after}`,
+    );
+  }
+  assert.deepEqual(diffSteps(markdownToDoc("same"), markdownToDoc("same")), []);
+});
+
+test("steps inserting malformed nested content are rejected", async () => {
+  const { applySafeStep, UnsafeDocumentError } =
+    await import("../src/index.ts");
+  const { Fragment, Slice } = await import("prosemirror-model");
+  const { ReplaceStep } = await import("prosemirror-transform");
+  const valid = markdownToDoc("fine");
+  const invalid = notesSchema.nodes.blockquote!.create(
+    { id: "q" },
+    notesSchema.text("bad"),
+  );
+  const step = new ReplaceStep(
+    0,
+    valid.content.size,
+    new Slice(Fragment.from(invalid), 0, 0),
+  );
+  assert.throws(() => applySafeStep(valid, step), UnsafeDocumentError);
+});

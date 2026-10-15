@@ -228,76 +228,150 @@ async function grantedOnly(
   return result;
 }
 
+/** Newest first: edit time, then creation time, then ID. */
+function newestFirst(a: Doc<"notes">, b: Doc<"notes">) {
+  if (a.editedAt !== b.editedAt) return b.editedAt - a.editedAt;
+  if (a._creationTime !== b._creationTime)
+    return b._creationTime - a._creationTime;
+  return a._id < b._id ? 1 : a._id > b._id ? -1 : 0;
+}
+
+type RecentCursor = { editedAt: number; created: number; id: string };
+
+function parseRecentCursor(cursor: string): RecentCursor {
+  const [editedAt, created, id, ...rest] = cursor.split(":");
+  const numbers = [Number(editedAt), Number(created)];
+  if (rest.length || !id || !numbers.every(Number.isFinite))
+    fail("invalid", "Invalid cursor.");
+  return { editedAt: numbers[0]!, created: numbers[1]!, id };
+}
+
+/** Rows strictly after the cursor in newestFirst order. */
+function afterCursor(note: Doc<"notes">, cursor: RecentCursor | null) {
+  if (!cursor) return true;
+  if (note.editedAt !== cursor.editedAt) return note.editedAt < cursor.editedAt;
+  if (note._creationTime !== cursor.created)
+    return note._creationTime < cursor.created;
+  return note._id < cursor.id;
+}
+
+// Notes sharing both edit and creation time need concurrent creations in one
+// notebook within the same instant; this bounds that group, not the page.
+const TIE_LIMIT = 1000;
+
+/** The first `count` notes of one notebook after the cursor, in order. */
+async function notebookPage(
+  ctx: QueryCtx,
+  notebookId: Id<"notebooks">,
+  cursor: RecentCursor | null,
+  count: number,
+) {
+  const index = ctx.db.query("notes");
+  if (!cursor)
+    return await index
+      .withIndex("by_notebook_and_edited", (q) =>
+        q.eq("notebookId", notebookId),
+      )
+      .order("desc")
+      .take(count);
+  const rows = (
+    await index
+      .withIndex("by_notebook_and_edited", (q) =>
+        q
+          .eq("notebookId", notebookId)
+          .eq("editedAt", cursor.editedAt)
+          .eq("_creationTime", cursor.created),
+      )
+      .take(TIE_LIMIT)
+  )
+    .filter((note) => afterCursor(note, cursor))
+    .sort(newestFirst)
+    .slice(0, count);
+  if (rows.length < count)
+    rows.push(
+      ...(await ctx.db
+        .query("notes")
+        .withIndex("by_notebook_and_edited", (q) =>
+          q
+            .eq("notebookId", notebookId)
+            .eq("editedAt", cursor.editedAt)
+            .lt("_creationTime", cursor.created),
+        )
+        .order("desc")
+        .take(count - rows.length)),
+    );
+  if (rows.length < count)
+    rows.push(
+      ...(await ctx.db
+        .query("notes")
+        .withIndex("by_notebook_and_edited", (q) =>
+          q.eq("notebookId", notebookId).lt("editedAt", cursor.editedAt),
+        )
+        .order("desc")
+        .take(count - rows.length)),
+    );
+  return rows;
+}
+
 /** Notes by most recent edit across everything the caller can read. */
 export const recent = query({
   args: {
     notebookId: v.optional(v.id("notebooks")),
-    // Cursor: edit time and ID of the last note seen, ordered newest first.
-    before: v.optional(v.number()),
-    beforeId: v.optional(v.id("notes")),
+    // Opaque continuation from a previous page's nextCursor.
+    cursor: v.optional(v.string()),
     limit: v.optional(v.number()),
     includeTrashed: v.optional(v.boolean()),
   },
   returns: v.object({
     notes: v.array(noteSummary),
-    nextBefore: v.union(v.number(), v.null()),
-    nextBeforeId: v.union(v.id("notes"), v.null()),
+    nextCursor: v.union(v.string(), v.null()),
   }),
   handler: async (ctx, args) => {
     const principal = await requirePrincipal(ctx);
     const limit = Math.min(100, Math.max(1, Math.floor(args.limit ?? 25)));
-    const before = args.before ?? Number.MAX_SAFE_INTEGER;
-    // Notes are ordered by edit time, then ID, both descending; equal times
-    // continue from the last ID rather than being skipped.
-    const isAfterCursor = (note: Doc<"notes">) =>
-      note.editedAt < before ||
-      (note.editedAt === before &&
-        args.beforeId !== undefined &&
-        note._id < args.beforeId);
+    const cursor = args.cursor ? parseRecentCursor(args.cursor) : null;
+    const count = limit + 1;
     const candidates: Doc<"notes">[] = [];
-    let fullPage = false;
+    // A notebook that filled its page may hold more rows just past its last
+    // one; nothing beyond the earliest such row is examined on this page.
+    let horizon: Doc<"notes"> | null = null;
     for (const id of await memberNotebooks(ctx, principal, args.notebookId)) {
-      const rows = await ctx.db
-        .query("notes")
-        .withIndex("by_notebook_and_edited", (q) =>
-          q.eq("notebookId", id).lte("editedAt", before),
-        )
-        .order("desc")
-        .take(limit * 2 + 1);
-      if (rows.length === limit * 2 + 1) fullPage = true;
-      candidates.push(...rows.filter(isAfterCursor));
+      const rows = await notebookPage(ctx, id, cursor, count);
+      candidates.push(...rows);
+      const last = rows.at(-1);
+      if (
+        rows.length === count &&
+        last &&
+        (!horizon || newestFirst(last, horizon) < 0)
+      )
+        horizon = last;
     }
     for (const { note } of await grantedOnly(ctx, principal, args.notebookId))
-      if (isAfterCursor(note)) candidates.push(note);
-    candidates.sort((a, b) =>
-      b.editedAt !== a.editedAt
-        ? b.editedAt - a.editedAt
-        : b._id < a._id
-          ? -1
-          : b._id > a._id
-            ? 1
-            : 0,
-    );
+      if (afterCursor(note, cursor)) candidates.push(note);
+    candidates.sort(newestFirst);
     const notes = [];
     let examined: Doc<"notes"> | null = null;
+    let exhausted = true;
     for (const note of candidates) {
-      if (notes.length >= limit) break;
+      if (
+        notes.length >= limit ||
+        (horizon && newestFirst(note, horizon) > 0)
+      ) {
+        exhausted = false;
+        break;
+      }
       examined = note;
       if (note.lifecycle === "trashed" && !args.includeTrashed) continue;
       const role = await noteRole(ctx, principal, note);
       if (role) notes.push(toSummary(note, role));
     }
-    // More may exist whenever a notebook returned a full candidate page or the
-    // scan stopped early; the cursor continues from the last note examined.
-    const more =
-      examined !== null &&
-      (fullPage ||
-        notes.length >= limit ||
-        candidates.indexOf(examined) < candidates.length - 1);
+    if (horizon) exhausted = false;
     return {
       notes,
-      nextBefore: more && examined ? examined.editedAt : null,
-      nextBeforeId: more && examined ? examined._id : null,
+      nextCursor:
+        !exhausted && examined
+          ? `${examined.editedAt}:${examined._creationTime}:${examined._id}`
+          : null,
     };
   },
 });

@@ -70,7 +70,9 @@ describe("revocation fences", () => {
       const fence = await store.captureFence("account");
       await store.cacheSummaries("account", [row], [], fence);
       await store.cacheAccepted(body, 1, fence);
-      const before = Date.now() - 1000;
+      await store.revokeNotes("account", ["note"]);
+      const before = await store.revocationMarkers("account", ["note"]);
+      // A later revocation replaces the marker a check captured earlier.
       await store.revokeNotes("account", ["note"]);
       expect(await store.cacheSummaries("account", [row], [], fence)).toEqual([
         "note",
@@ -79,11 +81,20 @@ describe("revocation fences", () => {
         /removed/,
       );
       expect(await store.read("account", "note")).toBeUndefined();
-      await store.allowNotes("account", ["note"], before);
+      await store.allowNotes(
+        "account",
+        [{ id: "note", marker: before.get("note")! }],
+        fence,
+      );
       await expect(store.cacheAccepted(body, 1, fence)).rejects.toThrow(
         /removed/,
       );
-      await store.allowNotes("account", ["note"], Date.now() + 1);
+      const current = await store.revocationMarkers("account", ["note"]);
+      await store.allowNotes(
+        "account",
+        [{ id: "note", marker: current.get("note")! }],
+        fence,
+      );
       expect(await store.cacheSummaries("account", [row], [], fence)).toEqual(
         [],
       );

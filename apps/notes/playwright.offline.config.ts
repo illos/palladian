@@ -7,7 +7,7 @@ export default defineConfig({
   use: { baseURL: "http://127.0.0.1:5181", trace: "off" },
   webServer: {
     command:
-      "./node_modules/.bin/vite build --config apps/notes/vite.config.ts && ./node_modules/.bin/vite preview --config apps/notes/vite.config.ts --host 127.0.0.1 --port 5181 --strictPort",
+      "./node_modules/.bin/vite build --config apps/notes/vite.config.ts --outDir dist-offline && ./node_modules/.bin/vite preview --config apps/notes/vite.config.ts --outDir dist-offline --host 127.0.0.1 --port 5181 --strictPort",
     url: "http://127.0.0.1:5181",
     cwd: fileURLToPath(new URL("../..", import.meta.url)),
     reuseExistingServer: false,

@@ -96,7 +96,7 @@ beforeEach(() => {
   calls = [];
   handlers = new Map<unknown, Handler>([
     [fns.library.notebooks, () => [NOTEBOOK]],
-    [fns.library.recent, () => ({ notes: [], nextBefore: null })],
+    [fns.library.recent, () => ({ notes: [], nextCursor: null })],
   ]);
 });
 
@@ -179,6 +179,24 @@ describe("/mcp", () => {
     expect((result.content as { text: string }[])[0]!.text).toMatch(
       /^Error \(not_found\): Note not found\./,
     );
+    await client.close();
+  });
+
+  it("passes the list_notes cursor through unchanged", async () => {
+    handlers.set(fns.library.recent, () => ({
+      notes: [],
+      nextCursor: "5:1.5:n9",
+    }));
+    const client = await connect("modern");
+    const result = await client.callTool({
+      name: "list_notes",
+      arguments: { cursor: "7:2.25:n3", limit: 1 },
+    });
+    expect(result.structuredContent).toMatchObject({ next_cursor: "5:1.5:n9" });
+    expect(calls.map((c) => c.args)).toContainEqual({
+      cursor: "7:2.25:n3",
+      limit: 1,
+    });
     await client.close();
   });
 

@@ -231,6 +231,30 @@ export const get = query({
   },
 });
 
+/**
+ * Access to one note as decided when this call runs. A mutation always reaches
+ * the server, unlike a query a local subscription can answer, so a client may
+ * lift a revocation fence on its result.
+ */
+export const verifyAccess = mutation({
+  args: { noteId: v.id("notes") },
+  returns: v.object({
+    subject: v.union(v.string(), v.null()),
+    summary: v.union(v.null(), noteSummary),
+  }),
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    const principal = await getPrincipal(ctx);
+    if (!identity || !principal) return { subject: null, summary: null };
+    const note = await ctx.db.get(args.noteId);
+    const role = note ? await noteRole(ctx, principal, note) : null;
+    return {
+      subject: identity.subject,
+      summary: note && role ? toSummary(note, role) : null,
+    };
+  },
+});
+
 /** Current accepted document. Readers use this; editors start from it. */
 export const content = query({
   args: { noteId: v.id("notes") },
