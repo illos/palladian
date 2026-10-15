@@ -86,23 +86,26 @@ describe("a clear that failed still completes", () => {
     }
   });
 
-  test("an activation finishes a recorded clear before unblocking", async () => {
-    const store = new NotesStore("r13-" + crypto.randomUUID());
+  test("an activation after a reload finishes a recorded clear before unblocking", async () => {
+    const name = "r13-" + crypto.randomUUID();
+    const store = new NotesStore(name);
+    let reopened: NotesStore | undefined;
     try {
       await activate(store);
       await store.writeDraft(draftOf(markdownToDoc("Old work")));
-      // The block commits but the deletion fails.
+      // The block commits but the deletion fails; then the page goes away.
       const drafts = dbOf(store).drafts;
-      const where = drafts.where.bind(drafts);
       drafts.where = () => {
         throw new DOMException("quota", "QuotaExceededError");
       };
       await expect(store.clearAccount("account")).rejects.toThrow();
-      drafts.where = where;
-      await activate(store);
-      expect(await draftCount(store)).toBe(0);
+      store.close();
+      reopened = new NotesStore(name);
+      await activate(reopened);
+      expect(await draftCount(reopened)).toBe(0);
     } finally {
       store.close();
+      reopened?.close();
     }
   });
 

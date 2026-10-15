@@ -598,7 +598,7 @@ export class NotesStore {
    */
   async clearAccount(
     accountId: string,
-    operation = "account:" + accountId,
+    operation: string = crypto.randomUUID(),
   ): Promise<boolean> {
     if (!this.clearOps.has(operation)) {
       await this.lifecyclesLoaded;
@@ -663,12 +663,14 @@ export class NotesStore {
       if (!this.closed) {
         const delay = Math.min(30_000, 1_000 * 2 ** Math.min(++op.attempts, 5));
         op.retry = setTimeout(() => {
-          if (op.result === null && !op.running)
-            op.running = this.attemptClear(op)
-              .catch(() => false)
-              .finally(() => {
-                op.running = undefined;
-              });
+          if (op.result !== null || op.running) return;
+          // Callers that join this attempt must see its failure; only this
+          // background start ignores it (its own retry follows).
+          const running = this.attemptClear(op).finally(() => {
+            op.running = undefined;
+          });
+          op.running = running;
+          void running.catch(() => undefined);
         }, delay);
       }
       throw error;
@@ -993,7 +995,12 @@ export class NotesStore {
         throw new Error("Session activation was superseded.");
     };
     assertCurrent();
+    // This tab's own unfinished clear must complete before any sign-in.
+    for (const op of this.clearOps.values())
+      if (op.accountId === accountId && op.result === null)
+        throw new Error("This account is still being cleared.");
     let lifecycle = 0;
+    let ended = false;
     const activated = await this.ifAccountFree(accountId, () =>
       this.db.transaction(
         "rw",
@@ -1014,7 +1021,10 @@ export class NotesStore {
           if ((privacy?.epoch ?? 0) !== fence.epoch)
             throw new Error("Session activation was invalidated.");
           // A blocked account's data belongs to an ended lifecycle: never revived.
-          if (account?.blocked) await this.deleteAccountData(accountId);
+          if (account?.blocked) {
+            ended = true;
+            await this.deleteAccountData(accountId);
+          }
           await this.db.accounts.put({
             accountId,
             epoch: (account?.epoch ?? 0) + (account?.blocked ? 1 : 0),
@@ -1030,12 +1040,10 @@ export class NotesStore {
     if (!activated.ran)
       throw new Error("Another tab is still clearing this account.");
     assertCurrent();
+    // Snapshots kept from an ended lifecycle stay ended.
+    if (ended) this.forgetRecovery(accountId);
     this.blocked.delete(accountId);
     this.lifecycles.set(accountId, lifecycle);
-    // A new lifecycle here: finished clears of earlier ones are history.
-    for (const [id, op] of this.clearOps)
-      if (op.accountId === accountId && op.result !== null)
-        this.clearOps.delete(id);
     this.notify();
   }
   private async assertPersistent(accountId: string, epoch: number) {
@@ -1445,13 +1453,27 @@ export class NotesStore {
   }
   async readDraft(accountId: string, id: string): Promise<Draft | undefined> {
     if (this.blocked.has(accountId)) return undefined;
-    const { value: stored, revoked } = await this.fenced(
+    const key = JSON.stringify([accountId, id]);
+    const { value, revoked } = await this.fenced(
       accountId,
-      [this.db.drafts],
-      () => this.db.drafts.get([accountId, id]),
+      [this.db.drafts, this.db.accounts],
+      async () => ({
+        stored: await this.db.drafts.get([accountId, id]),
+        epoch: (await this.db.accounts.get(accountId))?.epoch ?? 0,
+      }),
     );
-    // This tab's unsaved snapshot, if any, as of now, unless a newer one is stored.
-    const memory = this.recoveryDrafts.get(JSON.stringify([accountId, id]));
+    // This tab's unsaved snapshot, if any, as of now: only one taken in the
+    // account's current epoch, and only if no newer draft is stored.
+    let memory = this.recoveryDrafts.get(key);
+    if (memory) {
+      const fence = await this.recoveryFences.get(key)?.catch(() => null);
+      if (
+        fence?.epoch !== value.epoch ||
+        this.recoveryDrafts.get(key) !== memory
+      )
+        memory = undefined;
+    }
+    const { stored } = value;
     const draft =
       memory && (!stored || memory.updatedAt >= stored.updatedAt)
         ? memory
