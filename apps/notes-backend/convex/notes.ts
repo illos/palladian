@@ -414,6 +414,11 @@ export const edit = mutation({
         title: note.title,
         replayed: true,
       };
+    if (
+      args.expectedRevision === undefined &&
+      args.edits.some((edit) => edit.type === "replace_all")
+    )
+      fail("invalid", "Replacing the whole note requires expected_revision.");
     const content = await getContent(ctx, note._id);
     if (
       args.expectedRevision !== undefined &&

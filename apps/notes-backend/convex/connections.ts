@@ -122,10 +122,23 @@ export const redeem = mutation({
       row.requestKey !== args.requestKey
     )
       fail("invalid", "This approval is no longer valid.");
-    await ctx.db.patch(row._id, { usedAt: Date.now() });
+    const now = Date.now();
+    await ctx.db.patch(row._id, { usedAt: now });
     const connection = await ctx.db.get(row.connectionId);
     if (!connection || connection.revokedAt !== undefined)
       fail("invalid", "This approval is no longer valid.");
+    // Re-authorizing replaces the client's earlier grant; retire its old connections.
+    const earlier = await ctx.db
+      .query("connections")
+      .withIndex("by_agent", (q) => q.eq("agentId", connection.agentId))
+      .take(100);
+    for (const old of earlier)
+      if (
+        old._id !== connection._id &&
+        old.clientId === connection.clientId &&
+        old.revokedAt === undefined
+      )
+        await ctx.db.patch(old._id, { revokedAt: now });
     return {
       connectionId: connection._id,
       agentId: connection.agentId,

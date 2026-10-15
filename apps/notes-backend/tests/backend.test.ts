@@ -841,3 +841,56 @@ describe("trash, moves and publishing", () => {
     ).not.toBeNull();
   });
 });
+
+describe("agent hardening", () => {
+  test("re-authorizing retires the client's earlier connection", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const approve = (agentId?: Id<"principals">) =>
+      owner.as.mutation(api.connections.approve, {
+        requestKey: "request-key-" + crypto.randomUUID(),
+        clientId: "client-1",
+        clientName: "Claude",
+        redirectHost: "claude.ai",
+        agentName: "Claude",
+        ...(agentId ? { agentId } : {}),
+        notebooks: [{ notebookId: owner.notebookId, role: "read" }],
+      });
+    const first = await approve();
+    const approvals = await t.run((ctx) =>
+      ctx.db.query("connectionApprovals").collect(),
+    );
+    const firstRedeem = await t.mutation(api.connections.redeem, {
+      code: first.code,
+      requestKey: approvals[0]!.requestKey,
+    });
+    const second = await approve(first.agentId);
+    const approvals2 = await t.run((ctx) =>
+      ctx.db.query("connectionApprovals").collect(),
+    );
+    await t.mutation(api.connections.redeem, {
+      code: second.code,
+      requestKey: approvals2[1]!.requestKey,
+    });
+    const old = t.withIdentity({
+      issuer: AGENT_ISSUER,
+      subject: first.agentId,
+      cid: firstRedeem.connectionId,
+    });
+    expect(await old.query(api.library.notebooks, {})).toEqual([]);
+  });
+
+  test("replace_all requires expected_revision", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const { noteId } = await owner.as.mutation(api.notes.createFromMarkdown, {
+      markdown: "A",
+    });
+    await expect(
+      owner.as.mutation(api.notes.edit, {
+        noteId,
+        edits: [{ type: "replace_all", markdown: "B" }],
+      }),
+    ).rejects.toThrow(/expected_revision/);
+  });
+});
