@@ -3,3 +3,6 @@ apps/web/dist/
 apps/notes/dist/
 **/test-results/
 **/playwright-report/
+**/.convex/
+apps/notes-backend/convex/_generated/
+apps/notes-edge/.wrangler/
