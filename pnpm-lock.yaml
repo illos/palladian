@@ -21,7 +21,7 @@ importers:
         version: 0.12.5(patch_hash=4cdeb67452d6ccdc63a77801df78c25b10651e2a4df42312359b8f1e49ab1e5c)(@standard-schema/spec@1.1.0)(better-auth@1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(convex@1.45.0(react@19.3.0))(react@19.3.0)(typescript@7.0.2)
       better-auth:
         specifier: 1.6.30
-        version: 1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        version: 1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vitest@5.0.4(@edge-runtime/vm@5.0.0)(@types/node@26.4.0)(vite@8.2.2(@types/node@26.4.0)(esbuild@0.28.1)))
       convex:
         specifier: 1.45.0
         version: 1.45.0(react@19.3.0)
@@ -79,7 +79,7 @@ importers:
         version: 0.12.5(patch_hash=4cdeb67452d6ccdc63a77801df78c25b10651e2a4df42312359b8f1e49ab1e5c)(@standard-schema/spec@1.1.0)(better-auth@1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(convex@1.45.0(react@19.3.0))(react@19.3.0)(typescript@7.0.2)
       better-auth:
         specifier: 1.6.30
-        version: 1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        version: 1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vitest@5.0.4(@edge-runtime/vm@5.0.0)(@types/node@26.4.0)(vite@8.2.2(@types/node@26.4.0)(esbuild@0.28.1)))
       convex:
         specifier: 1.45.0
         version: 1.45.0(react@19.3.0)
@@ -145,6 +145,49 @@ importers:
         specifier: 8.2.2
         version: 8.2.2(@types/node@26.4.0)(esbuild@0.28.1)
 
+  apps/notes-backend:
+    dependencies:
+      '@convex-dev/better-auth':
+        specifier: 0.12.5
+        version: 0.12.5(patch_hash=4cdeb67452d6ccdc63a77801df78c25b10651e2a4df42312359b8f1e49ab1e5c)(@standard-schema/spec@1.1.0)(better-auth@1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(convex@1.45.0(react@19.3.0))(react@19.3.0)(typescript@7.0.2)
+      '@palladian/notes-core':
+        specifier: workspace:*
+        version: link:../../packages/notes-core
+      better-auth:
+        specifier: 1.6.30
+        version: 1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vitest@5.0.4(@edge-runtime/vm@5.0.0)(@types/node@26.4.0)(vite@8.2.2(@types/node@26.4.0)(esbuild@0.28.1)))
+      convex:
+        specifier: 1.45.0
+        version: 1.45.0(react@19.3.0)
+      prosemirror-model:
+        specifier: 1.25.12
+        version: 1.25.12
+      prosemirror-transform:
+        specifier: 1.12.2
+        version: 1.12.2
+    devDependencies:
+      '@edge-runtime/vm':
+        specifier: 5.0.0
+        version: 5.0.0
+      '@types/bun':
+        specifier: 1.4.2
+        version: 1.4.2
+      '@types/node':
+        specifier: 26.4.0
+        version: 26.4.0
+      convex-test:
+        specifier: 0.0.62
+        version: 0.0.62(convex@1.45.0(react@19.3.0))
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vite:
+        specifier: 8.2.2
+        version: 8.2.2(@types/node@26.4.0)(esbuild@0.28.1)
+      vitest:
+        specifier: 5.0.4
+        version: 5.0.4(@edge-runtime/vm@5.0.0)(@types/node@26.4.0)(vite@8.2.2(@types/node@26.4.0)(esbuild@0.28.1))
+
   apps/web: {}
 
   packages/app-sdk: {}
@@ -188,7 +231,7 @@ importers:
         version: 0.12.5(patch_hash=4cdeb67452d6ccdc63a77801df78c25b10651e2a4df42312359b8f1e49ab1e5c)(@standard-schema/spec@1.1.0)(better-auth@1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(convex@1.45.0(react@19.3.0))(react@19.3.0)(typescript@7.0.2)
       better-auth:
         specifier: 1.6.30
-        version: 1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        version: 1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vitest@5.0.4(@edge-runtime/vm@5.0.0)(@types/node@26.4.0)(vite@8.2.2(@types/node@26.4.0)(esbuild@0.28.1)))
       convex:
         specifier: 1.45.0
         version: 1.45.0(react@19.3.0)
@@ -207,7 +250,7 @@ importers:
         version: 0.2.6(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(convex@1.45.0(react@19.3.0))(decode-named-character-reference@1.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       better-auth:
         specifier: 1.6.30
-        version: 1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        version: 1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vitest@5.0.4(@edge-runtime/vm@5.0.0)(@types/node@26.4.0)(vite@8.2.2(@types/node@26.4.0)(esbuild@0.28.1)))
       convex:
         specifier: 1.45.0
         version: 1.45.0(react@19.3.0)
@@ -404,6 +447,14 @@ packages:
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
     engines: {node: '>=12'}
+
+  '@edge-runtime/primitives@6.0.0':
+    resolution: {integrity: sha512-FqoxaBT+prPBHBwE1WXS1ocnu/VLTQyZ6NMUBAdbP7N2hsFTTxMC/jMu2D/8GAlMQfxeuppcPuCUk/HO3fpIvA==}
+    engines: {node: '>=18'}
+
+  '@edge-runtime/vm@5.0.0':
+    resolution: {integrity: sha512-NKBGBSIKUG584qrS1tyxVpX/AKJKQw5HgjYEnPLC0QsTw79JrGn+qUr8CXFb955Iy7GUdiiUv1rJ6JBGvaKb6w==}
+    engines: {node: '>=18'}
 
   '@emnapi/runtime@1.11.3':
     resolution: {integrity: sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA==}
@@ -889,6 +940,9 @@ packages:
   '@jridgewell/sourcemap-codec@1.6.0':
     resolution: {integrity: sha512-T7jf+5zgsZHwNJ4lvQ7/aezbyk0nNX+zJVWpmHA7VYsEx7a7qr5Rg5IbtJFqkgze5Y2sruq1RUY8Q837Od7iFw==}
 
+  '@jridgewell/trace-mapping@0.3.31':
+    resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
   '@jridgewell/trace-mapping@0.3.9':
     resolution: {integrity: sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ==}
 
@@ -1040,6 +1094,15 @@ packages:
 
   '@types/bun@1.4.2':
     resolution: {integrity: sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ==}
+
+  '@types/chai@5.2.3':
+    resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
+
+  '@types/deep-eql@4.0.2':
+    resolution: {integrity: sha512-c9h9dVVMigMPc4bwTvC5dxqtqJZwQPePsWjPlpSOnojbor6pGqdk541lfA7AqFQr5pB1BRdq0juY9db81BwyFw==}
+
+  '@types/estree@1.0.9':
+    resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
 
   '@types/linkify-it@5.0.0':
     resolution: {integrity: sha512-sVDA58zAw4eWAffKOaQH5/5j3XeayukzDk+ewSsnv3p4yJEZHCCzMDiZM8e0OUrRvmpGZ85jf4yDHkHsgBNr9Q==}
@@ -1197,8 +1260,26 @@ packages:
       oxc-transform-react:
         optional: true
 
+  '@vitest/mocker@5.0.4':
+    resolution: {integrity: sha512-tqAlrYWce4iUxhr3ncNohejtCTOcHeE8XWrSNZY3OhPoDn01yeGv+gnaBy64ATp7o6pb03eIbBAjzmibpc9vIQ==}
+    peerDependencies:
+      msw: ^2.4.9 || ^3.0.0
+      vite: ^6.0.0 || ^7.0.0 || ^8.0.0
+    peerDependenciesMeta:
+      msw:
+        optional: true
+      vite:
+        optional: true
+
+  '@vitest/spy@5.0.4':
+    resolution: {integrity: sha512-MZKk/gSkm2q+ICobMxCpH1mA+cCAWm8WV7UhxlqGjq/sJ3AGc1BqFOs5CRVXxH78wQtme9q/NAAgBquj4AcyMw==}
+
   argparse@2.0.1:
     resolution: {integrity: sha512-8+9WqebbFzpX9OR+Wa6O29asIogeRMzcGtAINdpMHHyAg10f05aSFVBbcEqGf/PXw1EjAZ+q2/bEBg3DvurK3Q==}
+
+  assertion-error@2.0.1:
+    resolution: {integrity: sha512-Izi8RQcffqCeNVgFigKli1ssklIbpHnCYc6AknXGYoB6grJqyeby7jv12JUQgmTAnIDnbck1uxksT4dzN3PWBA==}
+    engines: {node: '>=12'}
 
   better-auth@1.6.30:
     resolution: {integrity: sha512-+fmPXSZFE7MDmLcppkmzUGMtQxzZXsJbKi5rUunmIYtSQZIgNCZHNSQFwK/ywx10uczkzbtVkrHm75i4o7+gpQ==}
@@ -1276,6 +1357,10 @@ packages:
   bun-types@1.4.2:
     resolution: {integrity: sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w==}
 
+  chai@6.3.0:
+    resolution: {integrity: sha512-XWAtwJ6OHO+tj0EKCs0Y2UamnyOxseZWltU4x2U2wh8g4AigdjwvtUjvLP2tqkA/avxHEtzxNaqGq/YGNwckKg==}
+    engines: {node: '>=18'}
+
   character-entities@2.0.2:
     resolution: {integrity: sha512-shx7oQ0Awen/BRIdkjkvz54PnEEI/EjwXDSIZp86/KKdbafHh1Df/RYGBhn4hbe2+uKC9FnT5UCEdyPz3ai9hQ==}
 
@@ -1304,6 +1389,11 @@ packages:
         optional: true
       zod:
         optional: true
+
+  convex-test@0.0.62:
+    resolution: {integrity: sha512-gvFps/A1JhOlFToZKjStSX8lWQS8oPF4oKm6U5D/ZdmOtfC7bKqw5Ce5ccAf45jvxPKPcFiyWt8JrueE+byB2g==}
+    peerDependencies:
+      convex: ^1.43.0
 
   convex@1.45.0:
     resolution: {integrity: sha512-AV3B56Ptu/14d76g3urBJ50dwpiZa6uJaLT84OWox5aCwZIJiuAamdjv3lLHDzs8vv5kC31anEZohhUe3qJ2bA==}
@@ -1351,6 +1441,9 @@ packages:
   error-stack-parser-es@1.0.5:
     resolution: {integrity: sha512-5qucVt2XcuGMcEGgWI7i+yZpmpByQ8J1lHhcL7PwqCwu9FPP3VUXzT4ltHe5i2z9dePwEHcDVOAfSnHsOlCXRA==}
 
+  es-module-lexer@2.3.2:
+    resolution: {integrity: sha512-poHGpORABojJJucnV9KbOavETW8lBVnphkW77ER5/BQ5Fz7oXSoCNek7IH3vR5nRjdsEz926ibFYX8KtLQmdyw==}
+
   esbuild@0.27.0:
     resolution: {integrity: sha512-jd0f4NHbD6cALCyGElNpGAOtWxSq46l9X/sWB0Nzd5er4Kz2YTm+Vl0qKFT9KUJvD8+fiO8AvoHhFvEatfVixA==}
     engines: {node: '>=18'}
@@ -1360,6 +1453,13 @@ packages:
     resolution: {integrity: sha512-HrJrvZv5ayxBzPfwphOoNzkzOIIlifzk0KJrGK2c8R4+LKpMtpYLQeUdjnwjWv/LZlkH2laZk+4w78pi99D4Vw==}
     engines: {node: '>=18'}
     hasBin: true
+
+  estree-walker@3.0.3:
+    resolution: {integrity: sha512-7RUKfXgSMMkzt6ZuXmqapOurLGPPfgj6l9uRZ7lRGolvk0y2yocc35LdcxKC5PQZdn2DMqioAQ2NoWcrTKmm6g==}
+
+  expect-type@1.4.0:
+    resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
+    engines: {node: '>=12.0.0'}
 
   fdir@6.5.0:
     resolution: {integrity: sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg==}
@@ -1463,6 +1563,9 @@ packages:
   linkify-it@5.0.2:
     resolution: {integrity: sha512-ONTm2jCMAVZjgQa/Fy1kScXsuOoF5NPTsoFBdE1KVIZ2vAh/r9+Bqo+0jINCBYnavTPQZz38QzFTme79ENoN3Q==}
 
+  magic-string@1.4.3:
+    resolution: {integrity: sha512-z12OxmaPGE0F4xlpGdjuAUckipLpQlTAuAmyGhNoD7ODpYUzvDfvtxUbjM/jwznyP178oju/KDdyi220wNJ0RQ==}
+
   markdown-it@14.3.2:
     resolution: {integrity: sha512-sHHjZ5fJKlgrG4qns2YwVcdNep35h5fERrfkD2YNsb9UFk0UIHarbiTaHKVMlPuWAoiilyK8Fv/jAm11slsY7Q==}
     hasBin: true
@@ -1482,6 +1585,10 @@ packages:
   nanostores@1.5.3:
     resolution: {integrity: sha512-rQLB6eV4f2AW/n3L0JmwCROpaisYy9EDEADvEFSd1C/qG8hB6O5TPlh9A791JRbJr4CnMQBzptDcvD9OR1+6WA==}
     engines: {node: ^20.0.0 || >=22.0.0}
+
+  obug@3.0.0:
+    resolution: {integrity: sha512-5vvB5+W7ePv+p3uqxi+RcW1XAzLW0/hxt3/4X4Lc4qHudzOhmBiBwOY6DRob4WnanAEGvNcLjF+KNOufrUoEQw==}
+    engines: {node: '>=12.20.0'}
 
   orderedmap@2.1.1:
     resolution: {integrity: sha512-TvAWxi0nDe1j/rtMcWcIj94+Ffe6n7zhow33h40SKxmsmozs6dz/e+EajymfoFcHd7sxNn8yHM8839uixMOV6g==}
@@ -1618,6 +1725,9 @@ packages:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
     engines: {node: '>=0.10.0'}
 
+  std-env@4.3.0:
+    resolution: {integrity: sha512-OtU/EgQ1kIm5KwqQpBC6ZEMXrZRui11w8zgfTWp8cdO9B8OaPsbA8bTHO2P+HNo1VlUTGMVBwPhydu6poeXiag==}
+
   supports-color@10.2.2:
     resolution: {integrity: sha512-SS+jx45GF1QjgEXQx4NJZV9ImqmO2NPz5FNsIHrsDjh2YsHnawpan7SNQ1o8NuhrbHZy9AZhIoCUiCeaW/C80g==}
     engines: {node: '>=18'}
@@ -1625,6 +1735,14 @@ packages:
   tagged-tag@1.0.0:
     resolution: {integrity: sha512-yEFYrVhod+hdNyx7g5Bnkkb0G6si8HJurOoOEgC8B/O0uXLHlaey/65KRv6cuWBNhBgHKAROVpc7QyYqE5gFng==}
     engines: {node: '>=20'}
+
+  tinybench@6.2.2:
+    resolution: {integrity: sha512-nIZ2N2dFpjBsg2hgitKu7mA+FvsIJuGJOwysRngmVRRmWgR/UyPjwJj8c/fT/dhm8EkHnF5EOogRf+0Z2qrimA==}
+    engines: {node: '>=20.0.0'}
+
+  tinyexec@1.3.1:
+    resolution: {integrity: sha512-GCvB3aoys96IuDFBMcTB46JOR6mdMtAToqwiW8JlWhsoh1mhHi/xn9ss/Dg7N555GiJyEt2qzoG/NHCwM6h1EA==}
+    engines: {node: '>=18'}
 
   tinyglobby@0.2.17:
     resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
@@ -1701,8 +1819,54 @@ packages:
       yaml:
         optional: true
 
+  vitest@5.0.4:
+    resolution: {integrity: sha512-z0WxZRV2Sg48wF0FSgMq3TFG8JS38/Qr96vZVZdX6+Em9raQTvnXQvdTFJe2m3rfyJnEHeHQ/snceIdi8D1pVg==}
+    engines: {node: ^22.12.0 || ^24.0.0 || >=26.0.0}
+    hasBin: true
+    peerDependencies:
+      '@edge-runtime/vm': '*'
+      '@opentelemetry/api': ^1.9.0
+      '@types/node': ^22.0.0 || >=24.0.0
+      '@vitest/browser-playwright': 5.0.4
+      '@vitest/browser-preview': 5.0.4
+      '@vitest/browser-webdriverio': ^5.0.0-beta.5 || >=5.0.0
+      '@vitest/coverage-istanbul': 5.0.4
+      '@vitest/coverage-v8': 5.0.4
+      '@vitest/ui': 5.0.4
+      happy-dom: '*'
+      jsdom: '*'
+      vite: ^6.4.0 || ^7.0.0 || ^8.0.0
+    peerDependenciesMeta:
+      '@edge-runtime/vm':
+        optional: true
+      '@opentelemetry/api':
+        optional: true
+      '@types/node':
+        optional: true
+      '@vitest/browser-playwright':
+        optional: true
+      '@vitest/browser-preview':
+        optional: true
+      '@vitest/browser-webdriverio':
+        optional: true
+      '@vitest/coverage-istanbul':
+        optional: true
+      '@vitest/coverage-v8':
+        optional: true
+      '@vitest/ui':
+        optional: true
+      happy-dom:
+        optional: true
+      jsdom:
+        optional: true
+
   w3c-keyname@2.2.8:
     resolution: {integrity: sha512-dpojBhNsCNN7T82Tm7k26A6G9ML3NkhDsnw9n/eoxSRlVBB4CEtIQ/KTCLI2Fwf3ataSXRhYFkQi3SlnFwPvPQ==}
+
+  why-is-node-running@3.2.1:
+    resolution: {integrity: sha512-Tb2FUhB4vUsGQlfSquQLYkApkuPAFQXGFzxWKHHumVz2dK+X1RUm/HnID4+TfIGYJ1kTcwOaCk/buYCEJr6YjQ==}
+    engines: {node: '>=20.11'}
+    hasBin: true
 
   workerd@1.20260908.1:
     resolution: {integrity: sha512-rYhpW6NWHD++p34ej+VXWzi5Pdnmd7ncdbB/ux4s+i3mf7IeOpW3O4roqClQ+Z8ernvyMCknBLCb76z1rA+a7Q==}
@@ -1840,7 +2004,7 @@ snapshots:
   '@convex-dev/better-auth@0.12.5(patch_hash=4cdeb67452d6ccdc63a77801df78c25b10651e2a4df42312359b8f1e49ab1e5c)(@standard-schema/spec@1.1.0)(better-auth@1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(convex@1.45.0(react@19.3.0))(react@19.3.0)(typescript@7.0.2)':
     dependencies:
       '@better-fetch/fetch': 1.3.1(patch_hash=b822b992201716f227df37bda3e03ceb72ca4d8ef133aa774825f0b142729360)
-      better-auth: 1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      better-auth: 1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vitest@5.0.4(@edge-runtime/vm@5.0.0)(@types/node@26.4.0)(vite@8.2.2(@types/node@26.4.0)(esbuild@0.28.1)))
       common-tags: 1.8.2
       convex: 1.45.0(react@19.3.0)
       convex-helpers: 0.1.124(@standard-schema/spec@1.1.0)(convex@1.45.0(react@19.3.0))(react@19.3.0)(typescript@7.0.2)(zod@4.5.4)
@@ -1867,6 +2031,12 @@ snapshots:
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.9
+
+  '@edge-runtime/primitives@6.0.0': {}
+
+  '@edge-runtime/vm@5.0.0':
+    dependencies:
+      '@edge-runtime/primitives': 6.0.0
 
   '@emnapi/runtime@1.11.3':
     dependencies:
@@ -2139,6 +2309,11 @@ snapshots:
 
   '@jridgewell/sourcemap-codec@1.6.0': {}
 
+  '@jridgewell/trace-mapping@0.3.31':
+    dependencies:
+      '@jridgewell/resolve-uri': 3.1.2
+      '@jridgewell/sourcemap-codec': 1.6.0
+
   '@jridgewell/trace-mapping@0.3.9':
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
@@ -2245,6 +2420,15 @@ snapshots:
     dependencies:
       bun-types: 1.4.2
 
+  '@types/chai@5.2.3':
+    dependencies:
+      '@types/deep-eql': 4.0.2
+      assertion-error: 2.0.1
+
+  '@types/deep-eql@4.0.2': {}
+
+  '@types/estree@1.0.9': {}
+
   '@types/linkify-it@5.0.0': {}
 
   '@types/markdown-it@14.1.2':
@@ -2331,9 +2515,22 @@ snapshots:
       '@rolldown/pluginutils': 1.0.1
       vite: 8.2.2(@types/node@26.4.0)(esbuild@0.28.1)
 
+  '@vitest/mocker@5.0.4(vite@8.2.2(@types/node@26.4.0)(esbuild@0.28.1))':
+    dependencies:
+      '@jridgewell/trace-mapping': 0.3.31
+      '@vitest/spy': 5.0.4
+      estree-walker: 3.0.3
+      magic-string: 1.4.3
+    optionalDependencies:
+      vite: 8.2.2(@types/node@26.4.0)(esbuild@0.28.1)
+
+  '@vitest/spy@5.0.4': {}
+
   argparse@2.0.1: {}
 
-  better-auth@1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0):
+  assertion-error@2.0.1: {}
+
+  better-auth@1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vitest@5.0.4(@edge-runtime/vm@5.0.0)(@types/node@26.4.0)(vite@8.2.2(@types/node@26.4.0)(esbuild@0.28.1))):
     dependencies:
       '@better-auth/core': 1.6.30(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1(patch_hash=b822b992201716f227df37bda3e03ceb72ca4d8ef133aa774825f0b142729360))(@cloudflare/workers-types@5.20260908.1)(better-call@1.4.0(zod@4.5.4))(jose@6.2.12)(kysely@0.29.5)(nanostores@1.5.3)
       '@better-auth/drizzle-adapter': 1.6.30(@better-auth/core@1.6.30(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1(patch_hash=b822b992201716f227df37bda3e03ceb72ca4d8ef133aa774825f0b142729360))(@cloudflare/workers-types@5.20260908.1)(better-call@1.4.0(zod@4.5.4))(jose@6.2.12)(kysely@0.29.5)(nanostores@1.5.3))(@better-auth/utils@0.4.2)
@@ -2355,6 +2552,7 @@ snapshots:
     optionalDependencies:
       react: 19.3.0
       react-dom: 19.3.0(react@19.3.0)
+      vitest: 5.0.4(@edge-runtime/vm@5.0.0)(@types/node@26.4.0)(vite@8.2.2(@types/node@26.4.0)(esbuild@0.28.1))
     transitivePeerDependencies:
       - '@cloudflare/workers-types'
       - '@opentelemetry/api'
@@ -2374,6 +2572,8 @@ snapshots:
     dependencies:
       '@types/node': 26.4.0
 
+  chai@6.3.0: {}
+
   character-entities@2.0.2: {}
 
   common-tags@1.8.2: {}
@@ -2386,6 +2586,10 @@ snapshots:
       react: 19.3.0
       typescript: 7.0.2
       zod: 4.5.4
+
+  convex-test@0.0.62(convex@1.45.0(react@19.3.0)):
+    dependencies:
+      convex: 1.45.0(react@19.3.0)
 
   convex@1.45.0(react@19.3.0):
     dependencies:
@@ -2415,6 +2619,8 @@ snapshots:
   entities@4.5.0: {}
 
   error-stack-parser-es@1.0.5: {}
+
+  es-module-lexer@2.3.2: {}
 
   esbuild@0.27.0:
     optionalDependencies:
@@ -2473,6 +2679,12 @@ snapshots:
       '@esbuild/win32-arm64': 0.28.1
       '@esbuild/win32-ia32': 0.28.1
       '@esbuild/win32-x64': 0.28.1
+
+  estree-walker@3.0.3:
+    dependencies:
+      '@types/estree': 1.0.9
+
+  expect-type@1.4.0: {}
 
   fdir@6.5.0(picomatch@4.0.7):
     optionalDependencies:
@@ -2540,6 +2752,10 @@ snapshots:
     dependencies:
       uc.micro: 2.1.0
 
+  magic-string@1.4.3:
+    dependencies:
+      '@jridgewell/sourcemap-codec': 1.6.0
+
   markdown-it@14.3.2:
     dependencies:
       argparse: 2.0.1
@@ -2567,6 +2783,8 @@ snapshots:
   nanoid@3.3.18: {}
 
   nanostores@1.5.3: {}
+
+  obug@3.0.0: {}
 
   orderedmap@2.1.1: {}
 
@@ -2757,9 +2975,15 @@ snapshots:
 
   source-map-js@1.2.1: {}
 
+  std-env@4.3.0: {}
+
   supports-color@10.2.2: {}
 
   tagged-tag@1.0.0: {}
+
+  tinybench@6.2.2: {}
+
+  tinyexec@1.3.1: {}
 
   tinyglobby@0.2.17:
     dependencies:
@@ -2820,7 +3044,31 @@ snapshots:
       esbuild: 0.28.1
       fsevents: 2.3.3
 
+  vitest@5.0.4(@edge-runtime/vm@5.0.0)(@types/node@26.4.0)(vite@8.2.2(@types/node@26.4.0)(esbuild@0.28.1)):
+    dependencies:
+      '@types/chai': 5.2.3
+      '@vitest/mocker': 5.0.4(vite@8.2.2(@types/node@26.4.0)(esbuild@0.28.1))
+      chai: 6.3.0
+      es-module-lexer: 2.3.2
+      expect-type: 1.4.0
+      magic-string: 1.4.3
+      obug: 3.0.0
+      picomatch: 4.0.7
+      std-env: 4.3.0
+      tinybench: 6.2.2
+      tinyexec: 1.3.1
+      tinyglobby: 0.2.17
+      vite: 8.2.2(@types/node@26.4.0)(esbuild@0.28.1)
+      why-is-node-running: 3.2.1
+    optionalDependencies:
+      '@edge-runtime/vm': 5.0.0
+      '@types/node': 26.4.0
+    transitivePeerDependencies:
+      - msw
+
   w3c-keyname@2.2.8: {}
+
+  why-is-node-running@3.2.1: {}
 
   workerd@1.20260908.1:
     optionalDependencies:
