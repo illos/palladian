@@ -12,6 +12,7 @@ export const me = query({
       name: v.string(),
       email: v.union(v.string(), v.null()),
       defaultNotebookId: v.union(v.id("notebooks"), v.null()),
+      trashRetentionDays: v.number(),
     }),
   ),
   handler: async (ctx) => {
@@ -23,6 +24,7 @@ export const me = query({
       name: principal.name,
       email: principal.email ?? null,
       defaultNotebookId: principal.defaultNotebookId ?? null,
+      trashRetentionDays: principal.trashRetentionDays ?? 30,
     };
   },
 });

@@ -57,7 +57,7 @@ async function applyGrant(
 ) {
   if (!invitation.role || !invitation.invitedBy) return;
   const now = Date.now();
-  if (invitation.notebookId) {
+  if (invitation.notebookId && (await ctx.db.get(invitation.notebookId))) {
     const existing = await ctx.db
       .query("notebookMembers")
       .withIndex("by_notebook_and_principal", (q) =>
@@ -76,7 +76,7 @@ async function applyGrant(
         createdAt: now,
       });
   }
-  if (invitation.noteId) {
+  if (invitation.noteId && (await ctx.db.get(invitation.noteId))) {
     const existing = await ctx.db
       .query("noteMembers")
       .withIndex("by_note_and_principal", (q) =>

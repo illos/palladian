@@ -28,6 +28,8 @@ export default defineSchema({
     delegations: v.optional(v.array(delegation)),
     autoShareRole: v.optional(role),
     clientName: v.optional(v.string()),
+    // People: Trash retention in days; 0 keeps Trash until emptied manually.
+    trashRetentionDays: v.optional(v.number()),
     createdAt: v.number(),
     disabledAt: v.optional(v.number()),
   })
@@ -98,7 +100,8 @@ export default defineSchema({
   })
     .index("by_notebook_and_seq", ["notebookId", "seq"])
     .index("by_notebook_and_edited", ["notebookId", "editedAt"])
-    .index("by_creator_and_client_key", ["creatorId", "clientKey"]),
+    .index("by_creator_and_client_key", ["creatorId", "clientKey"])
+    .index("by_lifecycle_and_trashed_at", ["lifecycle", "trashedAt"]),
 
   /** Library feed entries for notes that left a notebook (moved or deleted). */
   noteTombstones: defineTable({
@@ -177,6 +180,18 @@ export default defineSchema({
     revision: v.number(),
     createdAt: v.number(),
   }).index("by_actor_and_request", ["actorId", "requestId"]),
+
+  /** The current public read-only link of a note; replaced links stay invalid. */
+  publicLinks: defineTable({
+    noteId: v.id("notes"),
+    // A public capability for published content; the owner can copy it again.
+    token: v.string(),
+    createdBy: v.id("principals"),
+    createdAt: v.number(),
+    revokedAt: v.optional(v.number()),
+  })
+    .index("by_token", ["token"])
+    .index("by_note", ["noteId"]),
 
   invitations: defineTable({
     email: v.string(),

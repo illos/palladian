@@ -694,3 +694,150 @@ describe("invitations", () => {
     expect(membership?.role).toBe("edit");
   });
 });
+
+describe("trash, moves and publishing", () => {
+  test("permanent deletion needs owner authority and removes history", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const editor = await human(t, "Bo");
+    await share(t, owner.notebookId, editor.id, "edit", owner.id);
+    const { noteId } = await owner.as.mutation(api.notes.createFromMarkdown, {
+      markdown: "Doomed",
+    });
+    await owner.as.mutation(api.notes.edit, {
+      noteId,
+      edits: [{ type: "append", markdown: "more" }],
+    });
+    await expect(
+      owner.as.mutation(api.lifecycle.deleteForever, { noteId }),
+    ).rejects.toThrow(/Trash/);
+    await editor.as.mutation(api.notes.trash, { noteId });
+    await expect(
+      editor.as.mutation(api.lifecycle.deleteForever, { noteId }),
+    ).rejects.toThrow(/owner/);
+    await owner.as.mutation(api.lifecycle.deleteForever, { noteId });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await owner.as.query(api.notes.get, { noteId })).toBeNull();
+    const leftovers = await t.run(async (ctx) => ({
+      steps: (
+        await ctx.db
+          .query("noteSteps")
+          .withIndex("by_note_and_revision", (q) => q.eq("noteId", noteId))
+          .collect()
+      ).length,
+      versions: (
+        await ctx.db
+          .query("noteVersions")
+          .withIndex("by_note_and_revision", (q) => q.eq("noteId", noteId))
+          .collect()
+      ).length,
+      content: await ctx.db
+        .query("noteContent")
+        .withIndex("by_note", (q) => q.eq("noteId", noteId))
+        .unique(),
+    }));
+    expect(leftovers).toEqual({ steps: 0, versions: 0, content: null });
+    const feed = await editor.as.query(api.library.changes, {
+      notebookId: owner.notebookId,
+      after: 0,
+    });
+    expect(feed.access && feed.removed).toContain(noteId);
+  });
+
+  test("expired Trash is purged by the owner's current retention", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const keep = await owner.as.mutation(api.notes.createFromMarkdown, {
+      markdown: "Recent",
+    });
+    const old = await owner.as.mutation(api.notes.createFromMarkdown, {
+      markdown: "Old",
+    });
+    await owner.as.mutation(api.notes.trash, { noteId: keep.noteId });
+    await owner.as.mutation(api.notes.trash, { noteId: old.noteId });
+    await t.run((ctx) =>
+      ctx.db.patch(old.noteId, { trashedAt: Date.now() - 10 * 86_400_000 }),
+    );
+    await owner.as.mutation(api.lifecycle.setTrashRetention, { days: 7 });
+    await t.mutation(internal.lifecycle.purgeExpired, {});
+    expect(
+      await owner.as.query(api.notes.get, { noteId: old.noteId }),
+    ).toBeNull();
+    expect(
+      await owner.as.query(api.notes.get, { noteId: keep.noteId }),
+    ).not.toBeNull();
+    await expect(
+      owner.as.mutation(api.lifecycle.setTrashRetention, { days: 3 }),
+    ).rejects.toThrow(/Choose/);
+  });
+
+  test("moves keep the note and warn about lost access", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const member = await human(t, "Bo");
+    const other = await human(t, "Cy");
+    await share(t, owner.notebookId, member.id, "read", owner.id);
+    const archive = await owner.as.mutation(api.notebooks.create, {
+      name: "Archive",
+    });
+    const { noteId } = await owner.as.mutation(api.notes.createFromMarkdown, {
+      markdown: "Move me",
+    });
+    const preview = await owner.as.query(api.lifecycle.movePreview, {
+      noteId,
+      notebookId: archive,
+    });
+    expect(preview.map((p) => p.name)).toEqual(["Bo"]);
+    await owner.as.mutation(api.lifecycle.move, {
+      noteId,
+      notebookId: archive,
+    });
+    expect(
+      (await owner.as.query(api.notes.get, { noteId }))!.summary.notebookId,
+    ).toBe(archive);
+    expect(await member.as.query(api.notes.get, { noteId })).toBeNull();
+    await expect(
+      owner.as.mutation(api.lifecycle.move, {
+        noteId,
+        notebookId: other.notebookId,
+      }),
+    ).rejects.toThrow(/same owner/);
+  });
+
+  test("public links show live content, hide in Trash and die on replacement", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const plain = await agent(t, owner.id);
+    await share(t, owner.notebookId, plain.id, "edit", owner.id);
+    const { noteId } = await owner.as.mutation(api.notes.createFromMarkdown, {
+      markdown: "# Public\n\nHello",
+    });
+    await expect(
+      plain.as.mutation(api.publishing.publish, { noteId }),
+    ).rejects.toThrow(/publish/);
+    const { token } = await owner.as.mutation(api.publishing.publish, {
+      noteId,
+    });
+    expect((await t.query(api.publishing.read, { token }))!.markdown).toBe(
+      "# Public\n\nHello",
+    );
+    await owner.as.mutation(api.notes.edit, {
+      noteId,
+      edits: [{ type: "append", markdown: "Later" }],
+    });
+    expect((await t.query(api.publishing.read, { token }))!.markdown).toContain(
+      "Later",
+    );
+    await owner.as.mutation(api.notes.trash, { noteId });
+    expect(await t.query(api.publishing.read, { token })).toBeNull();
+    await owner.as.mutation(api.notes.restore, { noteId });
+    expect(await t.query(api.publishing.read, { token })).not.toBeNull();
+    const replaced = await owner.as.mutation(api.publishing.replace, {
+      noteId,
+    });
+    expect(await t.query(api.publishing.read, { token })).toBeNull();
+    expect(
+      await t.query(api.publishing.read, { token: replaced.token }),
+    ).not.toBeNull();
+  });
+});
