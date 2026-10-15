@@ -67,7 +67,7 @@ export class LiveController {
   private feeds = new Map<string, () => void>();
   private sharedIds = new Set<string>();
   private visibleNotebooks: Set<string> | null = null;
-  private fetchQueue: string[] = [];
+  private fetchQueue = new Map<string, number>();
   private fetching = 0;
   private openNotes = new Set<string>();
   private syncingDrafts = false;
@@ -212,7 +212,7 @@ export class LiveController {
     this.stops = [];
     for (const stop of this.feeds.values()) stop();
     this.feeds.clear();
-    this.fetchQueue = [];
+    this.fetchQueue.clear();
     this.sharedIds.clear();
     this.visibleNotebooks = null;
   }
@@ -279,7 +279,8 @@ export class LiveController {
               fence,
               { key, value: page.cursor },
             );
-            for (const note of page.notes) this.queueFetch(accountId, note.id);
+            for (const note of page.notes)
+              this.queueFetch(accountId, note.id, note.editedAt);
           } catch {
             handled = false;
             return;
@@ -310,22 +311,23 @@ export class LiveController {
         gone,
         fence,
       );
-      for (const row of rows) this.queueFetch(accountId, row.id);
+      for (const row of rows) this.queueFetch(accountId, row.id, row.editedAt);
     } catch {
       /* the next update retries */
     }
   }
 
-  private queueFetch(accountId: string, noteId: string) {
-    if (this.openNotes.has(noteId) || this.fetchQueue.includes(noteId)) return;
-    this.fetchQueue.push(noteId);
+  private queueFetch(accountId: string, noteId: string, updatedAt: number) {
+    if (this.openNotes.has(noteId)) return;
+    this.fetchQueue.set(noteId, updatedAt);
     this.pump(accountId);
   }
 
   /** Cache current note text in the background, a few at a time. */
   private pump(accountId: string) {
-    while (this.fetching < 3 && this.fetchQueue.length) {
-      const noteId = this.fetchQueue.shift()!;
+    while (this.fetching < 3 && this.fetchQueue.size) {
+      const [noteId, updatedAt] = this.fetchQueue.entries().next().value!;
+      this.fetchQueue.delete(noteId);
       this.fetching++;
       void this.client
         .query(api.notes.content, { noteId: noteId as Id<"notes"> })
@@ -338,9 +340,6 @@ export class LiveController {
             return;
           const doc = parseStoredDoc(content.doc);
           const fence = await this.store.captureFence(accountId);
-          const rows = await this.store.summaryRows(accountId);
-          const updatedAt =
-            rows.find((r) => r.id === noteId)?.updatedAt ?? Date.now();
           await this.store.cacheAccepted(
             {
               accountId,
@@ -400,7 +399,7 @@ export class LiveController {
             { ...draft, id: created.noteId },
             fence,
           );
-        this.queueFetch(accountId, created.noteId);
+        this.queueFetch(accountId, created.noteId, draft.updatedAt);
       }
     } catch {
       /* retried on the next connection or close of the open draft */
