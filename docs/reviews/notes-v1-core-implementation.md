@@ -387,3 +387,18 @@ Verification:
 - Browser: 40 Playwright cases (desktop and mobile Chromium) and 2 production-offline cases.
 - Local real-service proofs were not rerun; the production proofs cover them.
 - The 20 mobile-WebKit cases still cannot launch on this host.
+
+## Response to Astra review round 17
+
+[Round 17](notes-v1-round17-astra-review.md) **accepted the core with required fixes**, with no blocking findings, and kept the edge accepted. It verified R13-3, R14-1, R14-3, R16-1 and R16-3 as fixed. One required fix remained.
+
+| Finding                                                    | Fix                                                                                                                                                                                                                                                                                                                                                                                                                | Evidence                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R17-1 — ended recovery steered later writes (required fix) | A sign-in now discards this tab's unsaved snapshots taken in any account epoch other than the one it activated, even when another tab lifted the block first. Previously that happened only when this tab's activation itself found the account blocked. Nothing (sticky fields in `writeDraft`, `replaceDraftIf`, `splitConflict`, settlement) can act on such a snapshot afterwards. Same-epoch recovery is kept | `review-round17.test.ts`, in the reviewer's activation order: tab B keeps quota-failed typing; an older version clears the account without naming the lifecycle; tab A signs in first and saves a current draft; then B signs in. B's compare-and-replace accepts A's draft, and B's content-only save takes no client ID or notebook from the ended typing. On the previous code the compare-and-replace is refused |
+
+Verification:
+
+- Unit tests: core 28, backend 42, edge 64, app 85 + 19. All typechecks pass.
+- Browser: 40 Playwright cases (desktop and mobile Chromium) and 2 production-offline cases.
+- Local real-service proofs were not rerun; the production proofs cover them.
+- The 20 mobile-WebKit cases still cannot launch on this host.
