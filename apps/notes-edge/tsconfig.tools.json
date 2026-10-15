@@ -1,5 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": { "types": ["node"] },
-  "include": ["vitest.config.ts"]
+  "include": [],
+  "exclude": [],
+  "files": ["vitest.config.ts", "test/d1-kv.test.ts"]
 }
