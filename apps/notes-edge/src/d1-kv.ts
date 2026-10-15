@@ -175,3 +175,16 @@ export async function purgeAbandonedClients(
     .bind(now() - olderThanSeconds)
     .run();
 }
+
+/** Registrations recorded in the last hour, for a hard cap on anonymous DCR. */
+export async function recentRegistrations(db: D1Like, windowSeconds = 3600) {
+  await db.exec(SCHEMA);
+  const row = await db
+    .prepare(
+      "SELECT COUNT(*) AS n FROM oauth_kv WHERE key LIKE 'client:%' " +
+        "AND json_extract(value, '$.registrationDate') > ?",
+    )
+    .bind(now() - windowSeconds)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}

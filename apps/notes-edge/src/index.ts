@@ -9,7 +9,7 @@ import {
   handleDeny,
   handleRequestInfo,
 } from "./consent.ts";
-import { D1KV, purgeAbandonedClients } from "./d1-kv.ts";
+import { D1KV, purgeAbandonedClients, recentRegistrations } from "./d1-kv.ts";
 import {
   MCP_PATH,
   publicOrigin,
@@ -125,12 +125,26 @@ export function withOAuthStorage(deployed: DeployedEnv): Env {
   return { ...deployed, OAUTH_KV: store } as Env;
 }
 
-/** Bound anonymous registrations per address; connected clients are unaffected. */
+/** Hard ceiling on new anonymous registrations per hour across the Worker. */
+const REGISTRATIONS_PER_HOUR = 300;
+
+/**
+ * Bound anonymous registrations: a per-address limit slows bursts (Cloudflare's
+ * limiter is approximate), and an exact hourly ceiling in D1 bounds storage
+ * together with the daily purge. Connected clients are unaffected.
+ */
 async function registrationAllowed(request: Request, deployed: DeployedEnv) {
-  if (!deployed.REGISTRATION_LIMIT || request.method !== "POST") return true;
-  const key = request.headers.get("CF-Connecting-IP") ?? "unknown";
-  const { success } = await deployed.REGISTRATION_LIMIT.limit({ key });
-  return success;
+  if (request.method !== "POST") return true;
+  if (deployed.REGISTRATION_LIMIT) {
+    const key = request.headers.get("CF-Connecting-IP") ?? "unknown";
+    if (!(await deployed.REGISTRATION_LIMIT.limit({ key })).success)
+      return false;
+  }
+  if (deployed.OAUTH_DB)
+    return (
+      (await recentRegistrations(deployed.OAUTH_DB)) < REGISTRATIONS_PER_HOUR
+    );
+  return true;
 }
 
 export default {

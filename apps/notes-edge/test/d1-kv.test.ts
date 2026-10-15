@@ -1,6 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { D1KV, purgeAbandonedClients, type D1Like } from "../src/d1-kv.ts";
+import {
+  D1KV,
+  purgeAbandonedClients,
+  recentRegistrations,
+  type D1Like,
+} from "../src/d1-kv.ts";
 
 type Value = string | number | null;
 function fakeD1(): D1Like {
@@ -112,6 +117,8 @@ describe("consent and registration hygiene", () => {
       JSON.stringify({ clientId: "fresh", registrationDate: old + 2 * 86_400 }),
     );
     await kv.put("grant:agent:g1", JSON.stringify({ clientId: "connected" }));
+    expect(await recentRegistrations(db)).toBe(1);
+    expect(await recentRegistrations(db, 3 * 86_400)).toBe(3);
     await purgeAbandonedClients(db);
     expect(await kv.get("client:abandoned")).toBeNull();
     expect(await kv.get("client:connected")).not.toBeNull();
