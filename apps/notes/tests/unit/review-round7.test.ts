@@ -7,6 +7,7 @@ import {
   FakeNote,
   draftOf,
   live,
+  pauseRecovery,
   server,
   summary,
   type Handler,
@@ -35,7 +36,6 @@ type Db = {
   bodies: { get: (...args: unknown[]) => Promise<unknown> };
 };
 const dbOf = (store: NotesStore) => (store as unknown as { db: Db }).db;
-
 describe("notes written offline are created", () => {
   test("drafts with local and bare UUID IDs are created; server IDs are not", async () => {
     const store = new NotesStore("r7-" + crypto.randomUUID());
@@ -122,52 +122,36 @@ describe("work another tab holds only in memory survives access checks", () => {
 });
 
 describe("reads apply fences recorded while they run", () => {
-  test("a revocation during a read returns nothing", async () => {
-    const name = "r7-" + crypto.randomUUID();
-    const store = new NotesStore(name);
-    const other = new NotesStore(name);
-    try {
-      await store.writeDraft(draftOf(markdownToDoc("Private")));
-      const get = dbOf(store).bodies.get;
-      dbOf(store).bodies.get = async (...args) => {
-        await other.revokeNotes("account", ["note"]);
-        return get.apply(dbOf(store).bodies, args);
-      };
-      expect(await store.read("account", "note")).toBeUndefined();
-    } finally {
-      store.close();
-      other.close();
-    }
-  });
-
-  test("a hold during a read returns nothing", async () => {
-    const name = "r7-" + crypto.randomUUID();
-    const store = new NotesStore(name);
-    const other = new NotesStore(name);
-    try {
-      await store.cacheSummaries(
-        "account",
-        [row("old-notebook")],
-        [],
-        await store.captureFence("account"),
-      );
-      await store.writeDraft(
-        draftOf(markdownToDoc("Private"), { notebookId: "old-notebook" }),
-      );
-      const get = dbOf(store).bodies.get;
-      dbOf(store).bodies.get = async (...args) => {
-        await other.reconcileAccess(
+  test("a revocation or hold during a read returns nothing", async () => {
+    for (const fence of ["revoke", "hold"] as const) {
+      const name = "r7-" + crypto.randomUUID();
+      const store = new NotesStore(name);
+      const other = new NotesStore(name);
+      try {
+        await store.cacheSummaries(
           "account",
-          new Set(),
-          new Set(),
-          await other.captureFence("account"),
+          [row("old-notebook")],
+          [],
+          await store.captureFence("account"),
         );
-        return get.apply(dbOf(store).bodies, args);
-      };
-      expect(await store.read("account", "note")).toBeUndefined();
-    } finally {
-      store.close();
-      other.close();
+        await store.writeDraft(
+          draftOf(markdownToDoc("Private"), { notebookId: "old-notebook" }),
+        );
+        await pauseRecovery(store, async () => {
+          if (fence === "revoke") await other.revokeNotes("account", ["note"]);
+          else
+            await other.reconcileAccess(
+              "account",
+              new Set(),
+              new Set(),
+              await other.captureFence("account"),
+            );
+        });
+        expect(await store.read("account", "note")).toBeUndefined();
+      } finally {
+        store.close();
+        other.close();
+      }
     }
   });
 });

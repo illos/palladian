@@ -20,7 +20,18 @@ export function settleDrafts(
     status.setAttribute("role", "status");
     status.textContent =
       "These drafts have not reached the server. Choose how to keep them before signing out.";
-    dialog.append(heading, status);
+    // Work held while the server confirms access is kept but not exportable.
+    const held = document.createElement("p");
+    held.hidden = true;
+    dialog.append(heading, status, held);
+    void store
+      .unsavedWork(accountId)
+      .then((work) => {
+        if (!work.held) return;
+        held.textContent = `${work.held === 1 ? "One draft is" : `${work.held} drafts are`} waiting for the server to confirm your access to ${work.held === 1 ? "its note" : "their notes"}. It cannot be exported until then, and signing out discards it.`;
+        held.hidden = false;
+      })
+      .catch(() => undefined);
     let finished = false;
     let download: string | null = null;
     const finish = (proceed: boolean) => {

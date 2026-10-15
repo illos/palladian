@@ -162,8 +162,7 @@ export class NotesStore {
           const ids = value.revokedNotes.filter(
             (id): id is string => typeof id === "string",
           );
-          this.forgetNotes(value.accountId, ids);
-          this.notify({ accountId: value.accountId, revokedNotes: ids });
+          void this.receiveFences(value.accountId, ids, false);
           return;
         }
         if (
@@ -177,7 +176,7 @@ export class NotesStore {
           const ids = value.heldNotes.filter(
             (id): id is string => typeof id === "string",
           );
-          this.notify({ accountId: value.accountId, heldNotes: ids });
+          void this.receiveFences(value.accountId, ids, true);
           return;
         }
         if (
@@ -193,6 +192,45 @@ export class NotesStore {
           this.notify({ accountId: value.accountId, invalidated: true });
         }
       };
+  }
+  /**
+   * Another tab fenced these notes. Messages can arrive late, after a fence was
+   * lifted or replaced, so act only on fences of that kind still recorded:
+   * revocation forgets this tab's unsaved snapshots; a hold keeps them and
+   * closes editors of the notes and their conflict copies.
+   */
+  private async receiveFences(accountId: string, ids: string[], held: boolean) {
+    try {
+      const rows = await this.db.revoked.bulkGet(
+        ids.map((id): [string, string] => [accountId, id]),
+      );
+      const current = ids.filter(
+        (_, index) => rows[index] !== undefined && !!rows[index].held === held,
+      );
+      if (!current.length) return;
+      if (!held) {
+        this.forgetNotes(accountId, current);
+        this.notify({ accountId, revokedNotes: current });
+        return;
+      }
+      const gone = new Set(current);
+      const drafts = await this.db.drafts
+        .where("accountId")
+        .equals(accountId)
+        .toArray();
+      const memory = [...this.recoveryDrafts.values()].filter(
+        (draft) => draft.accountId === accountId,
+      );
+      const hidden = new Set([
+        ...current,
+        ...[...drafts, ...memory]
+          .filter((draft) => isRevoked(gone, draft))
+          .map((draft) => draft.id),
+      ]);
+      this.notify({ accountId, heldNotes: [...hidden] });
+    } catch {
+      /* the database is closing; nothing to act on */
+    }
   }
   subscribe = (listener: (event: CacheEvent) => void) => {
     this.listeners.add(listener);
@@ -215,58 +253,79 @@ export class NotesStore {
     const epoch = this.epoch(accountId);
     const persisted = await this.db.accounts.get(accountId);
     if (persisted?.blocked) return [];
-    // This reads only summaries, never all document bodies.
-    const rows = await this.db.summaries
-      .where("accountId")
-      .equals(accountId)
-      .toArray();
-    const revoked = await this.revokedIds(accountId);
+    const memory = await this.recoverySnapshots(
+      accountId,
+      persisted?.epoch ?? 0,
+    );
+    const { value: rows, revoked } = await this.fenced(
+      accountId,
+      [this.db.summaries, this.db.drafts, this.db.accounts],
+      async () => {
+        // This reads only summaries, never all document bodies. A local
+        // summary written by an older version may lack its copy's source.
+        const rows = await this.db.summaries
+          .where("accountId")
+          .equals(accountId)
+          .toArray();
+        for (const row of rows)
+          if (isLocalId(row.id) && row.source === undefined) {
+            const source = (await this.db.drafts.get([accountId, row.id]))
+              ?.source;
+            if (source) row.source = source;
+          }
+        const after = await this.db.accounts.get(accountId);
+        return !after?.blocked &&
+          (after?.epoch ?? 0) === (persisted?.epoch ?? 0)
+          ? rows
+          : null;
+      },
+    );
+    if (!rows || this.epoch(accountId) !== epoch || this.blocked.has(accountId))
+      return [];
     const visible = new Map(
       rows
         .filter((row) => !isRevoked(revoked, row))
         .map((row) => [row.id, row]),
     );
-    for (const draft of await this.accessibleRecovery(
-      accountId,
-      persisted?.epoch ?? 0,
-    ))
-      visible.set(draft.id, {
-        ...visible.get(draft.id),
-        ...summary(draft),
-        kind: "draft",
-      });
-    const after = await this.db.accounts.get(accountId);
-    return this.epoch(accountId) === epoch &&
-      !this.blocked.has(accountId) &&
-      !after?.blocked &&
-      (after?.epoch ?? 0) === (persisted?.epoch ?? 0)
-      ? [...visible.values()].sort((a, b) => b.updatedAt - a.updatedAt)
-      : [];
+    for (const draft of memory)
+      if (!isRevoked(revoked, draft))
+        visible.set(draft.id, {
+          ...visible.get(draft.id),
+          ...summary(draft),
+          kind: "draft",
+        });
+    return [...visible.values()].sort((a, b) => b.updatedAt - a.updatedAt);
   }
   async read(accountId: string, id: string): Promise<NoteBody | undefined> {
     if (this.blocked.has(accountId)) return undefined;
     const epoch = this.epoch(accountId);
     const persisted = await this.db.accounts.get(accountId);
     if (persisted?.blocked) return undefined;
-    const draft = await this.db.drafts.get([accountId, id]);
     const recovered = (
-      await this.accessibleRecovery(accountId, persisted?.epoch ?? 0)
+      await this.recoverySnapshots(accountId, persisted?.epoch ?? 0)
     ).find((value) => value.id === id);
-    const stored = await this.db.bodies.get([accountId, id]);
-    // Fences are read last, so one recorded during this read still applies.
-    const revoked = await this.revokedIds(accountId);
-    const fenced = [recovered, draft].some(
-      (value) => value !== undefined && isRevoked(revoked, value),
+    const { value, revoked } = await this.fenced(
+      accountId,
+      [this.db.drafts, this.db.bodies, this.db.accounts],
+      async () => {
+        const draft = await this.db.drafts.get([accountId, id]);
+        const stored = await this.db.bodies.get([accountId, id]);
+        const after = await this.db.accounts.get(accountId);
+        const current =
+          !after?.blocked && (after?.epoch ?? 0) === (persisted?.epoch ?? 0);
+        return { draft, stored, current };
+      },
     );
-    const body =
-      revoked.has(id) || fenced ? undefined : (recovered ?? draft ?? stored);
-    const after = await this.db.accounts.get(accountId);
-    return this.epoch(accountId) === epoch &&
-      !this.blocked.has(accountId) &&
-      !after?.blocked &&
-      (after?.epoch ?? 0) === (persisted?.epoch ?? 0)
-      ? body
-      : undefined;
+    const { draft, stored, current } = value;
+    if (
+      !current ||
+      this.epoch(accountId) !== epoch ||
+      this.blocked.has(accountId) ||
+      revoked.has(id) ||
+      [recovered, draft].some((v) => v !== undefined && isRevoked(revoked, v))
+    )
+      return undefined;
+    return recovered ?? draft ?? stored;
   }
   writeDraft(written: Draft): Promise<void> {
     const epoch = this.epoch(written.accountId);
@@ -498,39 +557,60 @@ export class NotesStore {
     );
     this.notify();
   }
+  /** Whether unsaved work is kept for this account; see `unsavedWork`. */
   async hasDrafts(accountId: string) {
-    const revoked = await this.revokedIds(accountId);
-    if (
-      [...this.recoveryDrafts.values()].some(
-        (draft) => draft.accountId === accountId && !isRevoked(revoked, draft),
-      )
-    )
-      return true;
-    return (
-      await this.db.drafts.where("accountId").equals(accountId).toArray()
-    ).some((draft) => !isRevoked(revoked, draft));
+    return (await this.unsavedWork(accountId)).total > 0;
+  }
+  /**
+   * Unsaved work kept for this account, including work on notes held while the
+   * server confirms access: it is kept but cannot be exported until then.
+   */
+  async unsavedWork(
+    accountId: string,
+  ): Promise<{ total: number; held: number }> {
+    if (this.blocked.has(accountId)) return { total: 0, held: 0 };
+    const memory = [...this.recoveryDrafts.values()].filter(
+      (draft) => draft.accountId === accountId,
+    );
+    const { value, revoked, held } = await this.fenced(
+      accountId,
+      [this.db.drafts],
+      () => this.db.drafts.where("accountId").equals(accountId).toArray(),
+    );
+    const denied = new Set([...revoked].filter((id) => !held.has(id)));
+    const kept = new Map(
+      [...value, ...memory]
+        .filter((draft) => !isRevoked(denied, draft))
+        .map((draft) => [draft.id, draft]),
+    );
+    return {
+      total: kept.size,
+      held: [...kept.values()].filter((draft) => isRevoked(held, draft)).length,
+    };
   }
   async exportDrafts(accountId: string): Promise<Draft[]> {
     const epoch = this.epoch(accountId);
     const fence = await this.captureFence(accountId);
     await Promise.allSettled([...this.draftQueues.values()]);
-    const drafts = await this.db.drafts
-      .where("accountId")
-      .equals(accountId)
-      .toArray();
-    await this.assertPersistent(accountId, fence.epoch);
+    const memory = await this.recoverySnapshots(accountId, fence.epoch);
+    const { value: drafts, revoked } = await this.fenced(
+      accountId,
+      [this.db.drafts, this.db.accounts],
+      async () => {
+        await this.assertPersistent(accountId, fence.epoch);
+        return this.db.drafts.where("accountId").equals(accountId).toArray();
+      },
+    );
     this.assertWritable(accountId, epoch);
-    const revoked = await this.revokedIds(accountId);
-    // Work on notes this account lost access to is never exportable.
+    // Work on notes this account lost access to, or whose access the server
+    // has yet to confirm, is never exportable.
     const latest = new Map(
       drafts
         .filter((draft) => !isRevoked(revoked, draft))
         .map((draft) => [draft.id, draft]),
     );
-    for (const draft of await this.accessibleRecovery(accountId, fence.epoch))
-      latest.set(draft.id, { ...draft });
-    await this.assertPersistent(accountId, fence.epoch);
-    this.assertWritable(accountId, epoch);
+    for (const draft of memory)
+      if (!isRevoked(revoked, draft)) latest.set(draft.id, draft);
     return [...latest.values()];
   }
   /** A snapshot kept in memory only until it is saved. */
@@ -547,14 +627,17 @@ export class NotesStore {
         this.recoveryFences.delete(key);
       }
   }
-  private async accessibleRecovery(
+  /**
+   * This account's unsaved in-memory snapshots for the current epoch. Callers
+   * filter them by the fences read afterwards with the rows they show.
+   */
+  private async recoverySnapshots(
     accountId: string,
     epoch: number,
   ): Promise<Draft[]> {
     const drafts: Draft[] = [];
-    const revoked = await this.revokedIds(accountId);
     for (const [key, draft] of this.recoveryDrafts) {
-      if (draft.accountId !== accountId || isRevoked(revoked, draft)) continue;
+      if (draft.accountId !== accountId) continue;
       const fence = await this.recoveryFences.get(key)?.catch(() => null);
       if (
         fence?.epoch === epoch &&
@@ -564,6 +647,36 @@ export class NotesStore {
         drafts.push({ ...draft });
     }
     return drafts;
+  }
+  /**
+   * Run `read` in one IndexedDB transaction with the account's note fences, so
+   * a fence recorded in any tab is either seen by the read or committed after
+   * it. `held` is the subset whose access the server has yet to confirm.
+   */
+  private fenced<T>(
+    accountId: string,
+    tables: Table[],
+    read: () => Promise<T>,
+  ): Promise<{ value: T; revoked: Set<string>; held: Set<string> }> {
+    return this.db.transaction("r", [...tables, this.db.revoked], async () => {
+      const value = await read();
+      const rows = await this.db.revoked
+        .where("accountId")
+        .equals(accountId)
+        .toArray();
+      return {
+        value,
+        revoked: new Set(rows.map((row) => row.id)),
+        held: new Set(rows.filter((row) => row.held).map((row) => row.id)),
+      };
+    });
+  }
+  /** Which of these notes are fenced: revoked, or held while access is checked. */
+  async fencedNotes(accountId: string, ids: string[]): Promise<Set<string>> {
+    const rows = await this.db.revoked.bulkGet(
+      ids.map((id): [string, string] => [accountId, id]),
+    );
+    return new Set(ids.filter((_, index) => rows[index] !== undefined));
   }
   private async revokedIds(accountId: string) {
     const rows = await this.db.revoked
@@ -967,7 +1080,7 @@ export class NotesStore {
     );
     if (held.length) {
       // Every tab closes editors of held notes and their copies, keeping work.
-      this.channel?.postMessage({ accountId, heldNotes: hidden });
+      this.channel?.postMessage({ accountId, heldNotes: held });
       this.notify({ accountId, heldNotes: hidden });
     }
     return held;
@@ -1017,21 +1130,22 @@ export class NotesStore {
   }
   async readDraft(accountId: string, id: string): Promise<Draft | undefined> {
     if (this.blocked.has(accountId)) return undefined;
-    const key = JSON.stringify([accountId, id]);
-    const draft =
-      this.recoveryDrafts.get(key) ??
-      (await this.db.drafts.get([accountId, id]));
-    return draft && !isRevoked(await this.revokedIds(accountId), draft)
-      ? draft
-      : undefined;
+    const memory = this.recoveryDrafts.get(JSON.stringify([accountId, id]));
+    const { value: stored, revoked } = await this.fenced(
+      accountId,
+      [this.db.drafts],
+      () => this.db.drafts.get([accountId, id]),
+    );
+    const draft = memory ?? stored;
+    return draft && !isRevoked(revoked, draft) ? draft : undefined;
   }
   async localDrafts(accountId: string): Promise<Draft[]> {
     if (this.blocked.has(accountId)) return [];
-    const rows = await this.db.drafts
-      .where("accountId")
-      .equals(accountId)
-      .toArray();
-    const revoked = await this.revokedIds(accountId);
+    const { value: rows, revoked } = await this.fenced(
+      accountId,
+      [this.db.drafts],
+      () => this.db.drafts.where("accountId").equals(accountId).toArray(),
+    );
     return rows.filter(
       (draft) =>
         draft.baseRevision === undefined &&
@@ -1043,11 +1157,11 @@ export class NotesStore {
   /** Drafts created on the server whose content has not been reconciled yet. */
   async adoptedDrafts(accountId: string): Promise<Draft[]> {
     if (this.blocked.has(accountId)) return [];
-    const rows = await this.db.drafts
-      .where("accountId")
-      .equals(accountId)
-      .toArray();
-    const revoked = await this.revokedIds(accountId);
+    const { value: rows, revoked } = await this.fenced(
+      accountId,
+      [this.db.drafts],
+      () => this.db.drafts.where("accountId").equals(accountId).toArray(),
+    );
     // A server ID means the note exists, whichever editor saved the draft.
     return rows.filter(
       (draft) =>

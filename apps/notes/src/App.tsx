@@ -119,6 +119,8 @@ export function App({
   const openRequest = useRef(0);
   /** The note an unfinished open is for; losing access to it cancels the open. */
   const pendingOpen = useRef<string | null>(null);
+  /** Counts revocations and holds, so pending search results can be refenced. */
+  const accessEvents = useRef(0);
   const listRequest = useRef(0);
   const writeRequest = useRef(0);
   const pendingRoute = useRef(routeNoteId());
@@ -181,6 +183,23 @@ export function App({
         setRows([]);
         setNotebooks([]);
         setOpen(null);
+      }
+      const fenced = [
+        ...(event.revokedNotes ?? []),
+        ...(event.heldNotes ?? []),
+      ];
+      if (fenced.length && event.accountId === accountId) {
+        accessEvents.current++;
+        setHits((previous) =>
+          previous
+            ? {
+                ...previous,
+                results: previous.results.filter(
+                  (hit) => !fenced.includes(hit.summary.id),
+                ),
+              }
+            : previous,
+        );
       }
       const pending = pendingOpen.current;
       if (
@@ -254,7 +273,8 @@ export function App({
   }, [liveReady, live, currentOpen?.kind, currentOpen?.id, currentOpen?.key]);
 
   // Server search complements instant local filtering. Results are fenced to
-  // the account and session generation that asked for them.
+  // the account and session generation that asked for them, and to notes not
+  // revoked or held on this device.
   useEffect(() => {
     setHits(null);
     if (!liveReady || !accountId || query.trim().length < 2) return;
@@ -264,13 +284,26 @@ export function App({
     const timer = setTimeout(() => {
       void live!
         .search(term)
-        .then((results) => {
+        .then(async (results) => {
+          let fenced: Set<string>;
+          let seen: number;
+          do {
+            seen = accessEvents.current;
+            fenced = await store.fencedNotes(
+              accountId,
+              results.map((hit) => hit.summary.id),
+            );
+          } while (seen !== accessEvents.current);
           if (
             current &&
             snapshotRef.current.accountId === accountId &&
             snapshotRef.current.generation === generation
           )
-            setHits({ accountId, generation, results });
+            setHits({
+              accountId,
+              generation,
+              results: results.filter((hit) => !fenced.has(hit.summary.id)),
+            });
         })
         .catch(() => undefined);
     }, 250);
@@ -278,7 +311,7 @@ export function App({
       current = false;
       clearTimeout(timer);
     };
-  }, [liveReady, live, query, accountId, snapshot.generation]);
+  }, [liveReady, live, query, accountId, snapshot.generation, store]);
 
   // A deep link opens its note once the library knows about it. Startup session
   // fences can discard an attempt, so keep trying until a note is shown.

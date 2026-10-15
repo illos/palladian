@@ -141,3 +141,23 @@ export function draftOf(
     ...extra,
   };
 }
+
+/**
+ * Run `during` while the store's next read is gathering unsaved in-memory
+ * snapshots, before it reads stored rows and fences.
+ */
+export async function pauseRecovery(
+  store: NotesStore,
+  during: () => Promise<unknown>,
+) {
+  const target = store as unknown as {
+    recoverySnapshots: (...args: unknown[]) => Promise<unknown>;
+  };
+  const original = target.recoverySnapshots.bind(store);
+  target.recoverySnapshots = async (...args) => {
+    target.recoverySnapshots = original;
+    const result = await original(...args);
+    await during();
+    return result;
+  };
+}
