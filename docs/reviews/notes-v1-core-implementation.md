@@ -368,3 +368,22 @@ Verification:
 - Browser: 40 Playwright cases (desktop and mobile Chromium) and 2 production-offline cases.
 - Local real-service proofs were not rerun; the production proofs cover them.
 - The 20 mobile-WebKit cases still cannot launch on this host.
+
+## Response to Astra review round 16
+
+[Round 16](notes-v1-round16-astra-review.md) verified R6-4, R9-2, R12-1 and R15-1 to R15-4 as fixed and kept the edge accepted. It did **not accept** the core, because of two privacy blockers and one non-blocking finding.
+
+| Finding                                                       | Fix                                                                                                                                                                                                                                                                                                                         | Evidence                                                                                                                                                                    |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R16-1 — joining a failed background retry looked like success | The background retry keeps the rejecting attempt as the operation's running promise and observes its failure separately, so callers that join it see the failure. `allowAccount` refuses while this tab has an unfinished clear for the account; its own lock no longer lets a sign-in pass                                 | `review-round16.test.ts`: a caller joining a failing automatic retry is rejected. The same tab cannot sign in over its own unfinished clear. The clear later succeeds       |
+| R16-2 — kept legacy typing reached the editor                 | `readDraft` checks an unsaved snapshot's fence against the account's stored epoch, read in the same transaction as the draft, and against the current snapshot after waiting for the fence. An activation that finds the account blocked also forgets this tab's snapshots, because they belong to the lifecycle that ended | Typing kept through an older version's unnumbered message, after another tab genuinely cleared the account, is not returned by `readDraft` or export after signing in again |
+| R16-3 — activation forgot finished operations (non-blocking)  | Finished operations are kept for the life of the page. An unnamed call gets a fresh id instead of a per-account default                                                                                                                                                                                                     | Repeating a finished clear after signing in again returns its result and leaves the new work                                                                                |
+
+All three new tests fail on the previous code for the behavior under test. A round-13 test that signed in over its own failed clear now reloads the page first, matching the refusal above.
+
+Verification:
+
+- Unit tests: core 28, backend 42, edge 64, app 84 + 19. All typechecks pass.
+- Browser: 40 Playwright cases (desktop and mobile Chromium) and 2 production-offline cases.
+- Local real-service proofs were not rerun; the production proofs cover them.
+- The 20 mobile-WebKit cases still cannot launch on this host.
