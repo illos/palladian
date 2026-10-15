@@ -1,0 +1,27 @@
+{
+  "name": "@palladian/notes-edge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 8787",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.tools.json && tsc --noEmit -p contract/tsconfig.json",
+    "test": "vitest run",
+    "e2e": "node scripts/e2e.mjs",
+    "keygen": "node scripts/keygen.mjs",
+    "check:bundle": "wrangler deploy --dry-run --outdir dist"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "1.2.3",
+    "@modelcontextprotocol/server": "2.3.1",
+    "convex": "1.45.0",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260908.1",
+    "@modelcontextprotocol/client": "2.3.1",
+    "@types/node": "26.4.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.4",
+    "wrangler": "4.130.0"
+  }
+}
