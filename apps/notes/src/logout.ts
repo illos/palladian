@@ -1,4 +1,4 @@
-import type { NotesStore } from "./cache";
+import type { Draft, NotesStore } from "./cache";
 import type { SessionController } from "./session";
 
 /** Download initiation is not proof that the user retained a recovery copy. */
@@ -21,23 +21,40 @@ export function settleDrafts(
     status.textContent =
       "These drafts have not reached the server. Choose how to keep them before signing out.";
     // Work held while the server confirms access is kept but not exportable.
+    // Holds can begin or end while the dialog is open, so this stays current.
     const held = document.createElement("p");
     held.hidden = true;
     dialog.append(heading, status, held);
-    void store
-      .unsavedWork(accountId)
-      .then((work) => {
-        if (!work.held) return;
-        held.textContent = `${work.held === 1 ? "One draft is" : `${work.held} drafts are`} waiting for the server to confirm your access to ${work.held === 1 ? "its note" : "their notes"}. It cannot be exported until then, and signing out discards it.`;
-        held.hidden = false;
-      })
-      .catch(() => undefined);
+    const describeHeld = (count: number) =>
+      count === 1
+        ? "One draft is waiting for the server to confirm your access to its note. It cannot be exported until then, and signing out discards it."
+        : `${count} drafts are waiting for the server to confirm your access to their notes. They cannot be exported until then, and signing out discards them.`;
+    const refreshHeld = () =>
+      void store
+        .unsavedWork(accountId)
+        .then((work) => {
+          if (finished) return;
+          held.textContent = work.held ? describeHeld(work.held) : "";
+          held.hidden = !work.held;
+        })
+        .catch(() => undefined);
+    const unsubscribeStore = store.subscribe(refreshHeld);
+    refreshHeld();
     let finished = false;
     let download: string | null = null;
+    /** What the last export contained; confirmation requires it still to be everything kept. */
+    let exported: string | null = null;
+    const fingerprint = (drafts: Draft[]) =>
+      JSON.stringify(
+        drafts
+          .map((draft) => [draft.id, draft.updatedAt, draft.document])
+          .sort(),
+      );
     const finish = (proceed: boolean) => {
       if (finished) return;
       finished = true;
       unsubscribe();
+      unsubscribeStore();
       if (download) URL.revokeObjectURL(download);
       dialog.close();
       dialog.remove();
@@ -83,6 +100,7 @@ export function settleDrafts(
         .exportDrafts(accountId)
         .then((drafts) => {
           if (!current() || finished) return;
+          exported = fingerprint(drafts);
           if (download) URL.revokeObjectURL(download);
           download = URL.createObjectURL(
             new Blob(
@@ -113,7 +131,30 @@ export function settleDrafts(
         });
     });
     const confirmExport = button("Export saved — sign out", () => {
-      if (current()) finish(true);
+      confirmExport.disabled = true;
+      // The export must still cover all kept work: nothing newer, nothing held.
+      void Promise.all([
+        store.unsavedWork(accountId),
+        store.exportDrafts(accountId),
+      ])
+        .then(([work, drafts]) => {
+          if (!current() || finished) return;
+          if (work.held) {
+            status.textContent = `${describeHeld(work.held)} Cancel to keep it, or discard drafts to sign out.`;
+            confirmExport.hidden = true;
+          } else if (fingerprint(drafts) !== exported) {
+            status.textContent =
+              "Your drafts changed after the export. Export again before signing out.";
+            confirmExport.hidden = true;
+          } else finish(true);
+        })
+        .catch(() => {
+          status.textContent =
+            "Your drafts could not be checked. Try again or cancel sign-out.";
+        })
+        .finally(() => {
+          confirmExport.disabled = false;
+        });
     });
     confirmExport.hidden = true;
     button("Discard drafts and sign out", () => {

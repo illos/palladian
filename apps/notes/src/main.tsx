@@ -66,6 +66,10 @@ const session = new SessionController({
     activated = null;
     await store.clearAccount(accountId);
   },
+  async retireAccount(accountId) {
+    activated = null;
+    await store.retireAccount(accountId);
+  },
   async onAccountReady(accountId, isCurrent) {
     if (activated === accountId) return;
     if (!activation || !isCurrent()) throw new Error("Session attempt changed");

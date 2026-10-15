@@ -185,11 +185,18 @@ export class NotesStore {
           "accountId" in value &&
           typeof value.accountId === "string"
         ) {
+          const accountId = value.accountId;
+          // A replaced account keeps its unsaved work; save this tab's share.
+          const unsaved =
+            "retired" in value && value.retired === true
+              ? this.snapshotsOf(accountId)
+              : [];
           this.activationEpoch++;
-          this.blocked.add(value.accountId);
-          this.forgetRecovery(value.accountId);
-          this.epochs.set(value.accountId, this.epoch(value.accountId) + 1);
-          this.notify({ accountId: value.accountId, invalidated: true });
+          this.blocked.add(accountId);
+          this.forgetRecovery(accountId);
+          this.epochs.set(accountId, this.epoch(accountId) + 1);
+          this.notify({ accountId, invalidated: true });
+          void this.saveSnapshots(unsaved);
         }
       };
   }
@@ -288,7 +295,7 @@ export class NotesStore {
         .map((row) => [row.id, row]),
     );
     for (const draft of memory)
-      if (!isRevoked(revoked, draft))
+      if (this.isCurrent(draft, undefined) && !isRevoked(revoked, draft))
         visible.set(draft.id, {
           ...visible.get(draft.id),
           ...summary(draft),
@@ -301,7 +308,7 @@ export class NotesStore {
     const epoch = this.epoch(accountId);
     const persisted = await this.db.accounts.get(accountId);
     if (persisted?.blocked) return undefined;
-    const recovered = (
+    const captured = (
       await this.recoverySnapshots(accountId, persisted?.epoch ?? 0)
     ).find((value) => value.id === id);
     const { value, revoked } = await this.fenced(
@@ -317,6 +324,8 @@ export class NotesStore {
       },
     );
     const { draft, stored, current } = value;
+    const recovered =
+      captured && this.isCurrent(captured, draft) ? { ...captured } : undefined;
     if (
       !current ||
       this.epoch(accountId) !== epoch ||
@@ -569,13 +578,15 @@ export class NotesStore {
     accountId: string,
   ): Promise<{ total: number; held: number }> {
     if (this.blocked.has(accountId)) return { total: 0, held: 0 };
-    const memory = [...this.recoveryDrafts.values()].filter(
-      (draft) => draft.accountId === accountId,
-    );
+    const captured = this.snapshotsOf(accountId);
     const { value, revoked, held } = await this.fenced(
       accountId,
       [this.db.drafts],
       () => this.db.drafts.where("accountId").equals(accountId).toArray(),
+    );
+    const stored = new Map(value.map((draft) => [draft.id, draft]));
+    const memory = captured.filter((draft) =>
+      this.isCurrent(draft, stored.get(draft.id)),
     );
     const denied = new Set([...revoked].filter((id) => !held.has(id)));
     const kept = new Map(
@@ -604,13 +615,18 @@ export class NotesStore {
     this.assertWritable(accountId, epoch);
     // Work on notes this account lost access to, or whose access the server
     // has yet to confirm, is never exportable.
+    const stored = new Map(drafts.map((draft) => [draft.id, draft]));
     const latest = new Map(
       drafts
         .filter((draft) => !isRevoked(revoked, draft))
         .map((draft) => [draft.id, draft]),
     );
     for (const draft of memory)
-      if (!isRevoked(revoked, draft)) latest.set(draft.id, draft);
+      if (
+        this.isCurrent(draft, stored.get(draft.id)) &&
+        !isRevoked(revoked, draft)
+      )
+        latest.set(draft.id, { ...draft });
     return [...latest.values()];
   }
   /** A snapshot kept in memory only until it is saved. */
@@ -629,7 +645,8 @@ export class NotesStore {
   }
   /**
    * This account's unsaved in-memory snapshots for the current epoch. Callers
-   * filter them by the fences read afterwards with the rows they show.
+   * read their rows and fences afterwards, then keep a snapshot only if it is
+   * still unsaved (`isCurrent`), newer than its stored draft, and not fenced.
    */
   private async recoverySnapshots(
     accountId: string,
@@ -644,9 +661,21 @@ export class NotesStore {
         !this.blocked.has(accountId) &&
         this.recoveryDrafts.get(key) === draft
       )
-        drafts.push({ ...draft });
+        drafts.push(draft);
     }
     return drafts;
+  }
+  /**
+   * A captured snapshot that is still this tab's unsaved version, and newer
+   * than the stored draft read since: a saved or replaced one is not revived.
+   */
+  private isCurrent(snapshot: Draft, stored: Draft | undefined) {
+    return (
+      this.recoveryDrafts.get(
+        JSON.stringify([snapshot.accountId, snapshot.id]),
+      ) === snapshot &&
+      (stored === undefined || snapshot.updatedAt >= stored.updatedAt)
+    );
   }
   /**
    * Run `read` in one IndexedDB transaction with the account's note fences, so
@@ -692,6 +721,111 @@ export class NotesStore {
     const localEpoch = this.activationEpoch;
     const privacy = await this.db.privacy.get("activation");
     return { epoch: privacy?.epoch ?? 0, localEpoch };
+  }
+  /**
+   * Another account signed in on this device. Hide this account and drop its
+   * cached server content, but keep its unsaved work, isolated under it, for
+   * when it signs in again: a different identity gives no authority to erase
+   * it. Fences stay. Unsaved snapshots held only in memory, in this tab and
+   * others, are saved once the cache that may have crowded them out is gone.
+   */
+  async retireAccount(accountId: string): Promise<void> {
+    const unsaved = this.snapshotsOf(accountId);
+    this.activationEpoch++;
+    this.blocked.add(accountId);
+    this.forgetRecovery(accountId);
+    this.epochs.set(accountId, this.epoch(accountId) + 1);
+    this.notify({ accountId, invalidated: true });
+    this.channel?.postMessage({ accountId, retired: true });
+    await this.db.transaction(
+      "rw",
+      [
+        this.db.summaries,
+        this.db.bodies,
+        this.db.drafts,
+        this.db.accounts,
+        this.db.privacy,
+        this.db.notebooks,
+        this.db.cursors,
+      ],
+      async () => {
+        const privacy = await this.db.privacy.get("activation");
+        await this.db.privacy.put({
+          key: "activation",
+          epoch: (privacy?.epoch ?? 0) + 1,
+        });
+        await this.db.notebooks.where("accountId").equals(accountId).delete();
+        await this.db.cursors.where("accountId").equals(accountId).delete();
+        const account = await this.db.accounts.get(accountId);
+        await this.db.accounts.put({
+          accountId,
+          epoch: (account?.epoch ?? 0) + 1,
+          blocked: true,
+        });
+        const drafts = await this.db.drafts
+          .where("accountId")
+          .equals(accountId)
+          .toArray();
+        const kept = new Set([...drafts, ...unsaved].map((draft) => draft.id));
+        await this.db.summaries
+          .where("accountId")
+          .equals(accountId)
+          .filter((row) => !kept.has(row.id))
+          .delete();
+        await this.db.bodies.where("accountId").equals(accountId).delete();
+      },
+    );
+    await this.saveSnapshots(unsaved);
+    this.notify();
+  }
+  private snapshotsOf(accountId: string) {
+    return [...this.recoveryDrafts.values()].filter(
+      (draft) => draft.accountId === accountId,
+    );
+  }
+  /**
+   * Save unsaved snapshots of a hidden account so they outlive this tab, unless
+   * a stored draft is as new or access to their note was denied. Best effort:
+   * storage may still be full.
+   */
+  private async saveSnapshots(snapshots: Draft[]) {
+    if (!snapshots.length) return;
+    try {
+      await this.db.transaction(
+        "rw",
+        [this.db.drafts, this.db.summaries, this.db.revoked],
+        async () => {
+          for (const draft of snapshots) {
+            const denied = async (id: string | undefined) => {
+              if (id === undefined) return false;
+              const marker = await this.db.revoked.get([draft.accountId, id]);
+              return marker !== undefined && !marker.held;
+            };
+            if ((await denied(draft.id)) || (await denied(draft.source)))
+              continue;
+            const stored = await this.db.drafts.get([
+              draft.accountId,
+              draft.id,
+            ]);
+            if (stored && stored.updatedAt >= draft.updatedAt) continue;
+            await this.db.drafts.put(draft);
+            const previous = await this.db.summaries.get([
+              draft.accountId,
+              draft.id,
+            ]);
+            await this.db.summaries.put({
+              ...previous,
+              ...(draft.notebookId ? { notebookId: draft.notebookId } : {}),
+              ...(draft.source ? { source: draft.source } : {}),
+              ...summary(draft),
+              kind: "draft",
+            });
+          }
+        },
+      );
+    } catch {
+      /* still no space: these snapshots end with this tab */
+    }
   }
   async allowAccount(
     accountId: string,
@@ -1130,13 +1264,17 @@ export class NotesStore {
   }
   async readDraft(accountId: string, id: string): Promise<Draft | undefined> {
     if (this.blocked.has(accountId)) return undefined;
-    const memory = this.recoveryDrafts.get(JSON.stringify([accountId, id]));
     const { value: stored, revoked } = await this.fenced(
       accountId,
       [this.db.drafts],
       () => this.db.drafts.get([accountId, id]),
     );
-    const draft = memory ?? stored;
+    // This tab's unsaved snapshot, if any, as of now, unless a newer one is stored.
+    const memory = this.recoveryDrafts.get(JSON.stringify([accountId, id]));
+    const draft =
+      memory && (!stored || memory.updatedAt >= stored.updatedAt)
+        ? memory
+        : stored;
     return draft && !isRevoked(revoked, draft) ? draft : undefined;
   }
   async localDrafts(accountId: string): Promise<Draft[]> {

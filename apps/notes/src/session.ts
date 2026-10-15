@@ -22,15 +22,23 @@ export interface AccountHintStore {
     accountId: string | null;
     signedOut: boolean;
     pendingCleanup?: string | null;
+    pendingRetire?: string | null;
   };
   remember(accountId: string): void;
   signedOut(accountId?: string): void;
   hideForCleanup(accountId: string): void;
+  /** Hide an account another sign-in replaced, until it is retired. */
+  hideForRetire(accountId: string): void;
 }
 export interface SessionOptions {
   service: SessionService;
   hints: AccountHintStore;
   clearAccount(accountId: string): Promise<void>;
+  /**
+   * Another account signed in: hide this one without deleting its unsaved
+   * work, which a different identity gives no authority to erase.
+   */
+  retireAccount(accountId: string): Promise<void>;
   prepareLogout?: () => Promise<boolean>;
   onAccountReady?: (
     accountId: string,
@@ -59,6 +67,7 @@ export class SessionController {
   private failures = 0;
   private logoutPending = false;
   private pendingCleanup: string | null = null;
+  private pendingRetire: string | null = null;
 
   constructor(options: SessionOptions) {
     this.options = options;
@@ -69,6 +78,7 @@ export class SessionController {
       hint = { accountId: null, signedOut: false };
     }
     this.pendingCleanup = hint.pendingCleanup ?? null;
+    this.pendingRetire = hint.pendingRetire ?? null;
     this.snapshot = {
       status: hint.signedOut ? "signed-out" : "connecting",
       accountId: hint.signedOut ? null : hint.accountId,
@@ -223,15 +233,27 @@ export class SessionController {
         this.failures = 0;
         const previous = this.snapshot.accountId;
         if (previous && previous !== result.accountId)
-          this.pendingCleanup = previous;
-        if (this.pendingCleanup) {
+          this.pendingRetire = previous;
+        // An account that signs back in before its retirement keeps its data.
+        if (this.pendingRetire === result.accountId) this.pendingRetire = null;
+        if (this.pendingCleanup || this.pendingRetire) {
           const cleanup = this.pendingCleanup;
+          const retire = this.pendingRetire;
           this.fence();
           const generation = this.snapshot.generation;
           this.update({ accountId: null, status: "connecting" });
           try {
-            this.options.hints.hideForCleanup(cleanup);
-            await this.options.clearAccount(cleanup);
+            // A signed-out or revoked account is cleared. An account replaced
+            // by another sign-in is hidden, keeping its unsaved work for when
+            // it signs in again.
+            if (cleanup) {
+              this.options.hints.hideForCleanup(cleanup);
+              await this.options.clearAccount(cleanup);
+            }
+            if (retire && retire !== cleanup) {
+              this.options.hints.hideForRetire(retire);
+              await this.options.retireAccount(retire);
+            }
           } catch {
             if (this.snapshot.generation === generation)
               this.update({ error: "Account cleanup failed. Please retry." });
@@ -239,6 +261,7 @@ export class SessionController {
           }
           if (!this.running || this.snapshot.generation !== generation) return;
           this.pendingCleanup = null;
+          this.pendingRetire = null;
         }
         const generation = this.snapshot.generation;
         try {
@@ -356,6 +379,10 @@ export function browserAccountHints(
           typeof record.pendingCleanup === "string"
             ? record.pendingCleanup
             : null,
+        pendingRetire:
+          typeof record.pendingRetire === "string"
+            ? record.pendingRetire
+            : null,
       };
     },
     remember(accountId) {
@@ -378,6 +405,16 @@ export function browserAccountHints(
           accountId: null,
           signedOut: false,
           pendingCleanup: accountId,
+        }),
+      );
+    },
+    hideForRetire(accountId) {
+      storage.setItem(
+        key,
+        JSON.stringify({
+          accountId: null,
+          signedOut: false,
+          pendingRetire: accountId,
         }),
       );
     },
