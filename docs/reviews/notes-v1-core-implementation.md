@@ -307,3 +307,35 @@ Verification:
 - Browser: 40 Playwright cases (desktop and mobile Chromium) and 2 production-offline cases.
 - Local real-service proofs were not rerun; the production proofs cover them.
 - The 20 mobile-WebKit cases still cannot launch on this host.
+
+## Response to Astra review round 14
+
+[Round 14](notes-v1-round14-astra-review.md) verified R13-1 and R13-2 as fixed, kept the edge accepted, and did **not accept** the core. Its blockers share one gap: nothing stopped another tab from beginning a new lifecycle of an account while a clear was unresolved. Durable storage cannot close that gap on its own, because the failures in question are storage failures.
+
+Account lifecycle changes are now coordinated through a per-account Web Lock. The browser keeps the lock in memory, so it works when storage writes fail, and it is released when a tab closes.
+
+- **Clear:** `clearAccount` takes the lock exclusively when it starts and holds it until the clear succeeds. It retries in the background as well as when the session retries.
+- **Sign-in and finishing:** `allowAccount` and `finishClear` take the lock in shared mode, and only if it is free. Sign-ins to the same lifecycle can overlap, with the database ordering them, but none can begin while a clear is unresolved.
+- **Lifecycles:** an account's `lifecycle` advances only when a cleared account is signed in again; tabs signed in to the same lifecycle share it. A clear is meant for the lifecycle this tab knows (as stored when it opened, or as it signed in). If that lifecycle has since been replaced, the clear does nothing.
+
+| Finding                                                     | Fix                                                                                                                                                                                                                                                                                              | Evidence                                                                                                                                                                                                                                      |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R14-1 — owned retries regained destructive authority        | A clear keeps the lock through every failure: an unreadable block, an unwritable block, or a failed deletion after the block. No new lifecycle can begin before its retry, so a retry can only complete the clear it was decided for. The unread-lifecycle and `unfinishedClears` paths are gone | `review-round14.test.ts`, for each of the three failures: another tab's sign-in is refused until the clear completes. The completed clear leaves nothing of the old lifecycle, and finishing it again never touches the next lifecycle's work |
+| R14-2 — a delayed receive destroyed newer typing            | A clear message names the lifecycle it ended. A tab ignores a message about a lifecycle older than the one it signed in to, without reading storage                                                                                                                                              | A late message keeps a newer lifecycle and its quota-failed, memory-only typing                                                                                                                                                               |
+| R14-3 — supersession revived revoked data                   | A sign-in cannot begin while the revoking tab's clear is unresolved, so it can no longer adopt that tab's data. A lifecycle advance only happens after a completed block                                                                                                                         | Covered by the three failure cases above                                                                                                                                                                                                      |
+| R14-4 — a failed receiving read lost privacy invalidation   | A receiving tab acts on a current message without reading storage, so a read failure cannot drop it                                                                                                                                                                                              | A current message hides the account while account reads fail                                                                                                                                                                                  |
+| R14-5 — carried cleanup published a sign-out (non-blocking) | Only this page's own cleanup writes the shared hint; a carried-over one only finishes a recorded clear                                                                                                                                                                                           | Session test: a carried-over cleanup records no sign-out                                                                                                                                                                                      |
+
+Four of the five new store tests, and the new session test, fail on the previous code for the behavior under test. The late-message test passes on both versions; it stays as a regression guard.
+
+Residual gaps:
+
+- If a tab closes after recording a sign-out in the hint but before its block commits, the lock is released and the account is not cleared; the hint keeps it signed out.
+- A browser without Web Locks falls back to the database-only rules. All supported browsers have Web Locks.
+
+Verification:
+
+- Unit tests: core 28, backend 42, edge 64, app 77 + 19. All typechecks pass.
+- Browser: 40 Playwright cases (desktop and mobile Chromium) and 2 production-offline cases.
+- Local real-service proofs were not rerun; the production proofs cover them.
+- The 20 mobile-WebKit cases still cannot launch on this host.
