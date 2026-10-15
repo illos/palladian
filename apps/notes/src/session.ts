@@ -37,6 +37,8 @@ export interface SessionOptions {
    * Resolves false to keep the account instead.
    */
   settleAccount(accountId: string): Promise<boolean>;
+  /** Whether the account's local data is blocked: cleared or being cleared. */
+  accountBlocked(accountId: string): Promise<boolean>;
   prepareLogout?: () => Promise<boolean>;
   onAccountReady?: (
     accountId: string,
@@ -227,6 +229,26 @@ export class SessionController {
           return;
         }
         this.failures = 0;
+        if (this.pendingCleanup) {
+          // A cleanup carried over from an earlier attempt, a reload or another
+          // tab stands only while the hints still record it or the account's
+          // data is still blocked. An account signed in again since has begun a
+          // new lifecycle, which that old intent must not erase.
+          const intent = this.pendingCleanup;
+          const generation = this.snapshot.generation;
+          let stands = false;
+          try {
+            stands = this.options.hints.read().pendingCleanup === intent;
+          } catch {
+            /* unreadable hints: decide by the account's data */
+          }
+          if (!stands)
+            stands = await this.options
+              .accountBlocked(intent)
+              .catch(() => true);
+          if (!this.running || this.snapshot.generation !== generation) return;
+          if (!stands) this.pendingCleanup = null;
+        }
         const previous = this.snapshot.accountId;
         if (previous && previous !== result.accountId) {
           const generation = this.snapshot.generation;

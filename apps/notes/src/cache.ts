@@ -749,6 +749,10 @@ export class NotesStore {
     const privacy = await this.db.privacy.get("activation");
     return { epoch: privacy?.epoch ?? 0, localEpoch };
   }
+  /** Whether the account's local data is blocked: cleared or being cleared. */
+  async accountBlocked(accountId: string): Promise<boolean> {
+    return (await this.db.accounts.get(accountId))?.blocked === true;
+  }
   async allowAccount(
     accountId: string,
     fence: ActivationFence,

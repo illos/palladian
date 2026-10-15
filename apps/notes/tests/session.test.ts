@@ -30,6 +30,7 @@ function setup(service: SessionService, accountId: string | null = "owner") {
   const session = new SessionController({
     service,
     hints,
+    accountBlocked: async () => true,
     settleAccount: async () => true,
     clearAccount: async (account) => {
       cleared.push(account);
@@ -156,6 +157,7 @@ test("explicit logout intent survives a failed remote sign-out and passive reloa
         memory.set(key, value);
       },
     }),
+    accountBlocked: async () => true,
     settleAccount: async () => true,
     clearAccount: async () => {},
   });
@@ -178,6 +180,7 @@ test("an account switch with nothing to settle clears previous data before readi
   const session = new SessionController({
     service: { check: async () => ({ kind: "ready", accountId: "b" }) },
     hints,
+    accountBlocked: async () => true,
     settleAccount: async () => true,
     clearAccount: async () => {
       await cleanup.promise;
@@ -206,6 +209,7 @@ test("logout fences inflight account changes before preparing unsaved work", asy
       signedOut: () => {},
       hideForCleanup: () => {},
     },
+    accountBlocked: async () => true,
     settleAccount: async () => true,
     clearAccount: async (a) => {
       cleared.push(a);
@@ -234,6 +238,7 @@ test("failed old-account cleanup cannot be bypassed by retry", async () => {
       signedOut: () => {},
       hideForCleanup: () => {},
     },
+    accountBlocked: async () => true,
     settleAccount: async () => true,
     clearAccount: async () => {
       calls++;
@@ -265,6 +270,7 @@ test("async account cache activation cannot publish readiness after stop", async
       signedOut: () => {},
       hideForCleanup: () => {},
     },
+    accountBlocked: async () => true,
     settleAccount: async () => true,
     clearAccount: async () => {},
     onAccountReady: async () => activate.promise,
@@ -319,6 +325,7 @@ test("failed cleanup survives reload without exposing prior account hint", async
   const first = new SessionController({
     service: { check: async () => ({ kind: "ready", accountId: "b" }) },
     hints,
+    accountBlocked: async () => true,
     settleAccount: async () => true,
     clearAccount: async () => {
       throw new Error("storage");
@@ -333,6 +340,7 @@ test("failed cleanup survives reload without exposing prior account hint", async
   const second = new SessionController({
     service: { check: async () => ({ kind: "ready", accountId: "b" }) },
     hints,
+    accountBlocked: async () => true,
     settleAccount: async () => true,
     clearAccount: async (a) => {
       cleaned.push(a);
@@ -357,6 +365,7 @@ test("an account switch settles the previous account's unsaved work first", asyn
       signedOut: () => {},
       hideForCleanup: () => {},
     },
+    accountBlocked: async () => true,
     settleAccount: async (account) => {
       order.push("settle " + account);
       return settlement.promise;
@@ -387,6 +396,7 @@ test("declining to settle keeps the previous account and its work", async () => 
       signedOut: () => {},
       hideForCleanup: () => {},
     },
+    accountBlocked: async () => true,
     settleAccount: async () => false,
     clearAccount: async (account) => {
       cleared.push(account);
@@ -397,5 +407,66 @@ test("declining to settle keeps the previous account and its work", async () => 
   assert.deepEqual(cleared, []);
   assert.equal(session.getSnapshot().accountId, "a");
   assert.equal(session.getSnapshot().status, "expired");
+  session.stop();
+});
+
+test("a cleanup adopted from another tab spares the account signed in again since", async () => {
+  let hint: {
+    accountId: string | null;
+    signedOut: boolean;
+    pendingCleanup: string | null;
+  } = { accountId: "a", signedOut: false, pendingCleanup: null };
+  const cleared: string[] = [];
+  const session = new SessionController({
+    service: { check: async () => ({ kind: "ready", accountId: "a" }) },
+    hints: {
+      read: () => hint,
+      remember: (accountId) => {
+        hint = { accountId, signedOut: false, pendingCleanup: null };
+      },
+      signedOut: () => {},
+      hideForCleanup: () => {},
+    },
+    settleAccount: async () => true,
+    // The other tab signed the account in again: its data is active.
+    accountBlocked: async () => false,
+    clearAccount: async (account) => {
+      cleared.push(account);
+    },
+  });
+  session.start();
+  await flush();
+  // The other tab settled and cleared the account, then signed it in again.
+  session.adoptInvalidation("a");
+  hint = { accountId: "a", signedOut: false, pendingCleanup: null };
+  session.retry({ afterSignIn: true });
+  await flush();
+  assert.deepEqual(cleared, []);
+  assert.equal(session.getSnapshot().accountId, "a");
+  session.stop();
+});
+
+test("an unfinished clear is completed while the account is still blocked", async () => {
+  const cleared: string[] = [];
+  const session = new SessionController({
+    service: { check: async () => ({ kind: "ready", accountId: "a" }) },
+    hints: {
+      read: () => ({ accountId: "a", signedOut: false }),
+      remember: () => {},
+      signedOut: () => {},
+      hideForCleanup: () => {},
+    },
+    settleAccount: async () => true,
+    accountBlocked: async () => true,
+    clearAccount: async (account) => {
+      cleared.push(account);
+    },
+  });
+  session.start();
+  await flush();
+  session.adoptInvalidation("a");
+  session.retry({ afterSignIn: true });
+  await flush();
+  assert.deepEqual(cleared, ["a"]);
   session.stop();
 });
