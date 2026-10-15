@@ -39,7 +39,10 @@ async function agentConvex(env: Env, props: AgentProps): Promise<ConvexCaller> {
  * The 401 an MCP client re-authorizes on, in the same form the OAuth provider
  * uses for missing or expired tokens.
  */
-export function invalidTokenResponse(origin: string, description: string): Response {
+export function invalidTokenResponse(
+  origin: string,
+  description: string,
+): Response {
   const challenge = [
     'Bearer realm="OAuth"',
     `resource_metadata="${resourceMetadataUrl(origin)}"`,
@@ -74,7 +77,11 @@ function containsToolCall(body: unknown): boolean {
  * End the OAuth grant behind a token Convex no longer accepts, so the client's
  * refresh fails and it starts a fresh authorization instead of looping.
  */
-async function revokeGrant(env: Env, auth: OAuthResourceAuth | undefined, props: AgentProps) {
+async function revokeGrant(
+  env: Env,
+  auth: OAuthResourceAuth | undefined,
+  props: AgentProps,
+) {
   const grantId = auth?.token.split(":")[1];
   if (!grantId) return;
   try {
@@ -99,7 +106,8 @@ export async function handleMcp(
 ): Promise<Response> {
   const origin = publicOrigin(env);
   const props = ctx.props;
-  if (!isAgentProps(props)) return invalidTokenResponse(origin, "Unknown connection");
+  if (!isAgentProps(props))
+    return invalidTokenResponse(origin, "Unknown connection");
 
   let revoked = false;
   let convex: Promise<ConvexCaller> | undefined;
@@ -114,7 +122,11 @@ export async function handleMcp(
         },
       }),
     {
-      onerror: (error) => console.warn("MCP request error", { name: error.name, message: error.message }),
+      onerror: (error) =>
+        console.warn("MCP request error", {
+          name: error.name,
+          message: error.message,
+        }),
     },
   );
 
@@ -126,7 +138,11 @@ export async function handleMcp(
     const text = await request.text();
     if (new TextEncoder().encode(text).byteLength > MAX_BODY_BYTES)
       return new Response(
-        JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "Request body too large." } }),
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: -32600, message: "Request body too large." },
+        }),
         { status: 413, headers: { "Content-Type": "application/json" } },
       );
     try {
@@ -153,7 +169,10 @@ export async function handleMcp(
   const body = await response.arrayBuffer();
   if (revoked) {
     await revokeGrant(env, ctx.auth, props);
-    return invalidTokenResponse(origin, "This connection was revoked or disabled");
+    return invalidTokenResponse(
+      origin,
+      "This connection was revoked or disabled",
+    );
   }
   return new Response(body, response);
 }

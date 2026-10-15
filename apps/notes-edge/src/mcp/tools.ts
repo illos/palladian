@@ -44,8 +44,16 @@ const READ_ONLY = {
   openWorldHint: false,
 } as const;
 
-const noteId = z.string().min(1).max(64).describe("Note ID from search_notes, list_notes or create_note.");
-const notebookId = z.string().min(1).max(64).describe("Notebook ID from list_notebooks.");
+const noteId = z
+  .string()
+  .min(1)
+  .max(64)
+  .describe("Note ID from search_notes, list_notes or create_note.");
+const notebookId = z
+  .string()
+  .min(1)
+  .max(64)
+  .describe("Notebook ID from list_notebooks.");
 const requestId = z
   .string()
   .min(8)
@@ -53,12 +61,18 @@ const requestId = z
   .describe(
     "A fresh unique ID (for example a UUID) for this logical change. Reuse it only when retrying the same call; the change is then applied once.",
   );
-const blockId = z.string().min(1).max(100).describe("Block ID from read_note with format \"outline\".");
+const blockId = z
+  .string()
+  .min(1)
+  .max(100)
+  .describe('Block ID from read_note with format "outline".');
 const blockHash = z
   .string()
   .min(1)
   .max(32)
-  .describe("The block's hash from the same outline; the edit fails if the block changed since.");
+  .describe(
+    "The block's hash from the same outline; the edit fails if the block changed since.",
+  );
 
 // A plain union renders as JSON Schema anyOf, which more tool-calling models
 // accept than the oneOf a discriminated union produces.
@@ -69,18 +83,33 @@ const editSchema = z.union([
       old_text: z
         .string()
         .min(1)
-        .describe("Exact text from the note's Markdown; must match exactly one place. Include surrounding words if needed."),
-      new_text: z.string().describe("Replacement Markdown text (may be empty to delete)."),
+        .describe(
+          "Exact text from the note's Markdown; must match exactly one place. Include surrounding words if needed.",
+        ),
+      new_text: z
+        .string()
+        .describe("Replacement Markdown text (may be empty to delete)."),
     })
     .describe("Replace one exact passage of the note's Markdown."),
   z
-    .object({ type: z.literal("append"), markdown: z.string().describe("Markdown to add at the end.") })
+    .object({
+      type: z.literal("append"),
+      markdown: z.string().describe("Markdown to add at the end."),
+    })
     .describe("Append Markdown to the end of the note."),
   z
-    .object({ type: z.literal("insert_after"), block_id: blockId, markdown: z.string() })
+    .object({
+      type: z.literal("insert_after"),
+      block_id: blockId,
+      markdown: z.string(),
+    })
     .describe("Insert Markdown after a block."),
   z
-    .object({ type: z.literal("insert_before"), block_id: blockId, markdown: z.string() })
+    .object({
+      type: z.literal("insert_before"),
+      block_id: blockId,
+      markdown: z.string(),
+    })
     .describe("Insert Markdown before a block."),
   z
     .object({
@@ -91,21 +120,35 @@ const editSchema = z.union([
     })
     .describe("Replace one block with Markdown."),
   z
-    .object({ type: z.literal("delete_block"), block_id: blockId, block_hash: blockHash.optional() })
+    .object({
+      type: z.literal("delete_block"),
+      block_id: blockId,
+      block_hash: blockHash.optional(),
+    })
     .describe("Delete one block."),
   z
-    .object({ type: z.literal("set_checked"), block_id: blockId, checked: z.boolean() })
+    .object({
+      type: z.literal("set_checked"),
+      block_id: blockId,
+      checked: z.boolean(),
+    })
     .describe("Check or uncheck a checklist item."),
   z
     .object({ type: z.literal("replace_all"), markdown: z.string() })
-    .describe("Replace the whole note. Requires expected_revision; prefer targeted edits."),
+    .describe(
+      "Replace the whole note. Requires expected_revision; prefer targeted edits.",
+    ),
 ]);
 
 function iso(ms: number | null): string | null {
   return ms === null ? null : new Date(ms).toISOString();
 }
 
-function noteView(origin: string, note: NoteSummary, notebooks: Map<string, string>) {
+function noteView(
+  origin: string,
+  note: NoteSummary,
+  notebooks: Map<string, string>,
+) {
   return {
     note_id: note.id,
     title: note.title || "Untitled",
@@ -126,8 +169,12 @@ function noteLine(view: ReturnType<typeof noteView>): string {
 
 function outlineLine(entry: OutlineEntry): string {
   const indent = "  ".repeat(entry.depth);
-  const checked = entry.checked === undefined ? "" : entry.checked ? " [x]" : " [ ]";
-  const text = entry.markdown.length > 300 ? entry.markdown.slice(0, 300) + "…" : entry.markdown;
+  const checked =
+    entry.checked === undefined ? "" : entry.checked ? " [x]" : " [ ]";
+  const text =
+    entry.markdown.length > 300
+      ? entry.markdown.slice(0, 300) + "…"
+      : entry.markdown;
   return `${indent}- block_id=${entry.id} hash=${entry.hash} ${entry.type}${checked}: ${text.replace(/\n/g, "\\n")}`;
 }
 
@@ -159,7 +206,9 @@ export function createNotesServer(context: ToolContext): McpServer {
     }
   }
 
-  async function notebookNames(convex: ConvexCaller): Promise<Map<string, string>> {
+  async function notebookNames(
+    convex: ConvexCaller,
+  ): Promise<Map<string, string>> {
     const notebooks = await convex.query(fns.library.notebooks, {});
     return new Map(notebooks.map((n) => [n.id, n.name]));
   }
@@ -177,7 +226,8 @@ export function createNotesServer(context: ToolContext): McpServer {
         const notebooks = await convex.query(fns.library.notebooks, {});
         // This query answers [] rather than failing for an unknown caller, so
         // tell "nothing shared" from "connection revoked" with a strict query.
-        if (!notebooks.length) await convex.query(fns.library.recent, { limit: 1 });
+        if (!notebooks.length)
+          await convex.query(fns.library.recent, { limit: 1 });
         const views = notebooks.map((n: NotebookView) => ({
           notebook_id: n.id,
           name: n.name,
@@ -206,9 +256,20 @@ export function createNotesServer(context: ToolContext): McpServer {
         "Full-text search across the notes shared with you. Returns ranked matches with note IDs, titles, notebook, last edit time and an excerpt around the match. Excerpts often answer simple questions without reading the whole note.",
       inputSchema: z.object({
         query: z.string().min(1).max(200).describe("Words to search for."),
-        notebook_id: notebookId.optional().describe("Search only this notebook."),
-        include_trashed: z.boolean().optional().describe("Also search notes in Trash. Default false."),
-        limit: z.number().int().min(1).max(50).optional().describe("Maximum results, 1-50. Default 20."),
+        notebook_id: notebookId
+          .optional()
+          .describe("Search only this notebook."),
+        include_trashed: z
+          .boolean()
+          .optional()
+          .describe("Also search notes in Trash. Default false."),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(50)
+          .optional()
+          .describe("Maximum results, 1-50. Default 20."),
       }),
       annotations: READ_ONLY,
     },
@@ -217,8 +278,12 @@ export function createNotesServer(context: ToolContext): McpServer {
         const [hits, names] = await Promise.all([
           convex.query(fns.library.search, {
             query: args.query,
-            ...(args.notebook_id ? { notebookId: asId<"notebooks">(args.notebook_id) } : {}),
-            ...(args.include_trashed !== undefined ? { includeTrashed: args.include_trashed } : {}),
+            ...(args.notebook_id
+              ? { notebookId: asId<"notebooks">(args.notebook_id) }
+              : {}),
+            ...(args.include_trashed !== undefined
+              ? { includeTrashed: args.include_trashed }
+              : {}),
             ...(args.limit !== undefined ? { limit: args.limit } : {}),
           }),
           notebookNames(convex).catch(() => new Map<string, string>()),
@@ -242,9 +307,21 @@ export function createNotesServer(context: ToolContext): McpServer {
         "Browse notes shared with you, most recently edited first. To see older notes, pass the returned next_before as before.",
       inputSchema: z.object({
         notebook_id: notebookId.optional().describe("List only this notebook."),
-        before: z.number().optional().describe("next_before from a previous call, to continue."),
-        limit: z.number().int().min(1).max(100).optional().describe("Maximum notes, 1-100. Default 25."),
-        include_trashed: z.boolean().optional().describe("Include notes in Trash. Default false."),
+        before: z
+          .number()
+          .optional()
+          .describe("next_before from a previous call, to continue."),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe("Maximum notes, 1-100. Default 25."),
+        include_trashed: z
+          .boolean()
+          .optional()
+          .describe("Include notes in Trash. Default false."),
       }),
       annotations: READ_ONLY,
     },
@@ -252,10 +329,14 @@ export function createNotesServer(context: ToolContext): McpServer {
       run("read", async (convex) => {
         const [page, names] = await Promise.all([
           convex.query(fns.library.recent, {
-            ...(args.notebook_id ? { notebookId: asId<"notebooks">(args.notebook_id) } : {}),
+            ...(args.notebook_id
+              ? { notebookId: asId<"notebooks">(args.notebook_id) }
+              : {}),
             ...(args.before !== undefined ? { before: args.before } : {}),
             ...(args.limit !== undefined ? { limit: args.limit } : {}),
-            ...(args.include_trashed !== undefined ? { includeTrashed: args.include_trashed } : {}),
+            ...(args.include_trashed !== undefined
+              ? { includeTrashed: args.include_trashed }
+              : {}),
           }),
           notebookNames(convex).catch(() => new Map<string, string>()),
         ]);
@@ -263,8 +344,11 @@ export function createNotesServer(context: ToolContext): McpServer {
           ...noteView(origin, note, names),
           preview: note.preview,
         }));
-        let text = notes.length ? notes.map(noteLine).join("\n") : "No notes found.";
-        if (page.nextBefore !== null) text += `\nMore notes: call list_notes with before=${page.nextBefore}.`;
+        let text = notes.length
+          ? notes.map(noteLine).join("\n")
+          : "No notes found.";
+        if (page.nextBefore !== null)
+          text += `\nMore notes: call list_notes with before=${page.nextBefore}.`;
         return ok(text, { notes, next_before: page.nextBefore });
       }),
   );
@@ -277,13 +361,18 @@ export function createNotesServer(context: ToolContext): McpServer {
         'Read a note\'s current content. format "markdown" (default) returns the canonical Markdown you edit against. format "outline" lists each block with its block_id, hash and checked state, for targeted block edits. Long notes are paged: continue with offset=next_offset. Returns the revision to pass as expected_revision when editing.',
       inputSchema: z.object({
         note_id: noteId,
-        format: z.enum(["markdown", "outline"]).optional().describe('"markdown" (default) or "outline".'),
+        format: z
+          .enum(["markdown", "outline"])
+          .optional()
+          .describe('"markdown" (default) or "outline".'),
         offset: z
           .number()
           .int()
           .min(0)
           .optional()
-          .describe("Markdown: character offset. Outline: block index. Use next_offset from the previous page."),
+          .describe(
+            "Markdown: character offset. Outline: block index. Use next_offset from the previous page.",
+          ),
         max_chars: z
           .number()
           .int()
@@ -316,7 +405,9 @@ export function createNotesServer(context: ToolContext): McpServer {
           url,
           format,
           offset: args.offset ?? 0,
-          ...(format === "markdown" ? { markdown: note.markdown ?? "" } : { outline: note.outline ?? [] }),
+          ...(format === "markdown"
+            ? { markdown: note.markdown ?? "" }
+            : { outline: note.outline ?? [] }),
           total_chars: note.totalChars,
           next_offset: note.nextOffset,
           truncated: note.nextOffset !== null,
@@ -324,7 +415,9 @@ export function createNotesServer(context: ToolContext): McpServer {
         const where = note.notebookName ? ` in ${note.notebookName}` : "";
         const header = `${title} (note_id: ${note.summary.id}, revision ${note.revision}, ${note.summary.role} access${where}${note.summary.trashed ? ", in Trash" : ""})\n${url}`;
         const body =
-          format === "markdown" ? (note.markdown ?? "") : (note.outline ?? []).map(outlineLine).join("\n");
+          format === "markdown"
+            ? (note.markdown ?? "")
+            : (note.outline ?? []).map(outlineLine).join("\n");
         const more =
           note.nextOffset !== null
             ? `\n\n[Truncated. Continue with read_note offset=${note.nextOffset}.]`
@@ -340,18 +433,30 @@ export function createNotesServer(context: ToolContext): McpServer {
       description:
         "Create a note from Markdown in one call, even a long one such as a whole conversation. The first line becomes the title. Without notebook_id the note goes to the default destination, or you are asked to choose. Pass a request_id so a retry cannot create a duplicate.",
       inputSchema: z.object({
-        markdown: z.string().min(1).describe("The note as Markdown. The first line is the title."),
-        notebook_id: notebookId.optional().describe("Destination notebook; you need edit access."),
+        markdown: z
+          .string()
+          .min(1)
+          .describe("The note as Markdown. The first line is the title."),
+        notebook_id: notebookId
+          .optional()
+          .describe("Destination notebook; you need edit access."),
         request_id: requestId.optional(),
       }),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
     },
     (args) =>
       run(args.request_id ? "idempotent" : "unsafe", async (convex) => {
         const [created, names] = await Promise.all([
           convex.mutation(fns.notes.createFromMarkdown, {
             markdown: args.markdown,
-            ...(args.notebook_id ? { notebookId: asId<"notebooks">(args.notebook_id) } : {}),
+            ...(args.notebook_id
+              ? { notebookId: asId<"notebooks">(args.notebook_id) }
+              : {}),
             ...(args.request_id ? { requestId: args.request_id } : {}),
           }),
           notebookNames(convex).catch(() => new Map<string, string>()),
@@ -381,7 +486,11 @@ export function createNotesServer(context: ToolContext): McpServer {
         "Apply a batch of up to 50 edits atomically: all apply or none do. replace_text replaces one exact passage of the note's Markdown (old_text must match exactly once). append adds to the end. insert_after, insert_before, replace_block and delete_block target block IDs from read_note's outline; pass block_hash to fail safely if the block changed. set_checked checks a checklist item. replace_all rewrites the whole note and requires expected_revision. With expected_revision, edits that cannot verify their target (replace_all, block edits without block_hash) fail if the note changed. To rename a note, edit its first line.",
       inputSchema: z.object({
         note_id: noteId,
-        edits: z.array(editSchema).min(1).max(50).describe("Edits, applied in order as one change."),
+        edits: z
+          .array(editSchema)
+          .min(1)
+          .max(50)
+          .describe("Edits, applied in order as one change."),
         expected_revision: z
           .number()
           .int()
@@ -390,16 +499,28 @@ export function createNotesServer(context: ToolContext): McpServer {
           .describe("The revision you read. Required for replace_all."),
         request_id: requestId.optional(),
       }),
-      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
     },
     (args) => {
-      if (args.expected_revision === undefined && args.edits.some((edit) => edit.type === "replace_all"))
-        return invalidInput("replace_all requires expected_revision: read the note first and pass its revision.");
+      if (
+        args.expected_revision === undefined &&
+        args.edits.some((edit) => edit.type === "replace_all")
+      )
+        return invalidInput(
+          "replace_all requires expected_revision: read the note first and pass its revision.",
+        );
       return run(args.request_id ? "idempotent" : "unsafe", async (convex) => {
         const result = await convex.mutation(fns.notes.edit, {
           noteId: asId<"notes">(args.note_id),
           edits: args.edits as NoteEdit[],
-          ...(args.expected_revision !== undefined ? { expectedRevision: args.expected_revision } : {}),
+          ...(args.expected_revision !== undefined
+            ? { expectedRevision: args.expected_revision }
+            : {}),
           ...(args.request_id ? { requestId: args.request_id } : {}),
         });
         const url = noteUrl(origin, args.note_id);
@@ -426,17 +547,28 @@ export function createNotesServer(context: ToolContext): McpServer {
     "trash_note",
     {
       title: "Move a note to Trash",
-      description: "Move a note to Trash. It disappears from normal lists and search; restore_note brings it back.",
+      description:
+        "Move a note to Trash. It disappears from normal lists and search; restore_note brings it back.",
       inputSchema: z.object({ note_id: noteId }),
-      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     (args) =>
       run("idempotent", async (convex) => {
-        await convex.mutation(fns.notes.trash, { noteId: asId<"notes">(args.note_id) });
-        return ok(`Moved note ${args.note_id} to Trash. restore_note undoes this.`, {
-          note_id: args.note_id,
-          trashed: true,
+        await convex.mutation(fns.notes.trash, {
+          noteId: asId<"notes">(args.note_id),
         });
+        return ok(
+          `Moved note ${args.note_id} to Trash. restore_note undoes this.`,
+          {
+            note_id: args.note_id,
+            trashed: true,
+          },
+        );
       }),
   );
 
@@ -446,11 +578,18 @@ export function createNotesServer(context: ToolContext): McpServer {
       title: "Restore a note from Trash",
       description: "Bring a note back from Trash.",
       inputSchema: z.object({ note_id: noteId }),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     (args) =>
       run("idempotent", async (convex) => {
-        await convex.mutation(fns.notes.restore, { noteId: asId<"notes">(args.note_id) });
+        await convex.mutation(fns.notes.restore, {
+          noteId: asId<"notes">(args.note_id),
+        });
         const url = noteUrl(origin, args.note_id);
         return ok(`Restored note ${args.note_id} from Trash.\n${url}`, {
           note_id: args.note_id,
@@ -468,15 +607,26 @@ export function createNotesServer(context: ToolContext): McpServer {
         "Create a notebook owned by the person you act for, with you as an editor. The description is filing guidance: what belongs in it.",
       inputSchema: z.object({
         name: z.string().min(1).max(100).describe("Notebook name."),
-        description: z.string().max(1000).optional().describe("Filing guidance: what belongs in this notebook."),
+        description: z
+          .string()
+          .max(1000)
+          .optional()
+          .describe("Filing guidance: what belongs in this notebook."),
       }),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
     },
     (args) =>
       run("unsafe", async (convex) => {
         const id = await convex.mutation(fns.notebooks.create, {
           name: args.name,
-          ...(args.description !== undefined ? { description: args.description } : {}),
+          ...(args.description !== undefined
+            ? { description: args.description }
+            : {}),
         });
         return ok(`Created notebook ${args.name} (notebook_id: ${id}).`, {
           notebook_id: id,
@@ -493,8 +643,19 @@ export function createNotesServer(context: ToolContext): McpServer {
         "List a note's revisions, newest first, with who made each and when. Needs edit access. Continue with before=next_before. Read one with read_revision.",
       inputSchema: z.object({
         note_id: noteId,
-        before: z.number().int().min(0).optional().describe("next_before from a previous call, to continue."),
-        limit: z.number().int().min(1).max(100).optional().describe("Maximum revisions, 1-100. Default 30."),
+        before: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("next_before from a previous call, to continue."),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe("Maximum revisions, 1-100. Default 30."),
       }),
       annotations: READ_ONLY,
     },
@@ -516,11 +677,19 @@ export function createNotesServer(context: ToolContext): McpServer {
         }));
         let text = versions.length
           ? versions
-              .map((v) => `- revision ${v.revision}: ${v.kind} by ${v.actor_name} (${v.actor_kind}), ${v.ended_at}`)
+              .map(
+                (v) =>
+                  `- revision ${v.revision}: ${v.kind} by ${v.actor_name} (${v.actor_kind}), ${v.ended_at}`,
+              )
               .join("\n")
           : "No history.";
-        if (page.nextBefore !== null) text += `\nOlder revisions: call note_history with before=${page.nextBefore}.`;
-        return ok(text, { note_id: args.note_id, versions, next_before: page.nextBefore });
+        if (page.nextBefore !== null)
+          text += `\nOlder revisions: call note_history with before=${page.nextBefore}.`;
+        return ok(text, {
+          note_id: args.note_id,
+          versions,
+          next_before: page.nextBefore,
+        });
       }),
   );
 
@@ -528,10 +697,15 @@ export function createNotesServer(context: ToolContext): McpServer {
     "read_revision",
     {
       title: "Read a past revision",
-      description: "Read a note's Markdown as it was at a past revision. Reading never changes the note. Needs edit access.",
+      description:
+        "Read a note's Markdown as it was at a past revision. Reading never changes the note. Needs edit access.",
       inputSchema: z.object({
         note_id: noteId,
-        revision: z.number().int().min(0).describe("Revision number from note_history."),
+        revision: z
+          .number()
+          .int()
+          .min(0)
+          .describe("Revision number from note_history."),
       }),
       annotations: READ_ONLY,
     },
@@ -541,11 +715,14 @@ export function createNotesServer(context: ToolContext): McpServer {
           noteId: asId<"notes">(args.note_id),
           revision: args.revision,
         });
-        return ok(`Revision ${past.revision} of note ${args.note_id}:\n\n${past.markdown}`, {
-          note_id: args.note_id,
-          revision: past.revision,
-          markdown: past.markdown,
-        });
+        return ok(
+          `Revision ${past.revision} of note ${args.note_id}:\n\n${past.markdown}`,
+          {
+            note_id: args.note_id,
+            revision: past.revision,
+            markdown: past.markdown,
+          },
+        );
       }),
   );
 
@@ -557,11 +734,26 @@ export function createNotesServer(context: ToolContext): McpServer {
         "Make a past revision the note's current content. This adds a new revision; history is kept. expected_revision must be the note's current revision, so a concurrent change is never overwritten.",
       inputSchema: z.object({
         note_id: noteId,
-        revision: z.number().int().min(0).describe("The past revision to restore."),
-        expected_revision: z.number().int().min(0).describe("The note's current revision, from read_note or note_history."),
+        revision: z
+          .number()
+          .int()
+          .min(0)
+          .describe("The past revision to restore."),
+        expected_revision: z
+          .number()
+          .int()
+          .min(0)
+          .describe(
+            "The note's current revision, from read_note or note_history.",
+          ),
         request_id: requestId.optional(),
       }),
-      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     (args) =>
       run(args.request_id ? "idempotent" : "unsafe", async (convex) => {

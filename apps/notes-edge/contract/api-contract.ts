@@ -10,6 +10,7 @@ import type {
   FunctionArgs,
   FunctionReference,
   FunctionReturnType,
+  FunctionType,
 } from "convex/server";
 import type { api } from "../../notes-backend/convex/_generated/api.js";
 import type { fns } from "../src/convex-api.ts";
@@ -18,15 +19,18 @@ type Mutual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 type Fits<A, B> = [A] extends [B] ? true : false;
 /** [same kind, Worker arguments accepted, backend result readable] */
 type Parts<
-  Generated extends FunctionReference<any, "public">,
-  Local extends FunctionReference<any, "public">,
+  Generated extends FunctionReference<FunctionType, "public">,
+  Local extends FunctionReference<FunctionType, "public">,
 > = [
   Mutual<Generated["_type"], Local["_type"]>,
   Fits<FunctionArgs<Local>, FunctionArgs<Generated>>,
   Fits<FunctionReturnType<Generated>, FunctionReturnType<Local>>,
 ];
 type Ok = [true, true, true];
-const same = <G extends FunctionReference<any, "public">, L extends FunctionReference<any, "public">>(
+const same = <
+  G extends FunctionReference<FunctionType, "public">,
+  L extends FunctionReference<FunctionType, "public">,
+>(
   parts: Parts<G, L>,
 ) => parts;
 declare const proof: Ok;
@@ -37,7 +41,10 @@ export const contract = [
   same<typeof api.library.recent, typeof fns.library.recent>(proof),
   same<typeof api.library.search, typeof fns.library.search>(proof),
   same<typeof api.notes.readMarkdown, typeof fns.notes.readMarkdown>(proof),
-  same<typeof api.notes.createFromMarkdown, typeof fns.notes.createFromMarkdown>(proof),
+  same<
+    typeof api.notes.createFromMarkdown,
+    typeof fns.notes.createFromMarkdown
+  >(proof),
   same<typeof api.notes.edit, typeof fns.notes.edit>(proof),
   same<typeof api.notes.trash, typeof fns.notes.trash>(proof),
   same<typeof api.notes.restore, typeof fns.notes.restore>(proof),

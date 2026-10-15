@@ -7,7 +7,10 @@
 import { execFile } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
-import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import {
+  Client,
+  StreamableHTTPClientTransport,
+} from "@modelcontextprotocol/client";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../notes-backend/convex/_generated/api.js";
 
@@ -15,7 +18,9 @@ const WORKER = process.env.WORKER_URL ?? "http://localhost:8787";
 const CONVEX_URL = process.env.CONVEX_URL ?? "http://127.0.0.1:3228";
 const CONVEX_SITE_URL = process.env.CONVEX_SITE_URL ?? "http://127.0.0.1:3229";
 const SITE_ORIGIN = process.env.SITE_ORIGIN ?? "http://localhost:5178";
-const BACKEND_DIR = process.env.NOTES_BACKEND_DIR ?? new URL("../../notes-backend", import.meta.url).pathname;
+const BACKEND_DIR =
+  process.env.NOTES_BACKEND_DIR ??
+  new URL("../../notes-backend", import.meta.url).pathname;
 const REDIRECT_URI = "http://127.0.0.1:43219/callback";
 
 let step = 0;
@@ -42,14 +47,22 @@ async function createPerson() {
   const { token } = JSON.parse(json);
   assert(typeof token === "string", "setupOwner returned a token");
   const anonymous = new ConvexHttpClient(CONVEX_URL, quiet);
-  await anonymous.action(api.invitations.accept, { token, name: "E2E Person", password });
+  await anonymous.action(api.invitations.accept, {
+    token,
+    name: "E2E Person",
+    password,
+  });
   log("created a disposable account from a setup invitation");
 
   // The crossDomain plugin returns the session cookie in Set-Better-Auth-Cookie
   // when the request carries a Better-Auth-Cookie header.
   const signIn = await fetch(`${CONVEX_SITE_URL}/api/auth/sign-in/email`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Origin: SITE_ORIGIN, "Better-Auth-Cookie": "" },
+    headers: {
+      "Content-Type": "application/json",
+      Origin: SITE_ORIGIN,
+      "Better-Auth-Cookie": "",
+    },
     body: JSON.stringify({ email, password }),
   });
   assert(signIn.ok, `sign-in succeeded (HTTP ${signIn.status})`);
@@ -59,10 +72,16 @@ async function createPerson() {
     .split(/,(?=\s*[A-Za-z0-9_.-]+=)/)
     .map((part) => part.split(";")[0].trim())
     .join("; ");
-  const tokenResponse = await fetch(`${CONVEX_SITE_URL}/api/auth/convex/token`, {
-    headers: { Origin: SITE_ORIGIN, "Better-Auth-Cookie": cookie },
-  });
-  assert(tokenResponse.ok, `Convex token issued (HTTP ${tokenResponse.status})`);
+  const tokenResponse = await fetch(
+    `${CONVEX_SITE_URL}/api/auth/convex/token`,
+    {
+      headers: { Origin: SITE_ORIGIN, "Better-Auth-Cookie": cookie },
+    },
+  );
+  assert(
+    tokenResponse.ok,
+    `Convex token issued (HTTP ${tokenResponse.status})`,
+  );
   const { token: jwt } = await tokenResponse.json();
   const human = new ConvexHttpClient(CONVEX_URL, quiet);
   human.setAuth(jwt);
@@ -95,18 +114,36 @@ async function postJson(path, body, headers = {}) {
   return { status: response.status, body: await response.json() };
 }
 
-async function connectAgent(human, notebookId, { clientName = "E2E Agent", agentId } = {}) {
-  const challenge = await fetch(`${WORKER}/mcp`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+async function connectAgent(
+  human,
+  notebookId,
+  { clientName = "E2E Agent", agentId } = {},
+) {
+  const challenge = await fetch(`${WORKER}/mcp`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
   assert(challenge.status === 401, "unauthenticated /mcp is challenged");
   const wwwAuth = challenge.headers.get("www-authenticate") ?? "";
   const prmUrl = /resource_metadata="([^"]+)"/.exec(wwwAuth)?.[1];
   assert(prmUrl, "challenge names resource_metadata");
   const prm = await (await fetch(prmUrl)).json();
-  assert(prm.resource === `${WORKER}/mcp`, "protected resource metadata names /mcp");
+  assert(
+    prm.resource === `${WORKER}/mcp`,
+    "protected resource metadata names /mcp",
+  );
   const issuer = prm.authorization_servers[0];
-  const as = await (await fetch(`${issuer}/.well-known/oauth-authorization-server`)).json();
-  assert(as.issuer === issuer && as.registration_endpoint, "authorization server metadata with DCR");
-  log(`discovery: 401 challenge → ${new URL(prmUrl).pathname} → issuer ${issuer} (scope ${prm.scopes_supported.join(" ")})`);
+  const as = await (
+    await fetch(`${issuer}/.well-known/oauth-authorization-server`)
+  ).json();
+  assert(
+    as.issuer === issuer && as.registration_endpoint,
+    "authorization server metadata with DCR",
+  );
+  log(
+    `discovery: 401 challenge → ${new URL(prmUrl).pathname} → issuer ${issuer} (scope ${prm.scopes_supported.join(" ")})`,
+  );
 
   const registration = await fetch(as.registration_endpoint, {
     method: "POST",
@@ -146,12 +183,19 @@ async function connectAgent(human, notebookId, { clientName = "E2E Agent", agent
   assert(
     page.status === 200 &&
       page.headers.get("x-frame-options") === "DENY" &&
-      (page.headers.get("content-security-policy") ?? "").includes("frame-ancestors 'none'"),
+      (page.headers.get("content-security-policy") ?? "").includes(
+        "frame-ancestors 'none'",
+      ),
     "consent page served unframeable",
   );
   const info = await (await fetch(`${WORKER}/oauth/request/${key}`)).json();
-  assert(info.clientId === clientId && info.clientName === clientName, "request info names the client");
-  log(`authorize (PKCE S256) → /connect; request info: ${info.clientName} → ${info.redirectHost}, scopes ${info.scopes.join(" ")}`);
+  assert(
+    info.clientId === clientId && info.clientName === clientName,
+    "request info names the client",
+  );
+  log(
+    `authorize (PKCE S256) → /connect; request info: ${info.clientName} → ${info.redirectHost}, scopes ${info.scopes.join(" ")}`,
+  );
 
   const approval = await human.mutation(api.connections.approve, {
     requestKey: key,
@@ -168,18 +212,36 @@ async function connectAgent(human, notebookId, { clientName = "E2E Agent", agent
       : "the person approved in Convex, sharing their default notebook with edit access",
   );
 
-  const crossSite = await postJson("/oauth/approve", { request: key, code: approval.code }, { Origin: "https://evil.example", "Sec-Fetch-Site": "cross-site" });
+  const crossSite = await postJson(
+    "/oauth/approve",
+    { request: key, code: approval.code },
+    { Origin: "https://evil.example", "Sec-Fetch-Site": "cross-site" },
+  );
   assert(crossSite.status === 403, "cross-site approve is refused");
-  const approved = await postJson("/oauth/approve", { request: key, code: approval.code });
-  assert(approved.status === 200 && approved.body.redirectTo, "approve returns redirectTo");
-  const reused = await postJson("/oauth/approve", { request: key, code: approval.code });
+  const approved = await postJson("/oauth/approve", {
+    request: key,
+    code: approval.code,
+  });
+  assert(
+    approved.status === 200 && approved.body.redirectTo,
+    "approve returns redirectTo",
+  );
+  const reused = await postJson("/oauth/approve", {
+    request: key,
+    code: approval.code,
+  });
   assert(reused.status === 404, "a request key works once");
   const callback = new URL(approved.body.redirectTo);
-  assert(callback.origin + callback.pathname === REDIRECT_URI, "redirect goes to the registered URI");
+  assert(
+    callback.origin + callback.pathname === REDIRECT_URI,
+    "redirect goes to the registered URI",
+  );
   assert(callback.searchParams.get("state") === state, "state round-trips");
   assert(callback.searchParams.get("iss") === issuer, "RFC 9207 iss present");
   const code = callback.searchParams.get("code");
-  log("approve: cross-site refused (403), redirect captured, key reuse refused (404)");
+  log(
+    "approve: cross-site refused (403), redirect captured, key reuse refused (404)",
+  );
 
   const exchanged = await form(as.token_endpoint, {
     grant_type: "authorization_code",
@@ -189,16 +251,26 @@ async function connectAgent(human, notebookId, { clientName = "E2E Agent", agent
     code_verifier: verifier,
     resource: prm.resource,
   });
-  assert(exchanged.status === 200 && exchanged.body.access_token && exchanged.body.refresh_token, "code exchange");
+  assert(
+    exchanged.status === 200 &&
+      exchanged.body.access_token &&
+      exchanged.body.refresh_token,
+    "code exchange",
+  );
   assert(exchanged.body.expires_in === 3600, "access tokens last one hour");
-  log(`token exchange: access token (expires_in ${exchanged.body.expires_in}s, scope "${exchanged.body.scope}") and refresh token`);
+  log(
+    `token exchange: access token (expires_in ${exchanged.body.expires_in}s, scope "${exchanged.body.scope}") and refresh token`,
+  );
 
   const refreshed = await form(as.token_endpoint, {
     grant_type: "refresh_token",
     refresh_token: exchanged.body.refresh_token,
     client_id: clientId,
   });
-  assert(refreshed.status === 200 && refreshed.body.access_token, "refresh exchange");
+  assert(
+    refreshed.status === 200 && refreshed.body.access_token,
+    "refresh exchange",
+  );
   log("refresh-token exchange issued a new access token");
   return {
     agentId: approval.agentId,
@@ -214,7 +286,10 @@ async function connectAgent(human, notebookId, { clientName = "E2E Agent", agent
 function recordingFetch(record) {
   return async (input, init) => {
     const response = await fetch(input, init);
-    record.push({ status: response.status, wwwAuthenticate: response.headers.get("www-authenticate") });
+    record.push({
+      status: response.status,
+      wwwAuthenticate: response.headers.get("www-authenticate"),
+    });
     return response;
   };
 }
@@ -222,18 +297,26 @@ function recordingFetch(record) {
 async function mcpClient(accessToken, mode, record = []) {
   const client = new Client(
     { name: "palladian-e2e", version: "1.0.0" },
-    mode === "modern" ? { versionNegotiation: { mode: { pin: "2026-07-28" } } } : {},
+    mode === "modern"
+      ? { versionNegotiation: { mode: { pin: "2026-07-28" } } }
+      : {},
   );
-  const transport = new StreamableHTTPClientTransport(new URL(`${WORKER}/mcp`), {
-    requestInit: { headers: { Authorization: `Bearer ${accessToken}` } },
-    fetch: recordingFetch(record),
-  });
+  const transport = new StreamableHTTPClientTransport(
+    new URL(`${WORKER}/mcp`),
+    {
+      requestInit: { headers: { Authorization: `Bearer ${accessToken}` } },
+      fetch: recordingFetch(record),
+    },
+  );
   await client.connect(transport);
   return client;
 }
 
 function text(result) {
-  return result.content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
+  return result.content
+    .filter((c) => c.type === "text")
+    .map((c) => c.text)
+    .join("\n");
 }
 async function call(client, name, args = {}) {
   const result = await client.callTool({ name, arguments: args });
@@ -245,39 +328,86 @@ async function exerciseTools(client, privateNoteId) {
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name).sort();
   assert(names.length === 12, `12 tools listed (${names.join(", ")})`);
-  assert(tools.every((t) => t.annotations && typeof t.annotations.readOnlyHint === "boolean"), "tools are annotated");
-  log(`modern client (${client.getNegotiatedProtocolVersion()}, era ${client.getProtocolEra()}): ${names.length} tools`);
+  assert(
+    tools.every(
+      (t) => t.annotations && typeof t.annotations.readOnlyHint === "boolean",
+    ),
+    "tools are annotated",
+  );
+  log(
+    `modern client (${client.getNegotiatedProtocolVersion()}, era ${client.getProtocolEra()}): ${names.length} tools`,
+  );
 
   const notebooks = await call(client, "list_notebooks");
   const shared = notebooks.structuredContent.notebooks;
-  assert(shared.length === 1 && shared[0].role === "edit", "only the shared notebook is visible, with edit access");
+  assert(
+    shared.length === 1 && shared[0].role === "edit",
+    "only the shared notebook is visible, with edit access",
+  );
 
   const marker = `zephyr${randomBytes(4).toString("hex")}`;
   const markdown = `E2E conversation ${marker}\n\nWe discussed the ${marker} plan.\n\n- [ ] buy milk\n- [ ] call the plumber`;
   const requestId = randomUUID();
-  const created = await call(client, "create_note", { markdown, request_id: requestId });
+  const created = await call(client, "create_note", {
+    markdown,
+    request_id: requestId,
+  });
   const noteId = created.structuredContent.note_id;
-  assert(created.structuredContent.title === `E2E conversation ${marker}`, "first line became the title");
-  const replay = await call(client, "create_note", { markdown, request_id: requestId });
-  assert(replay.structuredContent.replayed && replay.structuredContent.note_id === noteId, "request_id replay returns the same note");
-  log("create_note from Markdown, and its request_id replay returned the same note");
+  assert(
+    created.structuredContent.title === `E2E conversation ${marker}`,
+    "first line became the title",
+  );
+  const replay = await call(client, "create_note", {
+    markdown,
+    request_id: requestId,
+  });
+  assert(
+    replay.structuredContent.replayed &&
+      replay.structuredContent.note_id === noteId,
+    "request_id replay returns the same note",
+  );
+  log(
+    "create_note from Markdown, and its request_id replay returned the same note",
+  );
 
   const found = await call(client, "search_notes", { query: marker });
-  assert(found.structuredContent.results.some((r) => r.note_id === noteId), "search finds the note");
+  assert(
+    found.structuredContent.results.some((r) => r.note_id === noteId),
+    "search finds the note",
+  );
   const listed = await call(client, "list_notes", { limit: 5 });
-  assert(listed.structuredContent.notes.some((n) => n.note_id === noteId), "list_notes shows the note");
+  assert(
+    listed.structuredContent.notes.some((n) => n.note_id === noteId),
+    "list_notes shows the note",
+  );
   log("search_notes and list_notes found it");
 
   const asMarkdown = await call(client, "read_note", { note_id: noteId });
-  assert(asMarkdown.structuredContent.markdown.includes("- [ ] buy milk"), "markdown read");
-  const outline = await call(client, "read_note", { note_id: noteId, format: "outline" });
-  const milk = outline.structuredContent.outline.find((b) => b.markdown.includes("buy milk") && b.checked === false);
+  assert(
+    asMarkdown.structuredContent.markdown.includes("- [ ] buy milk"),
+    "markdown read",
+  );
+  const outline = await call(client, "read_note", {
+    note_id: noteId,
+    format: "outline",
+  });
+  const milk = outline.structuredContent.outline.find(
+    (b) => b.markdown.includes("buy milk") && b.checked === false,
+  );
   assert(milk, "outline lists the checklist item with its checked state");
-  log(`read_note as markdown (revision ${asMarkdown.structuredContent.revision}) and as outline (${outline.structuredContent.outline.length} blocks)`);
+  log(
+    `read_note as markdown (revision ${asMarkdown.structuredContent.revision}) and as outline (${outline.structuredContent.outline.length} blocks)`,
+  );
 
   const edited = await call(client, "edit_note", {
     note_id: noteId,
-    edits: [{ type: "replace_text", old_text: `the ${marker} plan`, new_text: `the revised ${marker} plan` }],
+    edits: [
+      {
+        type: "replace_text",
+        old_text: `the ${marker} plan`,
+        new_text: `the revised ${marker} plan`,
+      },
+    ],
     request_id: randomUUID(),
   });
   const checked = await call(client, "edit_note", {
@@ -286,24 +416,66 @@ async function exerciseTools(client, privateNoteId) {
     expected_revision: edited.structuredContent.revision,
     request_id: randomUUID(),
   });
-  const after = await call(client, "read_note", { note_id: noteId, format: "outline" });
-  assert(after.structuredContent.outline.some((b) => b.id === milk.id && b.checked === true), "item is checked");
-  assert(after.structuredContent.outline.some((b) => b.markdown.includes(`revised ${marker}`)), "text replaced");
-  log(`edit_note replace_text and set_checked → revision ${checked.structuredContent.revision}`);
+  const after = await call(client, "read_note", {
+    note_id: noteId,
+    format: "outline",
+  });
+  assert(
+    after.structuredContent.outline.some(
+      (b) => b.id === milk.id && b.checked === true,
+    ),
+    "item is checked",
+  );
+  assert(
+    after.structuredContent.outline.some((b) =>
+      b.markdown.includes(`revised ${marker}`),
+    ),
+    "text replaced",
+  );
+  log(
+    `edit_note replace_text and set_checked → revision ${checked.structuredContent.revision}`,
+  );
 
   const history = await call(client, "note_history", { note_id: noteId });
-  assert(history.structuredContent.versions.length >= 1, "history lists revisions");
-  const original = await call(client, "read_revision", { note_id: noteId, revision: 0 });
-  assert(original.structuredContent.markdown.includes(`the ${marker} plan`), "revision 0 has the original text");
-  log(`note_history (${history.structuredContent.versions.length} entries) and read_revision 0`);
+  assert(
+    history.structuredContent.versions.length >= 1,
+    "history lists revisions",
+  );
+  const original = await call(client, "read_revision", {
+    note_id: noteId,
+    revision: 0,
+  });
+  assert(
+    original.structuredContent.markdown.includes(`the ${marker} plan`),
+    "revision 0 has the original text",
+  );
+  log(
+    `note_history (${history.structuredContent.versions.length} entries) and read_revision 0`,
+  );
 
-  const hidden = await call(client, "search_notes", { query: "unsharedsecret" });
-  assert(hidden.structuredContent.results.length === 0, "unshared notebook content is not searchable");
-  const denied = await client.callTool({ name: "read_note", arguments: { note_id: privateNoteId } });
-  assert(denied.isError && /not_found/.test(text(denied)), "unshared note reads as not found");
-  log("an unshared notebook's note is invisible to search and read (not_found)");
+  const hidden = await call(client, "search_notes", {
+    query: "unsharedsecret",
+  });
+  assert(
+    hidden.structuredContent.results.length === 0,
+    "unshared notebook content is not searchable",
+  );
+  const denied = await client.callTool({
+    name: "read_note",
+    arguments: { note_id: privateNoteId },
+  });
+  assert(
+    denied.isError && /not_found/.test(text(denied)),
+    "unshared note reads as not found",
+  );
+  log(
+    "an unshared notebook's note is invisible to search and read (not_found)",
+  );
 
-  const bad = await client.callTool({ name: "read_note", arguments: { note_id: "not-a-real-id" } });
+  const bad = await client.callTool({
+    name: "read_note",
+    arguments: { note_id: "not-a-real-id" },
+  });
   assert(bad.isError, "a malformed note id is a tool error");
   return noteId;
 }
@@ -319,9 +491,17 @@ async function rawToolCall(accessToken) {
       Accept: "application/json, text/event-stream",
       "MCP-Protocol-Version": "2025-06-18",
     },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_notebooks", arguments: {} } }),
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "list_notebooks", arguments: {} },
+    }),
   });
-  return { status: response.status, wwwAuthenticate: response.headers.get("www-authenticate") ?? "" };
+  return {
+    status: response.status,
+    wwwAuthenticate: response.headers.get("www-authenticate") ?? "",
+  };
 }
 
 async function main() {
@@ -330,12 +510,17 @@ async function main() {
   const notebooks = await human.query(api.library.notebooks, {});
   const defaultNotebook = notebooks.find((n) => n.isDefault);
   assert(defaultNotebook, "the new account has a default notebook");
-  const privateNotebook = await human.mutation(api.notebooks.create, { name: "Private", description: "Not shared" });
+  const privateNotebook = await human.mutation(api.notebooks.create, {
+    name: "Private",
+    description: "Not shared",
+  });
   const privateNote = await human.mutation(api.notes.createFromMarkdown, {
     notebookId: privateNotebook,
     markdown: "Private plans\n\nunsharedsecret details",
   });
-  log("the person has a default notebook and an unshared 'Private' notebook with a note");
+  log(
+    "the person has a default notebook and an unshared 'Private' notebook with a note",
+  );
 
   const agent = await connectAgent(human, defaultNotebook.id);
 
@@ -348,18 +533,36 @@ async function main() {
   assert(legacy.getProtocolEra() === "legacy", "legacy era negotiated");
   const legacyTools = await legacy.listTools();
   const legacyNotebooks = await call(legacy, "list_notebooks");
-  assert(legacyTools.tools.length === 12 && legacyNotebooks.structuredContent.notebooks.length === 1, "legacy client works");
-  log(`2025-era client (${legacy.getNegotiatedProtocolVersion()}, stateless fallback): tools/list and list_notebooks`);
+  assert(
+    legacyTools.tools.length === 12 &&
+      legacyNotebooks.structuredContent.notebooks.length === 1,
+    "legacy client works",
+  );
+  log(
+    `2025-era client (${legacy.getNegotiatedProtocolVersion()}, stateless fallback): tools/list and list_notebooks`,
+  );
   await legacy.close();
 
   // A second connection for the same agent (another client), to check revocation
   // on both protocol paths while each grant is still valid at the OAuth layer.
-  const second = await connectAgent(human, defaultNotebook.id, { clientName: "E2E Second Client", agentId: agent.agentId });
-  assert(second.agentId === agent.agentId, "the second connection reuses the agent");
+  const second = await connectAgent(human, defaultNotebook.id, {
+    clientName: "E2E Second Client",
+    agentId: agent.agentId,
+  });
+  assert(
+    second.agentId === agent.agentId,
+    "the second connection reuses the agent",
+  );
 
-  const connections = (await human.query(api.connections.mine, {})).find((a) => a.agentId === agent.agentId)?.connections ?? [];
+  const connections =
+    (await human.query(api.connections.mine, {})).find(
+      (a) => a.agentId === agent.agentId,
+    )?.connections ?? [];
   assert(connections.length === 2, "two connections recorded for the agent");
-  for (const connection of connections) await human.mutation(api.connections.revoke, { connectionId: connection.id });
+  for (const connection of connections)
+    await human.mutation(api.connections.revoke, {
+      connectionId: connection.id,
+    });
   log("the person revoked both connections in Convex");
 
   for (const [mode, tokens, tool] of [
@@ -370,35 +573,55 @@ async function main() {
     const client = await mcpClient(tokens.accessToken, mode, record);
     let failed = false;
     try {
-      await client.callTool({ name: tool, arguments: tool === "search_notes" ? { query: "plan" } : {} });
+      await client.callTool({
+        name: tool,
+        arguments: tool === "search_notes" ? { query: "plan" } : {},
+      });
     } catch {
       failed = true;
     }
     const last = record.at(-1);
     assert(
-      failed && last?.status === 401 && /error="invalid_token"/.test(last.wwwAuthenticate ?? ""),
+      failed &&
+        last?.status === 401 &&
+        /error="invalid_token"/.test(last.wwwAuthenticate ?? ""),
       `${mode} ${tool} after revocation is HTTP 401 invalid_token`,
     );
-    assert(/resource_metadata="/.test(last.wwwAuthenticate), "the 401 names resource_metadata");
+    assert(
+      /resource_metadata="/.test(last.wwwAuthenticate),
+      "the 401 names resource_metadata",
+    );
     await client.close().catch(() => {});
-    log(`${mode} client: ${tool} after revocation → HTTP 401, WWW-Authenticate error="invalid_token"`);
+    log(
+      `${mode} client: ${tool} after revocation → HTTP 401, WWW-Authenticate error="invalid_token"`,
+    );
   }
 
   const raw = await rawToolCall(agent.accessToken);
-  assert(raw.status === 401 && raw.wwwAuthenticate.includes('error="invalid_token"'), "later calls stay 401");
+  assert(
+    raw.status === 401 && raw.wwwAuthenticate.includes('error="invalid_token"'),
+    "later calls stay 401",
+  );
   for (const tokens of [agent, second]) {
     const refresh = await form(tokens.tokenEndpoint, {
       grant_type: "refresh_token",
       refresh_token: tokens.refreshToken,
       client_id: tokens.clientId,
     });
-    assert(refresh.status === 400 && refresh.body.error === "invalid_grant", "refresh fails after revocation, forcing re-authorization");
+    assert(
+      refresh.status === 400 && refresh.body.error === "invalid_grant",
+      "refresh fails after revocation, forcing re-authorization",
+    );
   }
-  log("later calls stay 401 and refresh answers invalid_grant, so clients must sign in again");
+  log(
+    "later calls stay 401 and refresh answers invalid_grant, so clients must sign in again",
+  );
   log("PASS");
 }
 
 main().catch((error) => {
-  console.error(`[e2e] FAIL: ${error instanceof Error ? error.message : String(error)}`);
+  console.error(
+    `[e2e] FAIL: ${error instanceof Error ? error.message : String(error)}`,
+  );
   process.exit(1);
 });

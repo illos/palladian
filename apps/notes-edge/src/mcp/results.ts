@@ -2,7 +2,10 @@ import type { CallToolResult } from "@modelcontextprotocol/server";
 import { ConvexCallError, type CallFailure } from "../convex.ts";
 
 /** A successful tool result: readable text for the model plus structured data. */
-export function ok(text: string, structured: Record<string, unknown>): CallToolResult {
+export function ok(
+  text: string,
+  structured: Record<string, unknown>,
+): CallToolResult {
   return { content: [{ type: "text", text }], structuredContent: structured };
 }
 
@@ -27,10 +30,13 @@ export function isRevoked(error: unknown): boolean {
 }
 
 export function revokedResult(): CallToolResult {
-  const message = "This connection was revoked or its agent was disabled. Sign in again.";
+  const message =
+    "This connection was revoked or its agent was disabled. Sign in again.";
   return {
     content: [{ type: "text", text: `Error (unauthenticated): ${message}` }],
-    structuredContent: { error: { code: "unauthenticated", message, retryable: false } },
+    structuredContent: {
+      error: { code: "unauthenticated", message, retryable: false },
+    },
     isError: true,
   };
 }
@@ -38,7 +44,9 @@ export function revokedResult(): CallToolResult {
 export function invalidInput(message: string): CallToolResult {
   return {
     content: [{ type: "text", text: `Error (invalid): ${message}` }],
-    structuredContent: { error: { code: "invalid", message, retryable: false } },
+    structuredContent: {
+      error: { code: "invalid", message, retryable: false },
+    },
     isError: true,
   };
 }

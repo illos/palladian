@@ -25,4 +25,6 @@ jobs:
       - run: pnpm --filter @palladian/notes test
       - run: pnpm --filter @palladian/notes test:browser --project notes-chromium --project notes-mobile-chromium
       - run: pnpm --filter @palladian/notes test:offline
+      - run: pnpm --filter @palladian/notes-edge typecheck
+      - run: pnpm --filter @palladian/notes-edge test
       - run: pnpm audit --audit-level=moderate

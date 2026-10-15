@@ -13,7 +13,10 @@ export class FakeKV {
   readonly store = new Map<string, string>();
   readonly puts: { key: string; options: unknown }[] = [];
   readonly deletes: string[] = [];
-  async get(key: string, options?: { type?: string } | string): Promise<unknown> {
+  async get(
+    key: string,
+    options?: { type?: string } | string,
+  ): Promise<unknown> {
     const value = this.store.get(key);
     if (value === undefined) return null;
     const type = typeof options === "string" ? options : options?.type;
@@ -69,7 +72,9 @@ export function fakeProvider(): FakeProvider {
     describeConsent: (request: AuthRequest) => fake.describe(request),
     completeAuthorization: async (options: CompleteAuthorizationOptions) => {
       fake.completed.push(options);
-      return { redirectTo: `${options.request.redirectUri}?code=issued&state=${options.request.state}` };
+      return {
+        redirectTo: `${options.request.redirectUri}?code=issued&state=${options.request.state}`,
+      };
     },
     revokeGrant: async (grantId: string, userId: string) => {
       fake.revoked.push({ grantId, userId });
@@ -78,7 +83,11 @@ export function fakeProvider(): FakeProvider {
   return fake;
 }
 
-export function fakeEnv(kv: FakeKV, provider: FakeProvider, overrides: Partial<Env> = {}): Env {
+export function fakeEnv(
+  kv: FakeKV,
+  provider: FakeProvider,
+  overrides: Partial<Env> = {},
+): Env {
   const assets = {
     fetch: async () =>
       new Response("<!doctype html><title>Palladian</title>", {

@@ -49,7 +49,10 @@ export interface ConsentDeps {
 function base64url(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
 
 export function newRequestKey(): string {
@@ -132,7 +135,11 @@ export async function handleAuthorize(
     throw error;
   }
   const key = (deps.newKey ?? newRequestKey)();
-  const pending: PendingRequest = { oauthReqInfo, client, createdAt: Date.now() };
+  const pending: PendingRequest = {
+    oauthReqInfo,
+    client,
+    createdAt: Date.now(),
+  };
   await env.OAUTH_KV.put(KEY_PREFIX + key, JSON.stringify(pending), {
     expirationTtl: REQUEST_TTL_SECONDS,
   });
@@ -181,7 +188,10 @@ export async function handleRequestInfo(
  * it without a CORS preflight, which this Worker never grants), from this
  * origin, and not marked cross-site by the browser.
  */
-export function crossSiteRejection(request: Request, env: Env): Response | null {
+export function crossSiteRejection(
+  request: Request,
+  env: Env,
+): Response | null {
   if (request.method !== "POST") return jsonError("Method not allowed.", 405);
   const type = request.headers.get("Content-Type") ?? "";
   if (type.split(";")[0]!.trim().toLowerCase() !== "application/json")
@@ -194,7 +204,9 @@ export function crossSiteRejection(request: Request, env: Env): Response | null 
   return null;
 }
 
-async function readBody(request: Request): Promise<Record<string, unknown> | null> {
+async function readBody(
+  request: Request,
+): Promise<Record<string, unknown> | null> {
   try {
     const body: unknown = await request.json();
     return typeof body === "object" && body !== null && !Array.isArray(body)
@@ -240,8 +252,14 @@ export async function handleApprove(
     });
   } catch (error) {
     if (error instanceof ConvexCallError && error.failure.kind !== "uncertain")
-      return jsonError("This approval is no longer valid. Start again from your app.", 400);
-    return jsonError("Could not reach the notes service. Start again from your app.", 502);
+      return jsonError(
+        "This approval is no longer valid. Start again from your app.",
+        400,
+      );
+    return jsonError(
+      "Could not reach the notes service. Start again from your app.",
+      502,
+    );
   }
   if (redeemed.clientId !== pending.oauthReqInfo.clientId)
     return jsonError("This approval was made for a different app.", 400);
@@ -256,7 +274,10 @@ export async function handleApprove(
 }
 
 /** POST /oauth/deny { request } */
-export async function handleDeny(request: Request, env: Env): Promise<Response> {
+export async function handleDeny(
+  request: Request,
+  env: Env,
+): Promise<Response> {
   const rejected = crossSiteRejection(request, env);
   if (rejected) return rejected;
   const body = await readBody(request);
@@ -283,7 +304,10 @@ export async function handleDeny(request: Request, env: Env): Promise<Response> 
 }
 
 /** GET /connect: the SPA's consent route, never framed. */
-export async function handleConnect(request: Request, env: Env): Promise<Response> {
+export async function handleConnect(
+  request: Request,
+  env: Env,
+): Promise<Response> {
   const asset = await env.ASSETS.fetch(request);
   const response = new Response(asset.body, asset);
   response.headers.append("Content-Security-Policy", "frame-ancestors 'none'");

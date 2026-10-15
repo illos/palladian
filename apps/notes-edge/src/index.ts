@@ -1,4 +1,7 @@
-import { OAuthProvider, type OAuthProviderOptions } from "@cloudflare/workers-oauth-provider";
+import {
+  OAuthProvider,
+  type OAuthProviderOptions,
+} from "@cloudflare/workers-oauth-provider";
 import {
   handleApprove,
   handleAuthorize,
@@ -13,7 +16,10 @@ import { REQUIRED_SCOPES, SCOPES_SUPPORTED } from "./scopes.ts";
 function notFound(): Response {
   return new Response(JSON.stringify({ error: "not_found" }), {
     status: 404,
-    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    },
   });
 }
 
@@ -22,11 +28,16 @@ async function routeDefault(request: Request, env: Env): Promise<Response> {
   const { pathname } = new URL(request.url);
   if (pathname === "/authorize") return handleAuthorize(request, env);
   if (pathname.startsWith("/oauth/request/"))
-    return handleRequestInfo(request, env, pathname.slice("/oauth/request/".length));
+    return handleRequestInfo(
+      request,
+      env,
+      pathname.slice("/oauth/request/".length),
+    );
   if (pathname === "/oauth/approve") return handleApprove(request, env);
   if (pathname === "/oauth/deny") return handleDeny(request, env);
   if (pathname === "/connect") return handleConnect(request, env);
-  if (pathname.startsWith("/oauth/") || pathname.startsWith("/.well-known/")) return notFound();
+  if (pathname.startsWith("/oauth/") || pathname.startsWith("/.well-known/"))
+    return notFound();
   // Only run_worker_first paths reach the Worker in production; serve anything else as the SPA.
   return env.ASSETS.fetch(request);
 }
@@ -39,7 +50,10 @@ async function routeDefault(request: Request, env: Env): Promise<Response> {
  * (omitting the option means 30 and 90 days), but its declarations do not admit
  * `undefined` under exactOptionalPropertyTypes, hence the separate assignment.
  */
-const NEVER_EXPIRE = { refreshTokenTTL: undefined, clientRegistrationTTL: undefined };
+const NEVER_EXPIRE = {
+  refreshTokenTTL: undefined,
+  clientRegistrationTTL: undefined,
+};
 
 export function providerOptions(origin: string): OAuthProviderOptions<Env> {
   const options: OAuthProviderOptions<Env> = {
@@ -47,7 +61,9 @@ export function providerOptions(origin: string): OAuthProviderOptions<Env> {
     apiHandler: {
       fetch: (request, env, ctx) => handleMcp(request, env, ctx as McpContext),
     },
-    defaultHandler: { fetch: (request, env) => routeDefault(request as Request, env) },
+    defaultHandler: {
+      fetch: (request, env) => routeDefault(request as Request, env),
+    },
     authorizeEndpoint: "/authorize",
     tokenEndpoint: "/oauth/token",
     clientRegistrationEndpoint: "/oauth/register",
@@ -63,7 +79,12 @@ export function providerOptions(origin: string): OAuthProviderOptions<Env> {
     },
     onError: ({ code, status, internal }) => {
       // Never log request bodies, tokens or client metadata.
-      console.warn("OAuth error", { code, status, category: internal.category, reason: internal.reason });
+      console.warn("OAuth error", {
+        code,
+        status,
+        category: internal.category,
+        reason: internal.reason,
+      });
     },
   };
   return Object.assign(options, NEVER_EXPIRE);
@@ -79,8 +100,10 @@ export function createProvider(origin: string): OAuthProvider<Env> {
  * root, and authorization server metadata with the resource path appended.
  */
 const DISCOVERY_ALIASES: Record<string, string> = {
-  "/.well-known/oauth-protected-resource": "/.well-known/oauth-protected-resource" + MCP_PATH,
-  ["/.well-known/oauth-authorization-server" + MCP_PATH]: "/.well-known/oauth-authorization-server",
+  "/.well-known/oauth-protected-resource":
+    "/.well-known/oauth-protected-resource" + MCP_PATH,
+  ["/.well-known/oauth-authorization-server" + MCP_PATH]:
+    "/.well-known/oauth-authorization-server",
 };
 
 let cached: { origin: string; provider: OAuthProvider<Env> } | undefined;
@@ -88,7 +111,8 @@ let cached: { origin: string; provider: OAuthProvider<Env> } | undefined;
 export default {
   fetch(request, env, ctx) {
     const origin = publicOrigin(env);
-    if (cached?.origin !== origin) cached = { origin, provider: createProvider(origin) };
+    if (cached?.origin !== origin)
+      cached = { origin, provider: createProvider(origin) };
     const url = new URL(request.url);
     const alias = DISCOVERY_ALIASES[url.pathname];
     if (alias && (request.method === "GET" || request.method === "HEAD")) {

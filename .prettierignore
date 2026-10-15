@@ -3,3 +3,5 @@ apps/web/dist/
 apps/notes/dist/
 **/test-results/
 **/playwright-report/
+apps/notes-edge/dist/
+**/.wrangler/
