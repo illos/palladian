@@ -114,8 +114,6 @@ export async function handleMcp(
         },
       }),
     {
-      // No mid-call notifications are sent, so modern exchanges are one JSON body.
-      responseMode: "json",
       onerror: (error) => console.warn("MCP request error", { name: error.name, message: error.message }),
     },
   );

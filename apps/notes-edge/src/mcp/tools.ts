@@ -173,6 +173,9 @@ export function createNotesServer(context: ToolContext): McpServer {
     () =>
       run("read", async (convex) => {
         const notebooks = await convex.query(fns.library.notebooks, {});
+        // This query answers [] rather than failing for an unknown caller, so
+        // tell "nothing shared" from "connection revoked" with a strict query.
+        if (!notebooks.length) await convex.query(fns.library.recent, { limit: 1 });
         const views = notebooks.map((n: NotebookView) => ({
           notebook_id: n.id,
           name: n.name,

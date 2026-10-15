@@ -133,6 +133,13 @@ export function convexCaller(
           kind: "rejected",
           message: rejectedMessage(raw),
         });
+      // Convex refused the credentials before running anything.
+      if (lastStatus === 401 || lastStatus === 403)
+        throw new ConvexCallError({
+          kind: "rejected",
+          message:
+            "The notes service did not accept this server's agent credentials (a server configuration problem). Nothing was changed.",
+        });
       throw new ConvexCallError({
         kind: "uncertain",
         message:
