@@ -95,7 +95,7 @@ describe("note access fences", () => {
     }
   });
 
-  test("reconciliation removes notes outside the snapshot but keeps local drafts", async () => {
+  test("reconciliation hides notes outside the snapshot but keeps local drafts", async () => {
     const store = new NotesStore("reconcile-" + crypto.randomUUID());
     try {
       const fence = await store.captureFence("account");
@@ -138,13 +138,13 @@ describe("note access fences", () => {
         updatedAt: 1,
         notebookId: "gone",
       });
-      const { revoked } = await store.reconcileAccess(
+      const held = await store.reconcileAccess(
         "account",
         new Set(["mine"]),
         new Set(["shared"]),
         fence,
       );
-      expect(revoked).toEqual(["revoked"]);
+      expect(held).toEqual(["revoked"]);
       const ids = (await store.list("account")).map((row) => row.id).sort();
       expect(ids).toEqual(["local-draft", "shared", "visible"]);
     } finally {

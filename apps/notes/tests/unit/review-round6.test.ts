@@ -289,7 +289,7 @@ describe("work whose access is in doubt is held, not deleted", () => {
         new Set(),
         await store.captureFence("account"),
       );
-      expect(result).toEqual({ revoked: [], held: ["note"] });
+      expect(result).toEqual(["note"]);
       expect(held).toEqual(expect.arrayContaining(["note", copy.id]));
       // Hidden while held: nothing readable, listed, exported or created.
       expect(await store.read("account", "note")).toBeUndefined();
@@ -356,7 +356,7 @@ describe("work whose access is in doubt is held, not deleted", () => {
     }
   });
 
-  test("a note without local work is removed at once", async () => {
+  test("a note without saved work is held, and its cached text dropped", async () => {
     const store = new NotesStore("r6-" + crypto.randomUUID());
     try {
       const fence = await store.captureFence("account");
@@ -376,13 +376,29 @@ describe("work whose access is in doubt is held, not deleted", () => {
         [],
         fence,
       );
+      await store.cacheAccepted(
+        {
+          accountId: "account",
+          id: "cached",
+          document: JSON.stringify(markdownToDoc("Cached").toJSON()),
+          text: "Cached",
+          revision: 0,
+        },
+        1,
+        fence,
+      );
       const result = await store.reconcileAccess(
         "account",
         new Set(),
         new Set(),
         fence,
       );
-      expect(result).toEqual({ revoked: ["cached"], held: [] });
+      expect(result).toEqual(["cached"]);
+      expect(await store.list("account")).toEqual([]);
+      const db = (
+        store as unknown as { db: { bodies: { count(): Promise<number> } } }
+      ).db;
+      expect(await db.bodies.count()).toBe(0);
     } finally {
       store.close();
     }

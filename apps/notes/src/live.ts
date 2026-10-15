@@ -660,6 +660,7 @@ export class LiveController {
   ) {
     if (this.openNotes.has(noteId)) return;
     const fence = await this.store.captureFence(accountId);
+    if (this.openNotes.has(noteId)) return;
     await this.store.settleDraft(
       accountId,
       noteId,

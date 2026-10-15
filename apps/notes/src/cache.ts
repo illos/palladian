@@ -119,6 +119,15 @@ class NotesDatabase extends Dexie {
     // Persistent note-level access fences: late responses and other tabs cannot
     // restore content for a note this account lost.
     this.version(3).stores({ revoked: "[accountId+id], accountId" });
+    // Conflict-copy summaries carry their source, as the drafts already do.
+    this.version(4).upgrade(async (tx) => {
+      const drafts: Draft[] = await tx.table("drafts").toArray();
+      for (const draft of drafts)
+        if (draft.source)
+          await tx
+            .table("summaries")
+            .update([draft.accountId, draft.id], { source: draft.source });
+    });
   }
 }
 
@@ -243,11 +252,14 @@ export class NotesStore {
     const recovered = (
       await this.accessibleRecovery(accountId, persisted?.epoch ?? 0)
     ).find((value) => value.id === id);
+    const stored = await this.db.bodies.get([accountId, id]);
+    // Fences are read last, so one recorded during this read still applies.
     const revoked = await this.revokedIds(accountId);
+    const fenced = [recovered, draft].some(
+      (value) => value !== undefined && isRevoked(revoked, value),
+    );
     const body =
-      recovered ??
-      (draft && !isRevoked(revoked, draft) ? draft : undefined) ??
-      (revoked.has(id) ? undefined : await this.db.bodies.get([accountId, id]));
+      revoked.has(id) || fenced ? undefined : (recovered ?? draft ?? stored);
     const after = await this.db.accounts.get(accountId);
     return this.epoch(accountId) === epoch &&
       !this.blocked.has(accountId) &&
@@ -305,11 +317,14 @@ export class NotesStore {
             await this.db.summaries.put({
               ...previous,
               ...(draft.notebookId ? { notebookId: draft.notebookId } : {}),
+              ...(draft.source ? { source: draft.source } : {}),
               ...summary(draft),
               kind: "draft",
             });
           },
         );
+        // Saved: the stored draft is current now, including other tabs' saves.
+        this.forgetSaved(key, draft);
         this.notify();
       });
     // Observe fence rejection immediately even if an older write is queued.
@@ -378,8 +393,10 @@ export class NotesStore {
           },
         );
         // Snapshots written while this was queued are newer; keep them.
-        if (replaced && unchanged(this.recoveryDrafts.get(key)))
-          this.recoveryDrafts.set(key, { ...next });
+        if (replaced && unchanged(this.recoveryDrafts.get(key))) {
+          this.recoveryDrafts.delete(key);
+          this.recoveryFences.delete(key);
+        }
         if (replaced) this.notify();
         return replaced;
       });
@@ -515,6 +532,13 @@ export class NotesStore {
     await this.assertPersistent(accountId, fence.epoch);
     this.assertWritable(accountId, epoch);
     return [...latest.values()];
+  }
+  /** A snapshot kept in memory only until it is saved. */
+  private forgetSaved(key: string, saved: Draft) {
+    if (sameSnapshot(this.recoveryDrafts.get(key), saved)) {
+      this.recoveryDrafts.delete(key);
+      this.recoveryFences.delete(key);
+    }
   }
   private forgetRecovery(accountId: string) {
     for (const [key, draft] of this.recoveryDrafts)
@@ -848,19 +872,20 @@ export class NotesStore {
    * That includes notes this device created whose summary has not arrived, once
    * their notebook is known. A conflict copy survives only if its source note
    * would. Local notes never sent to the server are kept. A cached notebook can
-   * be out of date (the note may have moved), so a note with local work is only
-   * held, hidden but kept, until the server confirms its access; a note without
-   * local work is removed and returns if a feed shows it again.
+   * be out of date (the note may have moved), and other tabs may hold unsaved
+   * work this one cannot see, so nothing is deleted here: lost notes are held,
+   * hidden everywhere, until the server confirms or denies access. Cached text
+   * of a held note without saved work is dropped; a confirmed note fetches it
+   * again. Resolves the held note IDs.
    */
   async reconcileAccess(
     accountId: string,
     visibleNotebooks: Set<string>,
     sharedNotes: Set<string>,
     fence: CacheFence,
-  ): Promise<{ revoked: string[]; held: string[] }> {
+  ): Promise<string[]> {
     const epoch = this.epoch(accountId);
     this.assertWritable(accountId, epoch);
-    let revoked: string[] = [];
     let held: string[] = [];
     let hidden: string[] = [];
     await this.db.transaction(
@@ -902,30 +927,31 @@ export class NotesStore {
           if (notebookId !== undefined && !reachable(draft.source, notebookId))
             lost.push(draft.source);
         }
-        const memory = [...this.recoveryDrafts.values()].filter(
-          (draft) => draft.accountId === accountId,
-        );
-        const withWork = new Set(
-          [...drafts, ...memory].flatMap((draft) =>
+        const already = await this.revokedIds(accountId);
+        held = [...new Set(lost)].filter((id) => !already.has(id));
+        await this.holdNotes(accountId, held);
+        const gone = new Set(held);
+        const saved = new Set(
+          drafts.flatMap((draft) =>
             draft.source === undefined ? [draft.id] : [draft.id, draft.source],
           ),
         );
-        const already = await this.revokedIds(accountId);
-        const pending = [...new Set(lost)].filter((id) => !already.has(id));
-        held = pending.filter((id) => withWork.has(id));
-        await this.holdNotes(accountId, held);
+        for (const id of held)
+          if (!saved.has(id)) {
+            await this.db.summaries.delete([accountId, id]);
+            await this.db.bodies.delete([accountId, id]);
+          }
+        const memory = [...this.recoveryDrafts.values()].filter(
+          (draft) => draft.accountId === accountId,
+        );
         hidden = [
           ...new Set([
             ...held,
             ...[...drafts, ...memory]
-              .filter((draft) => isRevoked(new Set(held), draft))
+              .filter((draft) => isRevoked(gone, draft))
               .map((draft) => draft.id),
           ]),
         ];
-        revoked = await this.fenceNotes(
-          accountId,
-          pending.filter((id) => !withWork.has(id)),
-        );
         // Feeds for notebooks no longer visible restart from scratch if re-shared.
         const cursors = await this.db.cursors
           .where("accountId")
@@ -939,14 +965,12 @@ export class NotesStore {
             await this.db.cursors.delete([accountId, cursor.key]);
       },
     );
-    this.announceRevoked(accountId, revoked);
     if (held.length) {
-      // Editors of held notes and of their conflict copies close.
+      // Every tab closes editors of held notes and their copies, keeping work.
       this.channel?.postMessage({ accountId, heldNotes: hidden });
       this.notify({ accountId, heldNotes: hidden });
     }
-    if (revoked.length) this.notify();
-    return { revoked, held };
+    return held;
   }
   async cursor(accountId: string, key: string): Promise<number> {
     return (await this.db.cursors.get([accountId, key]))?.value ?? 0;
@@ -1222,9 +1246,13 @@ export class NotesStore {
     this.db.close();
   }
 }
-/** Notes written on this device and not yet created on the server. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * Notes written on this device and not yet created on the server: "local-"
+ * IDs, and bare UUIDs from earlier offline creation. Server IDs are neither.
+ */
 function isLocalId(id: string) {
-  return id.startsWith("local-");
+  return id.startsWith("local-") || UUID.test(id);
 }
 function isRevoked(
   revoked: Set<string>,

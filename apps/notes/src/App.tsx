@@ -117,6 +117,8 @@ export function App({
     null,
   );
   const openRequest = useRef(0);
+  /** The note an unfinished open is for; losing access to it cancels the open. */
+  const pendingOpen = useRef<string | null>(null);
   const listRequest = useRef(0);
   const writeRequest = useRef(0);
   const pendingRoute = useRef(routeNoteId());
@@ -179,6 +181,16 @@ export function App({
         setRows([]);
         setNotebooks([]);
         setOpen(null);
+      }
+      const pending = pendingOpen.current;
+      if (
+        pending &&
+        event.accountId === accountId &&
+        (event.revokedNotes?.includes(pending) ||
+          event.heldNotes?.includes(pending))
+      ) {
+        pendingOpen.current = null;
+        openRequest.current++;
       }
       const shown = openRef.current;
       const revoked = !!shown && !!event.revokedNotes?.includes(shown.id);
@@ -383,6 +395,7 @@ export function App({
     setView("notes");
     if (currentOpen?.id === row.id) return;
     const request = ++openRequest.current;
+    pendingOpen.current = row.id;
     const generation = snapshot.generation;
     try {
       const [body, draft] = await Promise.all([
@@ -444,6 +457,8 @@ export function App({
       }
     } catch {
       setError("This note could not be opened from local storage.");
+    } finally {
+      if (request === openRequest.current) pendingOpen.current = null;
     }
   }
 
@@ -490,7 +505,7 @@ export function App({
     }
     const draft: OpenNote = {
       accountId,
-      id: crypto.randomUUID(),
+      id: "local-" + randomId(),
       key: "",
       document: emptyDocument(),
       text: "",
