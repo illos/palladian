@@ -225,19 +225,18 @@ export function App({
     return () => clearTimeout(timer);
   }, [liveReady, live, query]);
 
-  // A deep link opens its note once the library knows about it.
+  // A deep link opens its note once the library knows about it. Startup session
+  // fences can discard an attempt, so keep trying until a note is shown.
   useEffect(() => {
     const id = pendingRoute.current;
     if (!id || !permitted) return;
     const row = rows.find((r) => r.id === id);
-    if (row) {
-      pendingRoute.current = null;
-      void selectNote(row);
-    } else if (liveReady) {
+    if (row) void selectNote(row);
+    else if (liveReady) {
       pendingRoute.current = null;
       void openRemote(id);
     }
-  }, [rows, permitted, liveReady]);
+  }, [rows, permitted, liveReady, snapshot.generation]);
 
   function closeOpen() {
     openRequest.current++;
@@ -248,6 +247,7 @@ export function App({
   }
 
   function show(note: OpenNote) {
+    pendingRoute.current = null;
     open?.channel?.close();
     setChannelStatus(null);
     openKey.current = note.key;

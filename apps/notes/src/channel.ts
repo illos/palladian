@@ -261,17 +261,22 @@ export class NoteChannel implements EditorBinding {
     if (!sendable) return;
     this.inflight = true;
     this.report();
+    const sentVersion = sendable.version;
     transport
       .push({
         noteId: this.noteId,
-        revision: sendable.version,
+        revision: sentVersion,
         steps: sendable.steps.map((step) => JSON.stringify(step.toJSON())),
         clientId: this.clientId,
       })
-      .then(() => {
+      .then((result) => {
         // Accepted steps come back through the feed; "behind" waits for it too.
+        // If the feed already advanced while this request was in flight, send again now.
         this.inflight = false;
         this.failures = 0;
+        const current = this.view ? getVersion(this.view.state) : sentVersion;
+        if (current !== sentVersion || result.status === "accepted")
+          this.trySend();
         this.report();
       })
       .catch((error: unknown) => {
