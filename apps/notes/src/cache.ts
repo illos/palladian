@@ -892,6 +892,21 @@ export class NotesStore {
       held: kept.filter((draft) => isRevoked(held, draft)).length,
     };
   }
+  /**
+   * Forget this tab's unsaved snapshots of an account taken in any epoch but
+   * `epoch`: they belong to a lifecycle that has ended, and nothing (sticky
+   * fields, compare-and-replace, splits) may act on them.
+   */
+  private async forgetOtherEpochs(accountId: string, epoch: number) {
+    for (const [key, draft] of [...this.recoveryDrafts]) {
+      if (draft.accountId !== accountId) continue;
+      const fence = await this.recoveryFences.get(key)?.catch(() => null);
+      if (fence?.epoch !== epoch && this.recoveryDrafts.get(key) === draft) {
+        this.recoveryDrafts.delete(key);
+        this.recoveryFences.delete(key);
+      }
+    }
+  }
   /** A snapshot kept in memory only until it is saved. */
   private forgetSaved(key: string, saved: Draft) {
     if (sameSnapshot(this.recoveryDrafts.get(key), saved)) {
@@ -1000,6 +1015,7 @@ export class NotesStore {
       if (op.accountId === accountId && op.result === null)
         throw new Error("This account is still being cleared.");
     let lifecycle = 0;
+    let epoch = 0;
     let ended = false;
     const activated = await this.ifAccountFree(accountId, () =>
       this.db.transaction(
@@ -1027,7 +1043,7 @@ export class NotesStore {
           }
           await this.db.accounts.put({
             accountId,
-            epoch: (account?.epoch ?? 0) + (account?.blocked ? 1 : 0),
+            epoch: (epoch = (account?.epoch ?? 0) + (account?.blocked ? 1 : 0)),
             blocked: false,
             // Tabs signing in to the same lifecycle share it; signing in after a
             // clear begins the next one.
@@ -1040,8 +1056,11 @@ export class NotesStore {
     if (!activated.ran)
       throw new Error("Another tab is still clearing this account.");
     assertCurrent();
-    // Snapshots kept from an ended lifecycle stay ended.
+    // Snapshots kept from an ended lifecycle stay ended, including those
+    // from an epoch another tab already moved past by signing in first.
     if (ended) this.forgetRecovery(accountId);
+    else await this.forgetOtherEpochs(accountId, epoch);
+    assertCurrent();
     this.blocked.delete(accountId);
     this.lifecycles.set(accountId, lifecycle);
     this.notify();
