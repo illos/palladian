@@ -40,6 +40,7 @@ type Section =
   { kind: "all" } | { kind: "notebook"; id: string } | { kind: "trash" };
 type Dialog =
   | { kind: "share"; noteId: string }
+  | { kind: "move"; noteId: string }
   | { kind: "notebook"; notebookId: string | null }
   | null;
 type SettingsTab = "appearance" | "agents" | "account";
@@ -468,6 +469,24 @@ export function App({
           "Local storage failed. Your latest typing is still visible, but may be lost if this window closes.",
         );
       }
+    }
+  }
+
+  async function deleteForever(note: OpenNote) {
+    if (!live) return;
+    if (
+      !confirm(
+        "Delete this note permanently? Its entire history is removed and it cannot be restored.",
+      )
+    )
+      return;
+    try {
+      await live.deleteForever(note.id);
+      closeOpen();
+    } catch (failure) {
+      setError(
+        failure instanceof Error ? failure.message : "That change failed.",
+      );
     }
   }
 
@@ -911,6 +930,28 @@ export function App({
                     >
                       <Icon name="share" size={18} />
                     </button>
+                    {openRole === "owner" && !currentOpen.trashed && (
+                      <button
+                        className="icon-button"
+                        aria-label="Move to another notebook"
+                        title="Move to another notebook"
+                        onClick={() =>
+                          setDialog({ kind: "move", noteId: currentOpen.id })
+                        }
+                      >
+                        <Icon name="notebook" size={18} />
+                      </button>
+                    )}
+                    {openRole === "owner" && currentOpen.trashed && (
+                      <button
+                        className="icon-button"
+                        aria-label="Delete forever"
+                        title="Delete forever"
+                        onClick={() => void deleteForever(currentOpen)}
+                      >
+                        <Icon name="trash" size={18} />
+                      </button>
+                    )}
                     {canEdit && (
                       <button
                         className="icon-button"
@@ -1005,7 +1046,11 @@ export function App({
             panel={dialog.kind}
             session={session}
             notebooks={notebooks}
-            noteId={dialog.kind === "share" ? dialog.noteId : undefined}
+            noteId={
+              dialog.kind === "share" || dialog.kind === "move"
+                ? dialog.noteId
+                : undefined
+            }
             notebookId={
               dialog.kind === "notebook"
                 ? (dialog.notebookId ?? undefined)

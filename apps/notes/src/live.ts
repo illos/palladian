@@ -473,6 +473,16 @@ export class LiveController {
     return this.client.query(api.library.search, { query, limit: 30 });
   }
 
+  async deleteForever(noteId: string) {
+    try {
+      await this.client.mutation(api.lifecycle.deleteForever, {
+        noteId: noteId as Id<"notes">,
+      });
+    } catch (error) {
+      throw transportError(error);
+    }
+  }
+
   async trash(noteId: string, trashed: boolean) {
     try {
       await this.client.mutation(

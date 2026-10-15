@@ -1218,3 +1218,13 @@ ul.member-list {
   box-shadow: 0 16px 40px rgb(0 0 0 / 0.16);
   z-index: 20;
 }
+.public-link {
+  margin-top: 6px;
+}
+.public-link > button {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-weight: 500;
+}

@@ -7,7 +7,7 @@ import type { LiveController } from "./live";
 import { transportError } from "./live";
 import type { SessionController } from "./session";
 
-type Panel = "agents" | "account" | "share" | "notebook";
+type Panel = "agents" | "account" | "share" | "notebook" | "move";
 type Role = "read" | "edit";
 
 function useAction() {
@@ -339,11 +339,162 @@ function ShareNote({
       ) : (
         <p className="muted">Only the owner can change sharing.</p>
       )}
+      <PublicLink noteId={noteId} />
       {error && (
         <p role="alert" className="error">
           {error}
         </p>
       )}
+    </Modal>
+  );
+}
+
+function PublicLink({ noteId }: { noteId: Id<"notes"> }) {
+  const status = useQuery(api.publishing.status, { noteId });
+  const publish = useMutation(api.publishing.publish);
+  const unpublish = useMutation(api.publishing.unpublish);
+  const replace = useMutation(api.publishing.replace);
+  const { error, busy, run } = useAction();
+  const [copied, setCopied] = useState(false);
+  if (!status) return null;
+  const link = status.token ? `${location.origin}/p/${status.token}` : null;
+  return (
+    <section className="public-link">
+      <h3>Public link</h3>
+      {link ? (
+        <>
+          <p className="muted">
+            Anyone with this link can read the latest saved version. It is
+            hidden while the note is in Trash.
+          </p>
+          <div className="invite-link">
+            <input
+              readOnly
+              value={link}
+              aria-label="Public link"
+              onFocus={(e) => e.currentTarget.select()}
+            />
+            <div className="button-row">
+              <button
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard
+                    .writeText(link)
+                    .then(() => setCopied(true))
+                    .catch(() => setCopied(false));
+                }}
+              >
+                {copied ? "Copied" : "Copy link"}
+              </button>
+              {status.canPublish && (
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={busy}
+                  onClick={() => void run(() => unpublish({ noteId }))}
+                >
+                  Stop sharing publicly
+                </button>
+              )}
+              {status.canReplace && (
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={busy}
+                  onClick={() => {
+                    if (
+                      confirm(
+                        "Replace the link? The current link will stop working permanently.",
+                      )
+                    )
+                      void run(() => replace({ noteId }));
+                  }}
+                >
+                  Replace link
+                </button>
+              )}
+            </div>
+          </div>
+        </>
+      ) : status.canPublish ? (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void run(() => publish({ noteId }))}
+        >
+          Create public link
+        </button>
+      ) : (
+        <p className="muted">Not public.</p>
+      )}
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function MoveNote({
+  noteId,
+  onClose,
+}: {
+  noteId: Id<"notes">;
+  onClose: () => void;
+}) {
+  const note = useQuery(api.notes.get, { noteId });
+  const notebooks = useQuery(api.library.notebooks, {});
+  const move = useMutation(api.lifecycle.move);
+  const [target, setTarget] = useState("");
+  const preview = useQuery(
+    api.lifecycle.movePreview,
+    target ? { noteId, notebookId: target as Id<"notebooks"> } : "skip",
+  );
+  const { error, busy, run } = useAction();
+  const choices = (notebooks ?? []).filter(
+    (n) =>
+      note &&
+      n.ownerId === note.ownerId &&
+      n.id !== note.summary.notebookId &&
+      n.role !== "read",
+  );
+  return (
+    <Modal label="Move note" onClose={onClose}>
+      <form
+        className="stacked-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!target) return;
+          void run(() =>
+            move({ noteId, notebookId: target as Id<"notebooks"> }),
+          ).then((ok) => ok && onClose());
+        }}
+      >
+        <label>
+          Notebook
+          <select value={target} onChange={(e) => setTarget(e.target.value)}>
+            <option value="">Choose a notebook…</option>
+            {choices.map((n) => (
+              <option key={n.id} value={n.id}>
+                {n.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {preview && preview.length > 0 && (
+          <p className="error">
+            {preview.map((p) => p.name).join(", ")} will lose access to this
+            note.
+          </p>
+        )}
+        <button disabled={busy || !target}>Move</button>
+        {error && (
+          <p role="alert" className="error">
+            {error}
+          </p>
+        )}
+      </form>
     </Modal>
   );
 }
@@ -663,6 +814,7 @@ function AccountPanel({ session }: { session: SessionController }) {
   const rename = useMutation(api.account.rename);
   const pending = useQuery(api.invitations.pending, {});
   const revokeInvite = useMutation(api.invitations.revoke);
+  const setRetention = useMutation(api.lifecycle.setTrashRetention);
   const [name, setName] = useState("");
   const { error, busy, run } = useAction();
   useEffect(() => {
@@ -689,6 +841,24 @@ function AccountPanel({ session }: { session: SessionController }) {
           <p className="muted">Signed in as {me.email}</p>
           <button disabled={busy}>Save</button>
         </form>
+      )}
+      {me && (
+        <label className="stacked-form">
+          Keep notes in Trash for
+          <select
+            value={me.trashRetentionDays}
+            disabled={busy}
+            onChange={(event) =>
+              void run(() => setRetention({ days: Number(event.target.value) }))
+            }
+          >
+            <option value={1}>1 day</option>
+            <option value={7}>1 week</option>
+            <option value={30}>30 days</option>
+            <option value={90}>90 days</option>
+            <option value={0}>Forever (empty manually)</option>
+          </select>
+        </label>
       )}
       <section className="member-list">
         <h3>Pending invitations</h3>
@@ -751,6 +921,9 @@ export default function Panels({
       {panel === "account" && <AccountPanel session={session} />}
       {panel === "share" && noteId && (
         <ShareNote noteId={noteId as Id<"notes">} onClose={close} />
+      )}
+      {panel === "move" && noteId && (
+        <MoveNote noteId={noteId as Id<"notes">} onClose={close} />
       )}
       {panel === "notebook" && (
         <NotebookPanel
