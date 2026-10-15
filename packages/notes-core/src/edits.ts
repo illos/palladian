@@ -6,7 +6,7 @@ import {
 import { Transform } from "prosemirror-transform";
 import { assignBlockIds } from "./ids.ts";
 import { blockToMarkdown, parseMarkdownFragment } from "./markdown.ts";
-import { hasBlockId, notesSchema } from "./schema.ts";
+import { assertSafeDocument, hasBlockId, notesSchema } from "./schema.ts";
 
 /** Bounded agent edit operations. Every batch applies atomically or not at all. */
 export type NoteEdit =
@@ -232,11 +232,12 @@ function replaceText(
       at,
     );
   const last = first + oldText.length;
-  // Blocks overlapping the match; a separator belongs to the block after it.
+  // Blocks touched by the match. A matched separator touches both neighbours,
+  // so replacing it merges or splits them as the new text says.
   let i = 0;
-  while (i + 1 < segments.length && segments[i]!.end <= first) i++;
+  while (i + 1 < segments.length && segments[i + 1]!.start <= first) i++;
   let j = i;
-  while (j + 1 < segments.length && segments[j + 1]!.start < last) j++;
+  while (j + 1 < segments.length && segments[j + 1]!.start <= last) j++;
   const segStart = Math.min(first, segments[i]!.start);
   const segEnd = Math.max(last, segments[j]!.end);
   const replaced =
@@ -389,5 +390,6 @@ export function applyEdits(doc: ProseMirrorNode, edits: NoteEdit[]): Transform {
   });
   assignBlockIds(tr);
   tr.doc.check();
+  assertSafeDocument(tr.doc);
   return tr;
 }

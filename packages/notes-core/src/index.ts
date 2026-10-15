@@ -3,6 +3,8 @@ export {
   hasBlockId,
   isSafeHref,
   isSafeImageSource,
+  assertSafeDocument,
+  UnsafeDocumentError,
 } from "./schema.ts";
 export type { NotesSchema } from "./schema.ts";
 export {
@@ -34,4 +36,9 @@ export {
   MAX_EDITS,
 } from "./edits.ts";
 export type { NoteEdit, EditErrorCode, OutlineEntry } from "./edits.ts";
-export { emptyDoc, parseStoredDoc, DOC_JSON_LIMIT } from "./document.ts";
+export {
+  emptyDoc,
+  parseStoredDoc,
+  diffStep,
+  DOC_JSON_LIMIT,
+} from "./document.ts";

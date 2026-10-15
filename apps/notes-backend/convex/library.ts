@@ -102,7 +102,14 @@ export const changes = query({
     const removed: Id<"notes">[] = [];
     for (const entry of merged) {
       if ("removed" in entry) {
-        removed.push(entry.removed);
+        // A moved note stays visible with its new notebook rather than disappearing.
+        const moved = await ctx.db.get(entry.removed);
+        const movedRole =
+          moved && moved.notebookId !== args.notebookId
+            ? await noteRole(ctx, principal, moved)
+            : null;
+        if (moved && movedRole) notes.push(toSummary(moved, movedRole));
+        else removed.push(entry.removed);
         continue;
       }
       const role = await noteRole(ctx, principal, entry.note);
@@ -194,6 +201,7 @@ export const recent = query({
     const limit = Math.min(100, Math.max(1, Math.floor(args.limit ?? 25)));
     const before = args.before ?? Number.MAX_SAFE_INTEGER;
     const candidates: Doc<"notes">[] = [];
+    let fullPage = false;
     for (const id of await memberNotebooks(ctx, principal, args.notebookId)) {
       const rows = await ctx.db
         .query("notes")
@@ -202,23 +210,28 @@ export const recent = query({
         )
         .order("desc")
         .take(limit * 2);
+      if (rows.length === limit * 2) fullPage = true;
       candidates.push(...rows);
     }
     for (const { note } of await grantedOnly(ctx, principal, args.notebookId))
       if (note.editedAt < before) candidates.push(note);
     candidates.sort((a, b) => b.editedAt - a.editedAt);
     const notes = [];
+    let examined: number | null = null;
     for (const note of candidates) {
       if (notes.length >= limit) break;
+      examined = note.editedAt;
       if (note.lifecycle === "trashed" && !args.includeTrashed) continue;
       const role = await noteRole(ctx, principal, note);
       if (role) notes.push(toSummary(note, role));
     }
-    return {
-      notes,
-      nextBefore:
-        notes.length === limit ? notes[notes.length - 1]!.editedAt : null,
-    };
+    // More may exist whenever a notebook returned a full candidate page or the
+    // scan stopped early; the cursor continues from the last note examined.
+    const more =
+      candidates.length > 0 &&
+      (fullPage || notes.length >= limit) &&
+      examined !== null;
+    return { notes, nextBefore: more ? examined : null };
   },
 });
 

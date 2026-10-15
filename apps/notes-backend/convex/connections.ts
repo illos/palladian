@@ -26,8 +26,16 @@ export const approve = mutation({
     redirectHost: v.string(),
     agentName: v.string(),
     agentId: v.optional(v.id("principals")),
-    notebooks: v.array(v.object({ notebookId: v.id("notebooks"), role })),
-    autoShareRole: v.optional(role),
+    // Explicit consent to give an existing agent to a different client.
+    transfer: v.optional(v.boolean()),
+    // The complete choice for every notebook the person owns; "none" removes access.
+    notebooks: v.array(
+      v.object({
+        notebookId: v.id("notebooks"),
+        role: v.union(role, v.literal("none")),
+      }),
+    ),
+    autoShareRole: v.union(role, v.null()),
   },
   returns: v.object({ code: v.string(), agentId: v.id("principals") }),
   handler: async (ctx, args) => {
@@ -36,6 +44,12 @@ export const approve = mutation({
       fail("invalid", "Invalid authorization request.");
     if (args.clientId.length > 2048) fail("invalid", "Invalid client.");
     if (args.notebooks.length > 200) fail("invalid", "Too many notebooks.");
+    const consumed = await ctx.db
+      .query("connectionApprovals")
+      .withIndex("by_request_key", (q) => q.eq("requestKey", args.requestKey))
+      .take(20);
+    if (consumed.some((row) => row.usedAt !== undefined))
+      fail("invalid", "This authorization request was already completed.");
     const clientName = cleanLabel(args.clientName, 100, "client name");
     const redirectHost = cleanLabel(args.redirectHost, 255, "redirect host");
     const now = Date.now();
@@ -44,10 +58,22 @@ export const approve = mutation({
       const agent = await ctx.db.get(args.agentId);
       if (!agent || agent.kind !== "agent" || agent.controllerId !== person._id)
         fail("not_found", "Agent not found.");
+      // Continuity comes from the client identity, never from its display name.
+      const sameClient = await ctx.db
+        .query("connections")
+        .withIndex("by_agent_and_client_and_revoked_at", (q) =>
+          q.eq("agentId", agent._id).eq("clientId", args.clientId),
+        )
+        .first();
+      if (!sameClient && args.transfer !== true)
+        fail(
+          "invalid",
+          "This app is not the one this agent was connected with. Confirm the transfer to reuse it.",
+        );
       agentId = agent._id;
       await ctx.db.patch(agentId, {
         disabledAt: undefined,
-        ...(args.autoShareRole ? { autoShareRole: args.autoShareRole } : {}),
+        autoShareRole: args.autoShareRole ?? undefined,
       });
     } else {
       agentId = await ctx.db.insert("principals", {
@@ -60,25 +86,35 @@ export const approve = mutation({
         ...(args.autoShareRole ? { autoShareRole: args.autoShareRole } : {}),
       });
     }
-    for (const { notebookId, role } of args.notebooks) {
+    const chosen = new Map(args.notebooks.map((n) => [n.notebookId, n.role]));
+    for (const notebookId of chosen.keys()) {
       const notebook = await ctx.db.get(notebookId);
       if (!notebook || notebook.ownerId !== person._id)
         fail("denied", "You can only share notebooks you own.");
-      const existing = await ctx.db
-        .query("notebookMembers")
-        .withIndex("by_notebook_and_principal", (q) =>
-          q.eq("notebookId", notebookId).eq("principalId", agentId),
-        )
-        .unique();
-      if (existing) await ctx.db.patch(existing._id, { role });
-      else
-        await ctx.db.insert("notebookMembers", {
-          notebookId,
-          principalId: agentId,
-          role,
-          grantedBy: person._id,
-          createdAt: now,
-        });
+    }
+    // Memberships in this person's notebooks follow the submitted choice exactly.
+    const current = await ctx.db
+      .query("notebookMembers")
+      .withIndex("by_principal", (q) => q.eq("principalId", agentId))
+      .take(500);
+    for (const member of current) {
+      const notebook = await ctx.db.get(member.notebookId);
+      if (!notebook || notebook.ownerId !== person._id) continue;
+      const choice = chosen.get(member.notebookId) ?? "none";
+      if (choice === "none") await ctx.db.delete(member._id);
+      else if (choice !== member.role)
+        await ctx.db.patch(member._id, { role: choice });
+      chosen.delete(member.notebookId);
+    }
+    for (const [notebookId, choice] of chosen) {
+      if (choice === "none") continue;
+      await ctx.db.insert("notebookMembers", {
+        notebookId,
+        principalId: agentId,
+        role: choice,
+        grantedBy: person._id,
+        createdAt: now,
+      });
     }
     const connectionId = await ctx.db.insert("connections", {
       agentId,
@@ -122,22 +158,31 @@ export const redeem = mutation({
       row.requestKey !== args.requestKey
     )
       fail("invalid", "This approval is no longer valid.");
+    // One authorization request completes at most once, whichever approval arrives first.
+    const siblings = await ctx.db
+      .query("connectionApprovals")
+      .withIndex("by_request_key", (q) => q.eq("requestKey", args.requestKey))
+      .take(20);
+    if (siblings.some((other) => other.usedAt !== undefined))
+      fail("invalid", "This approval is no longer valid.");
     const now = Date.now();
-    await ctx.db.patch(row._id, { usedAt: now });
+    for (const other of siblings)
+      await ctx.db.patch(other._id, { usedAt: now });
     const connection = await ctx.db.get(row.connectionId);
     if (!connection || connection.revokedAt !== undefined)
       fail("invalid", "This approval is no longer valid.");
-    // Re-authorizing replaces the client's earlier grant; retire its old connections.
-    const earlier = await ctx.db
+    // Re-authorizing replaces the client's earlier grant; retire its active connections.
+    const active = await ctx.db
       .query("connections")
-      .withIndex("by_agent", (q) => q.eq("agentId", connection.agentId))
-      .take(100);
-    for (const old of earlier)
-      if (
-        old._id !== connection._id &&
-        old.clientId === connection.clientId &&
-        old.revokedAt === undefined
+      .withIndex("by_agent_and_client_and_revoked_at", (q) =>
+        q
+          .eq("agentId", connection.agentId)
+          .eq("clientId", connection.clientId)
+          .eq("revokedAt", undefined),
       )
+      .take(100);
+    for (const old of active)
+      if (old._id !== connection._id)
         await ctx.db.patch(old._id, { revokedAt: now });
     return {
       connectionId: connection._id,
@@ -161,6 +206,7 @@ export const mine = query({
       connections: v.array(
         v.object({
           id: v.id("connections"),
+          clientId: v.string(),
           clientName: v.string(),
           redirectHost: v.string(),
           createdAt: v.number(),
@@ -170,6 +216,7 @@ export const mine = query({
       notebooks: v.array(
         v.object({ notebookId: v.id("notebooks"), name: v.string(), role }),
       ),
+      noteGrants: v.number(),
     }),
   ),
   handler: async (ctx) => {
@@ -200,8 +247,13 @@ export const mine = query({
             role: member.role,
           });
       }
+      const grants = await ctx.db
+        .query("noteMembers")
+        .withIndex("by_principal", (q) => q.eq("principalId", agent._id))
+        .take(500);
       result.push({
         agentId: agent._id,
+        noteGrants: grants.filter((g) => g.role !== "none").length,
         name: agent.name,
         clientName: agent.clientName ?? null,
         delegations: agent.delegations ?? [],
@@ -209,6 +261,7 @@ export const mine = query({
         disabled: agent.disabledAt !== undefined,
         connections: connections.map((c) => ({
           id: c._id,
+          clientId: c.clientId,
           clientName: c.clientName,
           redirectHost: c.redirectHost,
           createdAt: c.createdAt,

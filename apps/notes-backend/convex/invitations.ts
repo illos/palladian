@@ -1,6 +1,6 @@
 import { betterAuth } from "better-auth/minimal";
 import { ConvexError, v } from "convex/values";
-import { internal } from "./_generated/api";
+import { components, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   action,
@@ -219,7 +219,7 @@ export const preview = query({
 
 export const claim = internalMutation({
   args: { tokenHash: v.string(), now: v.number() },
-  returns: v.object({ email: v.string() }),
+  returns: v.object({ email: v.string(), claim: v.string() }),
   handler: async (ctx, args) => {
     const invitation = await ctx.db
       .query("invitations")
@@ -253,39 +253,71 @@ export const claim = internalMutation({
         message:
           "An account already exists for this email. Sign in, then open the invitation.",
       });
-    await ctx.db.patch(invitation._id, { claimedAt: args.now });
-    return { email: invitation.email };
+    const claim = newToken();
+    await ctx.db.patch(invitation._id, {
+      claimedAt: args.now,
+      claimToken: claim,
+    });
+    return { email: invitation.email, claim };
   },
 });
 
 export const unclaim = internalMutation({
-  args: { tokenHash: v.string() },
+  args: { tokenHash: v.string(), claim: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
     const invitation = await ctx.db
       .query("invitations")
       .withIndex("by_token", (q) => q.eq("tokenHash", args.tokenHash))
       .unique();
-    if (invitation && invitation.acceptedAt === undefined)
-      await ctx.db.patch(invitation._id, { claimedAt: undefined });
+    if (
+      invitation &&
+      invitation.acceptedAt === undefined &&
+      invitation.claimToken === args.claim
+    )
+      await ctx.db.patch(invitation._id, {
+        claimedAt: undefined,
+        claimToken: undefined,
+      });
     return null;
   },
 });
 
 export const complete = internalMutation({
-  args: { tokenHash: v.string(), authUserId: v.string(), name: v.string() },
+  args: {
+    tokenHash: v.string(),
+    claim: v.string(),
+    authUserId: v.string(),
+    name: v.string(),
+  },
   returns: v.null(),
   handler: async (ctx, args) => {
+    const now = Date.now();
     const invitation = await ctx.db
       .query("invitations")
       .withIndex("by_token", (q) => q.eq("tokenHash", args.tokenHash))
       .unique();
-    if (!invitation || invitation.acceptedAt !== undefined)
+    // Revalidate at commit: revocation or expiry during account creation wins.
+    if (
+      !invitation ||
+      invitation.acceptedAt !== undefined ||
+      invitation.revokedAt !== undefined ||
+      invitation.expiresAt <= now ||
+      invitation.claimToken !== args.claim
+    )
       throw new ConvexError({
         code: "invalid",
         message: "This invitation is no longer valid.",
       });
-    const now = Date.now();
+    const taken = await ctx.db
+      .query("principals")
+      .withIndex("by_email", (q) => q.eq("email", invitation.email))
+      .unique();
+    if (taken)
+      throw new ConvexError({
+        code: "conflict",
+        message: "An account already exists for this email.",
+      });
     const principalId = await ctx.db.insert("principals", {
       kind: "human",
       name: args.name,
@@ -304,6 +336,7 @@ export const complete = internalMutation({
     await ctx.db.patch(invitation._id, {
       acceptedAt: now,
       acceptedBy: principalId,
+      claimToken: undefined,
     });
     await applyGrant(ctx, invitation, principalId);
     return null;
@@ -320,13 +353,11 @@ export const accept = action({
     if (args.token.length < 20 || args.token.length > 100)
       fail("invalid", "This invitation is no longer valid.");
     const tokenHash = await hashToken(args.token);
-    const { email }: { email: string } = await ctx.runMutation(
-      internal.invitations.claim,
-      {
+    const { email, claim }: { email: string; claim: string } =
+      await ctx.runMutation(internal.invitations.claim, {
         tokenHash,
         now: Date.now(),
-      },
-    );
+      });
     let authUserId: string;
     try {
       const options = authOptions(ctx);
@@ -343,18 +374,36 @@ export const accept = action({
       });
       authUserId = result.user.id;
     } catch (error) {
-      await ctx.runMutation(internal.invitations.unclaim, { tokenHash });
+      await ctx.runMutation(internal.invitations.unclaim, { tokenHash, claim });
       const message =
         error instanceof Error && /password/i.test(error.message)
           ? "Choose a password of at least 12 characters."
           : "The account could not be created.";
       fail("invalid", message);
     }
-    await ctx.runMutation(internal.invitations.complete, {
-      tokenHash,
-      authUserId,
-      name,
-    });
+    try {
+      await ctx.runMutation(internal.invitations.complete, {
+        tokenHash,
+        claim,
+        authUserId,
+        name,
+      });
+    } catch (error) {
+      // The invitation stopped being valid while the login was created: remove
+      // that login so it cannot be used and the email stays free.
+      await ctx.runMutation(components.betterAuth.adapter.deleteMany, {
+        input: {
+          model: "account",
+          where: [{ field: "userId", value: authUserId }],
+        },
+        paginationOpts: { numItems: 20, cursor: null },
+      });
+      await ctx.runMutation(components.betterAuth.adapter.deleteOne, {
+        input: { model: "user", where: [{ field: "_id", value: authUserId }] },
+      });
+      await ctx.runMutation(internal.invitations.unclaim, { tokenHash, claim });
+      throw error;
+    }
     return { email };
   },
 });

@@ -284,3 +284,64 @@ test("stored documents are validated", () => {
     ),
   );
 });
+
+test("stored and submitted documents reject unsafe attributes", async () => {
+  const { UnsafeDocumentError } = await import("../src/index.ts");
+  const link = notesSchema.marks.link!.create({ href: "javascript:alert(1)" });
+  const unsafeLink = notesSchema.topNodeType.create(
+    null,
+    notesSchema.nodes.paragraph!.create(
+      { id: "p" },
+      notesSchema.text("x", [link]),
+    ),
+  );
+  assert.throws(
+    () => parseStoredDoc(JSON.stringify(unsafeLink.toJSON())),
+    UnsafeDocumentError,
+  );
+  const httpImage = notesSchema.topNodeType.create(null, [
+    notesSchema.nodes.image!.create({
+      id: "i",
+      src: "http://example.test/a.png",
+    }),
+  ]);
+  assert.throws(
+    () => parseStoredDoc(JSON.stringify(httpImage.toJSON())),
+    UnsafeDocumentError,
+  );
+  const badLevel = notesSchema.topNodeType.create(null, [
+    notesSchema.nodes.heading!.create(
+      { id: "h", level: 9 },
+      notesSchema.text("x"),
+    ),
+  ]);
+  assert.throws(
+    () => parseStoredDoc(JSON.stringify(badLevel.toJSON())),
+    UnsafeDocumentError,
+  );
+  const odd = markdownToDoc("```{.python}\ncode\n```");
+  assert.equal(odd.child(0).attrs.language, ".python");
+});
+
+test("replacing a block separator merges the neighbouring blocks", () => {
+  const tr = applyEdits(markdownToDoc("one\n\ntwo"), [
+    { type: "replace_text", old_text: "\n\n", new_text: " " },
+  ]);
+  assert.equal(docToMarkdown(tr.doc), "one two");
+  const split = applyEdits(markdownToDoc("one two"), [
+    { type: "replace_text", old_text: " ", new_text: "\n\n" },
+  ]);
+  assert.equal(docToMarkdown(split.doc), "one\n\ntwo");
+});
+
+test("diffStep turns one version into another", async () => {
+  const { diffStep } = await import("../src/index.ts");
+  const a = markdownToDoc("Title\n\nFirst paragraph\n\n- item");
+  const b = applyEdits(a, [
+    { type: "replace_text", old_text: "First", new_text: "Changed" },
+    { type: "append", markdown: "More" },
+  ]).doc;
+  const step = diffStep(a, b)!;
+  assert.ok(step.apply(a).doc!.eq(b));
+  assert.equal(diffStep(a, a), null);
+});

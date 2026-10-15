@@ -161,7 +161,12 @@ const parser = new MarkdownParser(notesSchema, tokenizer, {
   fence: {
     block: "code_block",
     getAttrs: (tok) => ({
-      language: (tok.info || "").trim().split(/\s+/)[0]?.slice(0, 40) ?? "",
+      language:
+        (tok.info || "")
+          .trim()
+          .split(/\s+/)[0]
+          ?.replace(/[^\w+#.-]/g, "")
+          .slice(0, 40) ?? "",
     }),
     noCloseToken: true,
   },

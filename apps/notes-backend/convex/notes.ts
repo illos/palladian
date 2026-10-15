@@ -96,12 +96,18 @@ export const create = mutation({
     doc: v.string(),
     deviceTime: v.optional(v.number()),
   },
-  returns: v.object({ noteId: v.id("notes"), revision: v.number() }),
+  returns: v.object({
+    noteId: v.id("notes"),
+    revision: v.number(),
+    replayed: v.boolean(),
+  }),
   handler: async (ctx, args) => {
     const actor = await requirePrincipal(ctx);
     if (!args.clientKey || args.clientKey.length > 64)
       fail("invalid", "Invalid client key.");
-    // A retried creation returns the note it already created.
+    // A retried creation returns the note it already created, if the caller can
+    // still open it. The original document stands; later content must be sent
+    // as edits, so callers compare before treating local work as saved.
     const existing = await ctx.db
       .query("notes")
       .withIndex("by_creator_and_client_key", (q) =>
@@ -109,8 +115,14 @@ export const create = mutation({
       )
       .unique();
     if (existing) {
+      if (!(await noteRole(ctx, actor, existing)))
+        fail("not_found", "Note not found.");
       const content = await getContent(ctx, existing._id);
-      return { noteId: existing._id, revision: content.revision };
+      return {
+        noteId: existing._id,
+        revision: content.revision,
+        replayed: true,
+      };
     }
     const notebook = await destination(ctx, actor, args.notebookId);
     const noteId = await createNoteRecord(ctx, {
@@ -120,7 +132,7 @@ export const create = mutation({
       clientKey: args.clientKey,
       ...(args.deviceTime !== undefined ? { deviceTime: args.deviceTime } : {}),
     });
-    return { noteId, revision: 0 };
+    return { noteId, revision: 0, replayed: false };
   },
 });
 
@@ -147,8 +159,9 @@ export const createFromMarkdown = mutation({
     const prior = await receiptFor(ctx, actor, args.requestId, digest);
     if (prior) {
       const note = await ctx.db.get(prior.noteId);
-      if (!note)
-        fail("not_found", "The note created by this request was deleted.");
+      // Replays reveal nothing the caller can no longer open.
+      if (!note || !(await noteRole(ctx, actor, note)))
+        fail("not_found", "The note created by this request is not available.");
       return {
         noteId: note._id,
         notebookId: note.notebookId,

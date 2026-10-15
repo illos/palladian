@@ -486,6 +486,7 @@ describe("agents", () => {
       redirectHost: "claude.ai",
       agentName: "Claude",
       notebooks: [{ notebookId: owner.notebookId, role: "edit" }],
+      autoShareRole: null,
     });
     await expect(
       t.mutation(api.connections.redeem, {
@@ -659,7 +660,7 @@ describe("invitations", () => {
     if (invited.kind !== "invited") throw new Error("expected invitation");
     const { hashToken } = await import("../convex/invitations");
     const tokenHash = await hashToken(invited.token);
-    await t.mutation(internal.invitations.claim, {
+    const { claim } = await t.mutation(internal.invitations.claim, {
       tokenHash,
       now: Date.now(),
     });
@@ -668,6 +669,7 @@ describe("invitations", () => {
     ).rejects.toThrow(/being accepted/);
     await t.mutation(internal.invitations.complete, {
       tokenHash,
+      claim,
       authUserId: "auth-user",
       name: "Nia",
     });
@@ -855,6 +857,7 @@ describe("agent hardening", () => {
         agentName: "Claude",
         ...(agentId ? { agentId } : {}),
         notebooks: [{ notebookId: owner.notebookId, role: "read" }],
+        autoShareRole: null,
       });
     const first = await approve();
     const approvals = await t.run((ctx) =>
@@ -892,5 +895,381 @@ describe("agent hardening", () => {
         edits: [{ type: "replace_all", markdown: "B" }],
       }),
     ).rejects.toThrow(/expected_revision/);
+  });
+});
+
+describe("review regressions", () => {
+  test("unsafe attributes are rejected on creation and in steps", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const link = notesSchema.marks.link!.create({
+      href: "javascript:alert(1)",
+    });
+    const unsafe = notesSchema.topNodeType.create(
+      null,
+      notesSchema.nodes.paragraph!.create(
+        { id: "p" },
+        notesSchema.text("click", [link]),
+      ),
+    );
+    await expect(
+      owner.as.mutation(api.notes.create, {
+        clientKey: "unsafe",
+        doc: JSON.stringify(unsafe.toJSON()),
+      }),
+    ).rejects.toThrow(/not valid/);
+    const { noteId } = await owner.as.mutation(api.notes.create, {
+      clientKey: "safe",
+      doc: docJson("Safe"),
+    });
+    const content = (await owner.as.query(api.notes.content, { noteId }))!;
+    const steps = await stepsFor(content.doc, (tr) =>
+      tr.insert(
+        tr.doc.content.size,
+        notesSchema.nodes.image!.create({
+          id: "img",
+          src: "http://example.test/i",
+        }),
+      ),
+    );
+    await expect(
+      owner.as.mutation(api.notes.push, {
+        noteId,
+        revision: 0,
+        steps,
+        clientId: "c",
+      }),
+    ).rejects.toThrow(/unsafe/);
+    expect(
+      (await owner.as.query(api.notes.content, { noteId }))!.revision,
+    ).toBe(0);
+  });
+
+  test("creation replays reveal nothing after access is lost", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const editor = await human(t, "Bo");
+    await share(t, owner.notebookId, editor.id, "edit", owner.id);
+    const args = {
+      notebookId: owner.notebookId,
+      markdown: "Original",
+      requestId: "replay",
+    };
+    const { noteId } = await editor.as.mutation(
+      api.notes.createFromMarkdown,
+      args,
+    );
+    const native = await editor.as.mutation(api.notes.create, {
+      notebookId: owner.notebookId,
+      clientKey: "native",
+      doc: docJson("Native"),
+    });
+    await owner.as.mutation(api.sharing.setNotebookMember, {
+      notebookId: owner.notebookId,
+      principalId: editor.id,
+      role: null,
+    });
+    await owner.as.mutation(api.notes.edit, {
+      noteId,
+      edits: [{ type: "replace_all", markdown: "New private title" }],
+      expectedRevision: 0,
+    });
+    await expect(
+      editor.as.mutation(api.notes.createFromMarkdown, args),
+    ).rejects.toThrow(/not available/);
+    await expect(
+      editor.as.mutation(api.notes.create, {
+        clientKey: "native",
+        doc: docJson("Native"),
+      }),
+    ).rejects.toThrow(/not found/);
+    expect(native.replayed).toBe(false);
+  });
+
+  test("a changed creation retry is reported as a replay of the original", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const first = await owner.as.mutation(api.notes.create, {
+      clientKey: "lost",
+      doc: docJson("First version"),
+    });
+    const retry = await owner.as.mutation(api.notes.create, {
+      clientKey: "lost",
+      doc: docJson("Later typing"),
+    });
+    expect(retry).toEqual({
+      noteId: first.noteId,
+      revision: 0,
+      replayed: true,
+    });
+    expect(
+      (
+        await owner.as.query(api.notes.readMarkdown, {
+          noteId: first.noteId,
+          format: "markdown",
+        })
+      ).markdown,
+    ).toBe("First version");
+  });
+
+  const consent = (
+    owner: Awaited<ReturnType<typeof human>>,
+    extra: Record<string, unknown>,
+  ) =>
+    owner.as.mutation(api.connections.approve, {
+      requestKey: "request-key-" + crypto.randomUUID(),
+      clientId: "client",
+      clientName: "Client",
+      redirectHost: "client.test",
+      agentName: "Agent",
+      notebooks: [],
+      autoShareRole: null,
+      ...extra,
+    } as never);
+
+  test("reconnecting with No access removes access and future sharing", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const first = await consent(owner, {
+      notebooks: [{ notebookId: owner.notebookId, role: "edit" }],
+      autoShareRole: "edit",
+    });
+    await consent(owner, {
+      agentId: first.agentId,
+      notebooks: [{ notebookId: owner.notebookId, role: "none" }],
+      autoShareRole: null,
+    });
+    const [info] = await owner.as.query(api.connections.mine, {});
+    expect(info!.notebooks).toEqual([]);
+    expect(info!.autoShareRole).toBeNull();
+    await owner.as.mutation(api.notebooks.create, { name: "Later" });
+    expect(
+      (await owner.as.query(api.connections.mine, {}))[0]!.notebooks,
+    ).toEqual([]);
+  });
+
+  test("an existing agent is only reused by the same client unless transferred", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const first = await consent(owner, {
+      notebooks: [{ notebookId: owner.notebookId, role: "edit" }],
+    });
+    await expect(
+      consent(owner, {
+        clientId: "impostor",
+        clientName: "Client",
+        agentId: first.agentId,
+      }),
+    ).rejects.toThrow(/transfer/);
+    const moved = await consent(owner, {
+      clientId: "new-install",
+      agentId: first.agentId,
+      transfer: true,
+    });
+    expect(moved.agentId).toBe(first.agentId);
+  });
+
+  test("one authorization request completes once", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const requestKey = "request-key-shared-0001";
+    const a = await consent(owner, { requestKey });
+    const b = await consent(owner, { requestKey });
+    await t.mutation(api.connections.redeem, { code: a.code, requestKey });
+    await expect(
+      t.mutation(api.connections.redeem, { code: b.code, requestKey }),
+    ).rejects.toThrow(/no longer valid/);
+    await expect(consent(owner, { requestKey })).rejects.toThrow(
+      /already completed/,
+    );
+  });
+
+  test("re-authorizing retires the previous connection beyond old history", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const first = await consent(owner, {
+      notebooks: [{ notebookId: owner.notebookId, role: "read" }],
+    });
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 120; i++)
+        await ctx.db.insert("connections", {
+          agentId: first.agentId,
+          controllerId: owner.id,
+          clientId: "client",
+          clientName: "Client",
+          redirectHost: "client.test",
+          createdAt: 0,
+          revokedAt: 1,
+        });
+    });
+    const approvals = async () =>
+      t.run((ctx) => ctx.db.query("connectionApprovals").collect());
+    const firstKey = (await approvals())[0]!.requestKey;
+    const firstRedeem = await t.mutation(api.connections.redeem, {
+      code: first.code,
+      requestKey: firstKey,
+    });
+    const second = await consent(owner, {
+      agentId: first.agentId,
+      notebooks: [{ notebookId: owner.notebookId, role: "read" }],
+    });
+    const secondKey = (await approvals()).find(
+      (row) => row.usedAt === undefined,
+    )!.requestKey;
+    await t.mutation(api.connections.redeem, {
+      code: second.code,
+      requestKey: secondKey,
+    });
+    const old = t.withIdentity({
+      issuer: AGENT_ISSUER,
+      subject: first.agentId,
+      cid: firstRedeem.connectionId,
+    });
+    expect(await old.query(api.library.notebooks, {})).toEqual([]);
+  });
+
+  test("revoked or reclaimed invitations cannot complete", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const invited = await owner.as.mutation(api.invitations.create, {
+      email: "new@example.com",
+      notebookId: owner.notebookId,
+      role: "edit",
+    });
+    if (invited.kind !== "invited") throw new Error("fixture");
+    const { hashToken } = await import("../convex/invitations");
+    const tokenHash = await hashToken(invited.token);
+    const { claim } = await t.mutation(internal.invitations.claim, {
+      tokenHash,
+      now: Date.now(),
+    });
+    await expect(
+      t.mutation(internal.invitations.complete, {
+        tokenHash,
+        claim: "wrong",
+        authUserId: "x",
+        name: "New",
+      }),
+    ).rejects.toThrow(/no longer valid/);
+    const [pending] = await owner.as.query(api.invitations.pending, {});
+    await owner.as.mutation(api.invitations.revoke, {
+      invitationId: pending!.id,
+    });
+    await expect(
+      t.mutation(internal.invitations.complete, {
+        tokenHash,
+        claim,
+        authUserId: "x",
+        name: "New",
+      }),
+    ).rejects.toThrow(/no longer valid/);
+    const principal = await t.run((ctx) =>
+      ctx.db
+        .query("principals")
+        .withIndex("by_email", (q) => q.eq("email", "new@example.com"))
+        .unique(),
+    );
+    expect(principal).toBeNull();
+  });
+
+  test("history rebuilds exact revisions inside a large batch", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const { noteId } = await owner.as.mutation(api.notes.create, {
+      clientKey: "large",
+      doc: docJson("Initial"),
+    });
+    const content = (await owner.as.query(api.notes.content, { noteId }))!;
+    const steps = await stepsFor(content.doc, (tr) =>
+      tr.insert(
+        tr.doc.content.size,
+        Array.from({ length: 700 }, () =>
+          notesSchema.nodes.paragraph!.create(null, notesSchema.text("x")),
+        ),
+      ),
+    );
+    const result = await owner.as.mutation(api.notes.push, {
+      noteId,
+      revision: 0,
+      steps,
+      clientId: "c",
+    });
+    expect(result.revision).toBe(701);
+    const { Step } = await import("prosemirror-transform");
+    const log = await t.run((ctx) =>
+      ctx.db
+        .query("noteSteps")
+        .withIndex("by_note_and_revision", (q) =>
+          q.eq("noteId", noteId).lte("revision", 650),
+        )
+        .collect(),
+    );
+    let expected = notesSchema.nodeFromJSON(JSON.parse(content.doc));
+    for (const row of log)
+      expected = Step.fromJSON(notesSchema, JSON.parse(row.step)).apply(
+        expected,
+      ).doc!;
+    const historical = await owner.as.query(api.history.read, {
+      noteId,
+      revision: 650,
+    });
+    expect(JSON.parse(historical.doc)).toEqual(expected.toJSON());
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+  });
+
+  test("a moved note updates its notebook in the source feed", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const archive = await owner.as.mutation(api.notebooks.create, {
+      name: "Archive",
+    });
+    const { noteId } = await owner.as.mutation(api.notes.createFromMarkdown, {
+      markdown: "Moving",
+    });
+    const before = await owner.as.query(api.library.changes, {
+      notebookId: owner.notebookId,
+      after: 0,
+    });
+    if (!before.access) throw new Error("no access");
+    await owner.as.mutation(api.lifecycle.move, {
+      noteId,
+      notebookId: archive,
+    });
+    const after = await owner.as.query(api.library.changes, {
+      notebookId: owner.notebookId,
+      after: before.cursor,
+    });
+    expect(after.access && after.removed).toEqual([]);
+    expect(after.access && after.notes[0]!.notebookId).toBe(archive);
+  });
+
+  test("recent notes keep paging past notes the caller cannot see", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const member = await human(t, "Bo");
+    await share(t, owner.notebookId, member.id, "read", owner.id);
+    const visible = await owner.as.mutation(api.notes.createFromMarkdown, {
+      markdown: "Visible old note",
+    });
+    for (let i = 0; i < 6; i++) {
+      vi.advanceTimersByTime(1000);
+      const { noteId } = await owner.as.mutation(api.notes.createFromMarkdown, {
+        markdown: "Hidden " + i,
+      });
+      await owner.as.mutation(api.sharing.setNoteRestricted, {
+        noteId,
+        restricted: true,
+      });
+    }
+    let page = await member.as.query(api.library.recent, { limit: 1 });
+    const seen = [...page.notes];
+    while (page.nextBefore !== null && seen.length === 0) {
+      page = await member.as.query(api.library.recent, {
+        limit: 1,
+        before: page.nextBefore,
+      });
+      seen.push(...page.notes);
+    }
+    expect(seen.map((n) => n.id)).toEqual([visible.noteId]);
   });
 });

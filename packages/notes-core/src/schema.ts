@@ -188,7 +188,8 @@ const nodes: Record<string, NodeSpec> = {
       "img",
       {
         ...blockAttrs(node),
-        src: node.attrs.src,
+        // Never render a source the schema would not accept.
+        ...(isSafeImageSource(node.attrs.src) ? { src: node.attrs.src } : {}),
         alt: node.attrs.alt,
         title: node.attrs.title,
       },
@@ -222,7 +223,11 @@ const marks: Record<string, MarkSpec> = {
     ],
     toDOM: (mark): DOMOutputSpec => [
       "a",
-      { href: mark.attrs.href, title: mark.attrs.title, rel: "noopener" },
+      {
+        ...(isSafeHref(mark.attrs.href) ? { href: mark.attrs.href } : {}),
+        title: mark.attrs.title,
+        rel: "noopener noreferrer",
+      },
       0,
     ],
   },
@@ -283,4 +288,71 @@ export type NotesSchema = typeof notesSchema;
 /** Node types that carry a stable block identity. */
 export function hasBlockId(node: ProseMirrorNode) {
   return node.type.spec.attrs?.id !== undefined;
+}
+
+const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const LANGUAGE_PATTERN = /^[\w+#.-]{0,40}$/;
+function optionalText(value: unknown, max: number) {
+  return value === null || (typeof value === "string" && value.length <= max);
+}
+
+export class UnsafeDocumentError extends Error {}
+
+/**
+ * Attribute validation for documents arriving from clients as JSON or steps.
+ * `Node.check()` validates structure only; this enforces the same link and
+ * image rules as parsing, and sane values for every other attribute.
+ */
+export function assertSafeDocument(doc: ProseMirrorNode): void {
+  const fail = (message: string): never => {
+    throw new UnsafeDocumentError(message);
+  };
+  doc.descendants((node) => {
+    for (const mark of node.marks) {
+      if (mark.type.name !== "link") continue;
+      if (!isSafeHref(mark.attrs.href))
+        fail("Links must use http, https or mailto.");
+      if (!optionalText(mark.attrs.title, 500)) fail("Invalid link title.");
+    }
+    if (hasBlockId(node)) {
+      const id = node.attrs.id;
+      if (id !== null && (typeof id !== "string" || !ID_PATTERN.test(id)))
+        fail("Invalid block identity.");
+    }
+    switch (node.type.name) {
+      case "image":
+        if (!isSafeImageSource(node.attrs.src))
+          fail("Images must use https or an attachment reference.");
+        if (
+          !optionalText(node.attrs.alt, 1000) ||
+          !optionalText(node.attrs.title, 500)
+        )
+          fail("Invalid image text.");
+        break;
+      case "heading":
+        if (![1, 2, 3].includes(node.attrs.level))
+          fail("Invalid heading level.");
+        break;
+      case "ordered_list":
+        if (
+          !Number.isSafeInteger(node.attrs.order) ||
+          node.attrs.order < 0 ||
+          node.attrs.order > 1_000_000
+        )
+          fail("Invalid list start.");
+        break;
+      case "task_item":
+        if (typeof node.attrs.checked !== "boolean")
+          fail("Invalid checklist state.");
+        break;
+      case "code_block":
+        if (
+          typeof node.attrs.language !== "string" ||
+          !LANGUAGE_PATTERN.test(node.attrs.language)
+        )
+          fail("Invalid code language.");
+        break;
+    }
+    return true;
+  });
 }

@@ -1,4 +1,5 @@
 import {
+  assertSafeDocument,
   assignBlockIds,
   blockIdProblems,
   deriveSummary,
@@ -151,30 +152,38 @@ export async function commitSteps(
   if (args.note.lifecycle !== "active")
     fail("trashed", "Restore this note from Trash before editing it.");
   let doc = parseStoredDoc(args.content.doc);
-  for (const step of args.steps) {
+  let revision = args.content.revision;
+  // Checkpoints land on every interval boundary, even inside a large batch, so
+  // any revision is rebuilt from at most one interval of steps.
+  const checkpoints: { revision: number; doc: ProseMirrorNode }[] = [];
+  const apply = (step: Step) => {
     const result = step.apply(doc);
     if (!result.doc)
       fail("invalid", result.failed ?? "A step could not be applied.");
     doc = result.doc;
-  }
+    if (++revision % CHECKPOINT_INTERVAL === 0)
+      checkpoints.push({ revision, doc });
+  };
+  for (const step of args.steps) apply(step);
   // Repair IDs after concurrent splits or pastes; clients receive the fix as steps.
   const repairs = blockIdProblems(doc)
     ? assignBlockIds(new Transform(doc)).steps
     : [];
-  for (const step of repairs) doc = step.apply(doc).doc!;
+  for (const step of repairs) apply(step);
   try {
     doc.check();
+    assertSafeDocument(doc);
   } catch {
-    fail("invalid", "The edit would produce an invalid note.");
+    fail("invalid", "The edit would produce an invalid or unsafe note.");
   }
   const json = serializeDoc(doc);
 
   const now = Date.now();
-  let revision = args.content.revision;
+  let stepRevision = args.content.revision;
   for (const step of args.steps)
     await ctx.db.insert("noteSteps", {
       noteId: args.note._id,
-      revision: ++revision,
+      revision: ++stepRevision,
       step: JSON.stringify(step.toJSON()),
       clientId: args.clientId,
       actorId: args.actor._id,
@@ -182,19 +191,19 @@ export async function commitSteps(
   for (const step of repairs)
     await ctx.db.insert("noteSteps", {
       noteId: args.note._id,
-      revision: ++revision,
+      revision: ++stepRevision,
       step: JSON.stringify(step.toJSON()),
       clientId: "server",
       actorId: args.actor._id,
     });
-  if (
-    Math.floor(revision / CHECKPOINT_INTERVAL) >
-    Math.floor(args.content.revision / CHECKPOINT_INTERVAL)
-  )
+  for (const checkpoint of checkpoints)
     await ctx.db.insert("noteCheckpoints", {
       noteId: args.note._id,
-      revision,
-      doc: json,
+      revision: checkpoint.revision,
+      doc:
+        checkpoint.revision === revision
+          ? json
+          : JSON.stringify(checkpoint.doc.toJSON()),
     });
   await ctx.db.patch(args.content._id, {
     doc: json,
@@ -252,19 +261,27 @@ export async function docAtRevision(
     .first();
   if (!checkpoint) fail("not_found", "That revision is not available.");
   let doc = parseStoredDoc(checkpoint.doc);
-  const steps = await ctx.db
-    .query("noteSteps")
-    .withIndex("by_note_and_revision", (q) =>
-      q
-        .eq("noteId", noteId)
-        .gt("revision", checkpoint.revision)
-        .lte("revision", revision),
-    )
-    .take(CHECKPOINT_INTERVAL + MAX_STEPS_PER_PUSH + 10);
-  for (const row of steps) {
-    const result = Step.fromJSON(notesSchema, JSON.parse(row.step)).apply(doc);
-    if (!result.doc) fail("invalid", "History could not be reconstructed.");
-    doc = result.doc;
+  let at = checkpoint.revision;
+  // Replay to exactly the requested revision, insisting on a continuous log.
+  while (at < revision) {
+    const page = await ctx.db
+      .query("noteSteps")
+      .withIndex("by_note_and_revision", (q) =>
+        q.eq("noteId", noteId).gt("revision", at).lte("revision", revision),
+      )
+      .take(STEP_PAGE);
+    if (!page.length)
+      fail("invalid", "History is incomplete for that revision.");
+    for (const row of page) {
+      if (row.revision !== at + 1)
+        fail("invalid", "History is incomplete for that revision.");
+      const result = Step.fromJSON(notesSchema, JSON.parse(row.step)).apply(
+        doc,
+      );
+      if (!result.doc) fail("invalid", "History could not be reconstructed.");
+      doc = result.doc;
+      at = row.revision;
+    }
   }
   return doc;
 }

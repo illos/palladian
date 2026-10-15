@@ -48,6 +48,11 @@ export default defineSchema({
     revokedAt: v.optional(v.number()),
   })
     .index("by_agent", ["agentId"])
+    .index("by_agent_and_client_and_revoked_at", [
+      "agentId",
+      "clientId",
+      "revokedAt",
+    ])
     .index("by_controller", ["controllerId"]),
 
   connectionApprovals: defineTable({
@@ -56,7 +61,9 @@ export default defineSchema({
     connectionId: v.id("connections"),
     expiresAt: v.number(),
     usedAt: v.optional(v.number()),
-  }).index("by_code", ["codeHash"]),
+  })
+    .index("by_code", ["codeHash"])
+    .index("by_request_key", ["requestKey"]),
 
   notebooks: defineTable({
     ownerId: v.id("principals"),
@@ -203,6 +210,8 @@ export default defineSchema({
     expiresAt: v.number(),
     createdAt: v.number(),
     claimedAt: v.optional(v.number()),
+    // Identifies the one account creation allowed to complete a claim.
+    claimToken: v.optional(v.string()),
     acceptedAt: v.optional(v.number()),
     acceptedBy: v.optional(v.id("principals")),
     revokedAt: v.optional(v.number()),
