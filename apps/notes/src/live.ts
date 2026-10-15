@@ -456,27 +456,7 @@ export class LiveController {
     if (!accountId || !this.state.ready || this.syncingDrafts) return;
     this.syncingDrafts = true;
     try {
-      for (const draft of await this.store.localDrafts(accountId)) {
-        if (this.openNotes.has(draft.id) || this.state.accountId !== accountId)
-          continue;
-        // The local ID is the creation key: retries return the same note.
-        const created = await this.client.mutation(api.notes.create, {
-          clientKey: draft.id.slice(0, 64),
-          doc: draft.document,
-          ...(draft.notebookId
-            ? { notebookId: draft.notebookId as Id<"notebooks"> }
-            : {}),
-          deviceTime: draft.updatedAt,
-        });
-        const fence = await this.store.captureFence(accountId);
-        // Adoption marks the draft created, so it is never created again.
-        await this.store.adoptServerId(
-          accountId,
-          draft.id,
-          created.noteId,
-          fence,
-        );
-      }
+      await this.createLocalDrafts(accountId);
       for (const draft of await this.store.adoptedDrafts(accountId)) {
         if (this.openNotes.has(draft.id) || this.state.accountId !== accountId)
           continue;
@@ -487,10 +467,36 @@ export class LiveController {
           /* this draft waits for the next sync; others continue */
         }
       }
+      // Reconciliation may have kept a conflicting version as a new draft.
+      await this.createLocalDrafts(accountId);
     } catch {
       /* retried on the next connection or close of the open draft */
     } finally {
       this.syncingDrafts = false;
+    }
+  }
+
+  private async createLocalDrafts(accountId: string) {
+    for (const draft of await this.store.localDrafts(accountId)) {
+      if (this.openNotes.has(draft.id) || this.state.accountId !== accountId)
+        continue;
+      // The local ID is the creation key: retries return the same note.
+      const created = await this.client.mutation(api.notes.create, {
+        clientKey: draft.id.slice(0, 64),
+        doc: draft.document,
+        ...(draft.notebookId
+          ? { notebookId: draft.notebookId as Id<"notebooks"> }
+          : {}),
+        deviceTime: draft.updatedAt,
+      });
+      const fence = await this.store.captureFence(accountId);
+      // Adoption marks the draft created, so it is never created again.
+      await this.store.adoptServerId(
+        accountId,
+        draft.id,
+        created.noteId,
+        fence,
+      );
     }
   }
 
@@ -502,6 +508,7 @@ export class LiveController {
    * since, and a fixed client ID makes resent steps recognizable if an earlier
    * send was accepted. The journal replaces the draft only if no newer typing
    * arrived meanwhile; otherwise the next sync starts from the newer draft.
+   * When no safe piecewise diff exists, both versions are kept as notes.
    */
   private async reconcileCreated(
     accountId: string,
@@ -539,6 +546,30 @@ export class LiveController {
       return;
     }
     const steps = diffSteps(base, local);
+    if (!steps) {
+      // Too different to merge piece by piece: rebasing one broad replacement
+      // would erase others' edits. Keep both: the note takes the server's
+      // version and the local content becomes a separate new note.
+      if (this.openNotes.has(noteId)) return;
+      const content = await this.client.query(api.notes.content, {
+        noteId: noteId as Id<"notes">,
+      });
+      if (!content || this.state.accountId !== accountId) return;
+      const fence = await this.store.captureFence(accountId);
+      await this.store.splitConflict(
+        draft,
+        "local-" + crypto.randomUUID().replace(/-/g, ""),
+        {
+          accountId,
+          id: noteId,
+          document: content.doc,
+          text: plainText(parseStoredDoc(content.doc)),
+          revision: content.revision,
+        },
+        fence,
+      );
+      return;
+    }
     if (!steps.length) return;
     const clientId = draft.clientId ?? crypto.randomUUID().replace(/-/g, "");
     const journal: Draft = {

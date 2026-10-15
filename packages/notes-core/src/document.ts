@@ -1,7 +1,9 @@
 import {
   Slice,
+  type Attrs,
   type Fragment,
   type Node as ProseMirrorNode,
+  type NodeType,
 } from "prosemirror-model";
 import {
   AddMarkStep,
@@ -137,12 +139,16 @@ export function contentKey(node: ProseMirrorNode | Fragment): string {
 
 type DiffOp =
   | { kind: "replace"; from: number; to: number; slice: Slice }
-  | { kind: "attrs"; pos: number; attrs: Record<string, unknown> };
+  | { kind: "attrs"; pos: number; attrs: Record<string, unknown> }
+  | { kind: "markup"; pos: number; type: NodeType; attrs: Attrs };
 
-const LCS_LIMIT = 4_000_000;
+/** More differences than can be aligned piece by piece. */
+class DiffBudgetExceeded extends Error {}
 
-/** Index pairs of a longest common subsequence, or null when too large. */
-function commonPairs(a: string[], b: string[]): [number, number][] | null {
+const MAX_EDITS = 2_000;
+
+/** Index pairs both sequences keep, from a shortest edit script. */
+function commonPairs(a: string[], b: string[]): [number, number][] {
   let head = 0;
   while (head < a.length && head < b.length && a[head] === b[head]) head++;
   let tail = 0;
@@ -152,61 +158,152 @@ function commonPairs(a: string[], b: string[]): [number, number][] | null {
     a[a.length - 1 - tail] === b[b.length - 1 - tail]
   )
     tail++;
-  const middle = middlePairs(
-    a.slice(head, a.length - tail),
-    b.slice(head, b.length - tail),
-  );
-  if (!middle) return null;
   const pairs: [number, number][] = [];
   for (let k = 0; k < head; k++) pairs.push([k, k]);
-  for (const [i, j] of middle) pairs.push([head + i, head + j]);
+  for (const [i, j] of editScript(
+    a.slice(head, a.length - tail),
+    b.slice(head, b.length - tail),
+  ))
+    pairs.push([head + i, head + j]);
   for (let k = tail; k > 0; k--) pairs.push([a.length - k, b.length - k]);
   return pairs;
 }
 
-function middlePairs(a: string[], b: string[]): [number, number][] | null {
+/**
+ * Myers' O((N+M)D) diff: cost grows with the number of differences, not the
+ * length, so a long paragraph with a few edits stays cheap. `trace[d]` holds
+ * the furthest x reached on each diagonal k (index k + d) after d edits.
+ */
+function editScript(a: string[], b: string[]): [number, number][] {
   const n = a.length;
   const m = b.length;
-  if (n * m > LCS_LIMIT) return null;
-  const table = new Uint32Array((n + 1) * (m + 1));
-  for (let i = n - 1; i >= 0; i--)
-    for (let j = m - 1; j >= 0; j--)
-      table[i * (m + 1) + j] =
-        a[i] === b[j]
-          ? table[(i + 1) * (m + 1) + j + 1]! + 1
-          : Math.max(
-              table[(i + 1) * (m + 1) + j]!,
-              table[i * (m + 1) + j + 1]!,
-            );
-  const pairs: [number, number][] = [];
-  let i = 0;
-  let j = 0;
-  while (i < n && j < m) {
-    if (a[i] === b[j]) {
-      pairs.push([i, j]);
-      i++;
-      j++;
-    } else if (table[(i + 1) * (m + 1) + j]! >= table[i * (m + 1) + j + 1]!)
-      i++;
-    else j++;
+  if (!n || !m) return [];
+  // The edit reaching diagonal k at step d: down from k + 1 or right from
+  // k - 1, whichever goes further while staying inside both sequences.
+  const choose = (prev: Int32Array, k: number, d: number) => {
+    const at = (kk: number) =>
+      kk < -(d - 1) || kk > d - 1 ? -1 : prev[kk + d - 1]!;
+    const down = at(k + 1);
+    const right = at(k - 1);
+    const viaDown = down >= 0 && down - k <= m ? down : -1;
+    const viaRight = right >= 0 && right + 1 <= n ? right + 1 : -1;
+    if (viaDown < 0 && viaRight < 0) return null;
+    return viaDown >= viaRight
+      ? { x: viaDown, from: k + 1 }
+      : { x: viaRight, from: k - 1 };
+  };
+  const trace: Int32Array[] = [];
+  for (let d = 0; ; d++) {
+    if (d > MAX_EDITS) throw new DiffBudgetExceeded();
+    const current = new Int32Array(2 * d + 1).fill(-1);
+    for (let k = -d; k <= d; k += 2) {
+      let x: number;
+      if (d === 0) x = 0;
+      else {
+        const step = choose(trace[d - 1]!, k, d);
+        if (!step) continue;
+        x = step.x;
+      }
+      let y = x - k;
+      if (y < 0 || y > m) continue;
+      while (x < n && y < m && a[x] === b[y]) {
+        x++;
+        y++;
+      }
+      current[k + d] = x;
+      if (x === n && y === m) {
+        trace.push(current);
+        return backtrack(trace, n, m, choose);
+      }
+    }
+    trace.push(current);
   }
-  return pairs;
 }
 
-/** One unit per inline position: a character with its marks, or an inline leaf. */
-function inlineUnits(node: ProseMirrorNode): string[] {
-  const units: string[] = [];
+function backtrack(
+  trace: Int32Array[],
+  n: number,
+  m: number,
+  choose: (
+    prev: Int32Array,
+    k: number,
+    d: number,
+  ) => { x: number; from: number } | null,
+): [number, number][] {
+  const pairs: [number, number][] = [];
+  let x = n;
+  let y = m;
+  for (let d = trace.length - 1; d > 0; d--) {
+    const k = x - y;
+    const step = choose(trace[d - 1]!, k, d)!;
+    while (x > step.x) {
+      x--;
+      y--;
+      pairs.push([x, y]);
+    }
+    x = trace[d - 1]![step.from + d - 1]!;
+    y = x - step.from;
+  }
+  while (x > 0 && y > 0) {
+    x--;
+    y--;
+    pairs.push([x, y]);
+  }
+  return pairs.reverse();
+}
+
+/**
+ * One unit per inline position: a character (a whole code point, so surrogate
+ * pairs are never split) with its marks, or an inline leaf. Sizes are in
+ * ProseMirror positions, which count UTF-16 code units.
+ */
+function inlineUnits(node: ProseMirrorNode) {
+  const keys: string[] = [];
+  const offsets: number[] = [0];
   node.forEach((child) => {
     const marks = JSON.stringify(child.marks.map((mark) => mark.toJSON()));
-    if (child.isText) for (const char of child.text!) units.push(char + marks);
-    else units.push("\u0000" + contentKey(child) + marks);
+    if (child.isText)
+      for (const char of child.text!) {
+        keys.push(char + marks);
+        offsets.push(offsets.at(-1)! + char.length);
+      }
+    else {
+      keys.push("\u0000" + contentKey(child) + marks);
+      offsets.push(offsets.at(-1)! + child.nodeSize);
+    }
   });
-  return units;
+  return { keys, offsets };
 }
 
 function sameAttrs(a: ProseMirrorNode, b: ProseMirrorNode) {
   const strip = ({ id: _id, ...rest }: Record<string, unknown>) => rest;
   return JSON.stringify(strip(a.attrs)) === JSON.stringify(strip(b.attrs));
+}
+
+/** Replace each unmatched gap between kept pairs with the target's content. */
+function replaceGaps(
+  pairs: [number, number][],
+  lengthA: number,
+  lengthB: number,
+  offsetsA: number[],
+  offsetsB: number[],
+  target: ProseMirrorNode,
+  ops: DiffOp[],
+  onGap?: (i: number, pi: number, j: number, pj: number) => boolean,
+) {
+  let i = 0;
+  let j = 0;
+  for (const [pi, pj] of [...pairs, [lengthA, lengthB] as [number, number]]) {
+    if ((pi > i || pj > j) && !onGap?.(i, pi, j, pj))
+      ops.push({
+        kind: "replace",
+        from: offsetsA[i]!,
+        to: offsetsA[pi]!,
+        slice: target.slice(offsetsB[j]!, offsetsB[pj]!),
+      });
+    i = pi + 1;
+    j = pj + 1;
+  }
 }
 
 function diffInline(
@@ -219,32 +316,15 @@ function diffInline(
 ) {
   const unitsA = inlineUnits(a);
   const unitsB = inlineUnits(b);
-  const pairs = commonPairs(unitsA, unitsB);
-  if (!pairs) {
-    ops.push({
-      kind: "replace",
-      from: startA,
-      to: startA + a.content.size,
-      slice: target.slice(startB, startB + b.content.size),
-    });
-    return;
-  }
-  let i = 0;
-  let j = 0;
-  for (const [pi, pj] of [
-    ...pairs,
-    [unitsA.length, unitsB.length] as [number, number],
-  ]) {
-    if (pi > i || pj > j)
-      ops.push({
-        kind: "replace",
-        from: startA + i,
-        to: startA + pi,
-        slice: target.slice(startB + j, startB + pj),
-      });
-    i = pi + 1;
-    j = pj + 1;
-  }
+  replaceGaps(
+    commonPairs(unitsA.keys, unitsB.keys),
+    unitsA.keys.length,
+    unitsB.keys.length,
+    unitsA.offsets.map((offset) => startA + offset),
+    unitsB.offsets.map((offset) => startB + offset),
+    target,
+    ops,
+  );
 }
 
 function childOffsets(node: ProseMirrorNode, start: number) {
@@ -256,6 +336,13 @@ function childOffsets(node: ProseMirrorNode, start: number) {
   });
   offsets.push(pos);
   return offsets;
+}
+
+/** Blocks that can turn into each other while keeping their content. */
+function blockKind(node: ProseMirrorNode) {
+  if (node.isTextblock) return "textblock";
+  if (node.isLeaf) return "leaf:" + node.type.name;
+  return `${node.type.spec.content ?? ""}|${node.type.spec.group ?? ""}`;
 }
 
 function diffChildren(
@@ -272,41 +359,41 @@ function diffChildren(
   b.forEach((child) => childrenB.push(child));
   const offsetsA = childOffsets(a, startA);
   const offsetsB = childOffsets(b, startB);
-  const pairs =
-    commonPairs(childrenA.map(contentKey), childrenB.map(contentKey)) ?? [];
-  let i = 0;
-  let j = 0;
-  for (const [pi, pj] of [
-    ...pairs,
-    [childrenA.length, childrenB.length] as [number, number],
-  ]) {
-    const runA = childrenA.slice(i, pi);
-    const runB = childrenB.slice(j, pj);
-    if (
-      runA.length &&
-      runA.length === runB.length &&
-      runA.every((node, k) => node.type === runB[k]!.type)
-    )
-      runA.forEach((node, k) =>
+  // Identical blocks first; then, among the changed ones, blocks of the same
+  // kind are paired and diffed inside, so unchanged text in them survives.
+  replaceGaps(
+    commonPairs(childrenA.map(contentKey), childrenB.map(contentKey)),
+    childrenA.length,
+    childrenB.length,
+    offsetsA,
+    offsetsB,
+    target,
+    ops,
+    (i, pi, j, pj) => {
+      const runA = childrenA.slice(i, pi);
+      const runB = childrenB.slice(j, pj);
+      const kinds = commonPairs(runA.map(blockKind), runB.map(blockKind));
+      for (const [x, y] of kinds)
         diffNode(
-          node,
-          runB[k]!,
-          offsetsA[i + k]!,
-          offsetsB[j + k]!,
+          runA[x]!,
+          runB[y]!,
+          offsetsA[i + x]!,
+          offsetsB[j + y]!,
           target,
           ops,
-        ),
+        );
+      replaceGaps(
+        kinds,
+        runA.length,
+        runB.length,
+        offsetsA.slice(i, pi + 1),
+        offsetsB.slice(j, pj + 1),
+        target,
+        ops,
       );
-    else if (runA.length || runB.length)
-      ops.push({
-        kind: "replace",
-        from: offsetsA[i]!,
-        to: offsetsA[pi]!,
-        slice: target.slice(offsetsB[j]!, offsetsB[pj]!),
-      });
-    i = pi + 1;
-    j = pj + 1;
-  }
+      return true;
+    },
+  );
 }
 
 function diffNode(
@@ -317,40 +404,62 @@ function diffNode(
   target: ProseMirrorNode,
   ops: DiffOp[],
 ) {
-  if (!sameAttrs(a, b)) {
+  if (a.type !== b.type) {
+    const attrs: Attrs =
+      "id" in b.attrs && a.attrs.id !== undefined
+        ? { ...b.attrs, id: a.attrs.id }
+        : b.attrs;
+    ops.push({ kind: "markup", pos: posA, type: b.type, attrs });
+  } else if (!sameAttrs(a, b)) {
     const { id: _id, ...attrs } = b.attrs;
     ops.push({ kind: "attrs", pos: posA, attrs });
   }
-  if (a.isTextblock) diffInline(a, b, posA + 1, posB + 1, target, ops);
-  else if (!a.isLeaf) diffChildren(a, b, posA + 1, posB + 1, target, ops);
+  if (a.isTextblock && b.isTextblock)
+    diffInline(a, b, posA + 1, posB + 1, target, ops);
+  else if (!a.isLeaf && !b.isLeaf)
+    diffChildren(a, b, posA + 1, posB + 1, target, ops);
 }
 
 /**
  * Steps turning `from` into `to`, one per changed region, so that rebasing
- * them over others' edits preserves untouched text between local changes.
- * Falls back to a single replacement when the fine diff cannot reproduce `to`.
+ * them over others' edits keeps unchanged text between local changes. Null
+ * when the documents differ too much to align piece by piece, or the pieces
+ * do not reproduce `to` exactly: callers must then keep both versions rather
+ * than rebase a broad replacement.
  */
-export function diffSteps(from: ProseMirrorNode, to: ProseMirrorNode): Step[] {
+export function diffSteps(
+  from: ProseMirrorNode,
+  to: ProseMirrorNode,
+): Step[] | null {
   if (contentKey(from) === contentKey(to)) return [];
   const ops: DiffOp[] = [];
-  diffChildren(from, to, 0, 0, to, ops);
+  try {
+    diffChildren(from, to, 0, 0, to, ops);
+  } catch (error) {
+    if (error instanceof DiffBudgetExceeded) return null;
+    throw error;
+  }
+  // End to start, so earlier positions stay valid. At one position, change
+  // the node there before inserting in front of it.
   const position = (op: DiffOp) => (op.kind === "replace" ? op.from : op.pos);
   ops.sort(
-    (x, y) => position(y) - position(x) || (x.kind === "replace" ? -1 : 1),
+    (x, y) =>
+      position(y) - position(x) ||
+      (x.kind === "replace" ? 1 : 0) - (y.kind === "replace" ? 1 : 0),
   );
   const tr = new Transform(from);
   try {
     for (const op of ops) {
       if (op.kind === "replace") tr.replace(op.from, op.to, op.slice);
+      else if (op.kind === "markup")
+        tr.setNodeMarkup(op.pos, op.type, op.attrs);
       else
         for (const [key, value] of Object.entries(op.attrs))
           if (tr.doc.nodeAt(op.pos)?.attrs[key] !== value)
             tr.setNodeAttribute(op.pos, key, value);
     }
-    if (contentKey(tr.doc) === contentKey(to)) return tr.steps;
   } catch {
-    /* fall back below */
+    return null;
   }
-  const single = diffStep(from, to);
-  return single ? [single] : [];
+  return contentKey(tr.doc) === contentKey(to) ? tr.steps : null;
 }

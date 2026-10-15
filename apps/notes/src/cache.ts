@@ -875,6 +875,92 @@ export class NotesStore {
     }
     this.notify();
   }
+  /**
+   * Keep both versions when local work cannot be merged safely: the note
+   * becomes the server's accepted version, and the local content moves to a
+   * new local draft that will be created as a separate note. Only if the draft
+   * is still exactly `expected`; resolves whether it split.
+   */
+  splitConflict(
+    expected: Draft,
+    copyId: string,
+    accepted: NoteBody & { revision: number },
+    fence: CacheFence,
+  ): Promise<boolean> {
+    const { accountId, id } = expected;
+    const epoch = this.epoch(accountId);
+    if (this.blocked.has(accountId))
+      return Promise.reject(new Error("Account access changed"));
+    const key = JSON.stringify([accountId, id]);
+    const unchanged = (draft: Draft | undefined) =>
+      draft !== undefined &&
+      draft.updatedAt === expected.updatedAt &&
+      draft.document === expected.document &&
+      draft.baseRevision === expected.baseRevision;
+    const previous = this.draftQueues.get(key) ?? Promise.resolve();
+    const write = previous
+      .catch(() => undefined)
+      .then(async () => {
+        this.assertWritable(accountId, epoch);
+        const memory = this.recoveryDrafts.get(key);
+        if (memory && !unchanged(memory)) return false;
+        const split = await this.db.transaction(
+          "rw",
+          [
+            this.db.drafts,
+            this.db.summaries,
+            this.db.bodies,
+            this.db.accounts,
+            this.db.revoked,
+          ],
+          async () => {
+            await this.assertPersistent(accountId, fence.epoch);
+            this.assertWritable(accountId, epoch);
+            await this.assertNotRevoked(accountId, id);
+            if (!unchanged(await this.db.drafts.get([accountId, id])))
+              return false;
+            const row = await this.db.summaries.get([accountId, id]);
+            const notebookId = expected.notebookId ?? row?.notebookId;
+            const copy: Draft = {
+              accountId,
+              id: copyId,
+              document: expected.document,
+              text: expected.text,
+              updatedAt: Date.now(),
+              ...(notebookId ? { notebookId } : {}),
+            };
+            await this.db.drafts.put(copy);
+            await this.db.summaries.put({
+              ...(notebookId ? { notebookId } : {}),
+              ...summary(copy),
+              kind: "draft",
+            });
+            await this.db.drafts.delete([accountId, id]);
+            await this.db.bodies.put({ ...accepted, accountId, id });
+            await this.db.summaries.put({
+              ...row,
+              ...summary({ ...accepted, accountId, id, updatedAt: Date.now() }),
+              kind: "cached",
+            });
+            return true;
+          },
+        );
+        if (split && unchanged(this.recoveryDrafts.get(key))) {
+          this.recoveryDrafts.delete(key);
+          this.recoveryFences.delete(key);
+        }
+        if (split) this.notify();
+        return split;
+      });
+    const settled = write.then(() => undefined);
+    this.draftQueues.set(key, settled);
+    void settled
+      .finally(() => {
+        if (this.draftQueues.get(key) === settled) this.draftQueues.delete(key);
+      })
+      .catch(() => undefined);
+    return write;
+  }
   /** Move a local note's records to the ID the server assigned. */
   async adoptServerId(
     accountId: string,

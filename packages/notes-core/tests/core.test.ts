@@ -357,7 +357,7 @@ test("diffSteps keeps unchanged text between edits when rebased", async () => {
     .insertText("ALPHA", 1, 6)
     .insertText("OMEGA", 14, 19).doc;
   const remote = start.tr.insertText("COLLABORATOR", 7, 13);
-  const steps = diffSteps(base, local);
+  const steps = diffSteps(base, local)!;
   assert.ok(steps.length > 1);
   let state = EditorState.create({
     doc: base,
@@ -388,7 +388,7 @@ test("diffSteps reproduces structural and attribute changes exactly", async () =
     const a = markdownToDoc(before);
     const b = markdownToDoc(after);
     const tr = new Transform(a);
-    for (const step of diffSteps(a, b)) tr.step(step);
+    for (const step of diffSteps(a, b)!) tr.step(step);
     assert.equal(
       docToMarkdown(tr.doc),
       docToMarkdown(b),
@@ -414,4 +414,133 @@ test("steps inserting malformed nested content are rejected", async () => {
     new Slice(Fragment.from(invalid), 0, 0),
   );
   assert.throws(() => applySafeStep(valid, step), UnsafeDocumentError);
+});
+
+/** Local steps from diffSteps, rebased over a collaborator's transaction. */
+async function rebased(
+  base: ReturnType<typeof markdownToDoc>,
+  local: ReturnType<typeof markdownToDoc>,
+  remote: Transform,
+) {
+  const { contentKey, diffSteps } = await import("../src/index.ts");
+  const { EditorState } = await import("prosemirror-state");
+  const { collab, receiveTransaction } = await import("prosemirror-collab");
+  const steps = diffSteps(base, local);
+  assert.ok(steps, "a fine-grained diff exists");
+  let state = EditorState.create({
+    doc: base,
+    plugins: [collab({ version: 0, clientID: "me" })],
+  });
+  const tr = state.tr;
+  for (const step of steps) tr.step(step);
+  state = state.apply(tr);
+  assert.equal(
+    contentKey(state.doc),
+    contentKey(local),
+    "the steps reproduce the local document",
+  );
+  return state.apply(receiveTransaction(state, remote.steps, ["them"])).doc;
+}
+
+function textPos(doc: ReturnType<typeof markdownToDoc>, text: string) {
+  let found = -1;
+  doc.descendants((node, pos) => {
+    if (found < 0 && node.isText && node.text!.includes(text))
+      found = pos + node.text!.indexOf(text);
+  });
+  assert.ok(found >= 0, text);
+  return found;
+}
+
+test("diffSteps counts positions in UTF-16 units around emoji", async () => {
+  const base = markdownToDoc("😀 Alpha middle Omega 👍🏽");
+  const alpha = textPos(base, "Alpha");
+  const omega = textPos(base, "Omega");
+  const local = new Transform(base)
+    .replaceWith(omega, omega + 5, notesSchema.text("OMEGA"))
+    .replaceWith(alpha, alpha + 5, notesSchema.text("ALPHA")).doc;
+  const middle = textPos(base, "middle");
+  const remote = new Transform(base).replaceWith(
+    middle,
+    middle + 6,
+    notesSchema.text("COLLABORATOR"),
+  );
+  const merged = await rebased(base, local, remote);
+  assert.equal(merged.textContent, "😀 ALPHA COLLABORATOR OMEGA 👍🏽");
+});
+
+test("diffSteps stays fine-grained in long paragraphs", async () => {
+  const base = markdownToDoc("Alpha " + "x".repeat(2100) + " Omega");
+  const end = base.content.size - 1;
+  const local = new Transform(base)
+    .replaceWith(end - 5, end, notesSchema.text("OMEGA"))
+    .replaceWith(1, 6, notesSchema.text("ALPHA")).doc;
+  const remote = new Transform(base).replaceWith(
+    1000,
+    1001,
+    notesSchema.text("Y"),
+  );
+  const merged = await rebased(base, local, remote);
+  assert.match(merged.textContent, /^ALPHA x+Yx+ OMEGA$/);
+  assert.equal(merged.textContent.length, base.textContent.length);
+});
+
+test("diffSteps keeps others' text through type changes and new blocks", async () => {
+  const base = markdownToDoc("First line here\n\nSecond line");
+  // Local: the first paragraph becomes a heading and gains a word; a new
+  // paragraph is inserted after it.
+  const local = markdownToDoc(
+    "## First line here now\n\nInserted\n\nSecond line",
+  );
+  const line = textPos(base, "line");
+  const remote = new Transform(base).replaceWith(
+    line,
+    line + 4,
+    notesSchema.text("LINE"),
+  );
+  const merged = await rebased(base, local, remote);
+  assert.equal(
+    docToMarkdown(merged),
+    "## First LINE here now\n\nInserted\n\nSecond line",
+  );
+});
+
+test("diffSteps refuses documents too different to align", async () => {
+  const { diffSteps } = await import("../src/index.ts");
+  assert.equal(
+    diffSteps(markdownToDoc("a".repeat(3000)), markdownToDoc("b".repeat(3000))),
+    null,
+  );
+});
+
+test("diffSteps reproduces random edits exactly", async () => {
+  const { contentKey, diffSteps } = await import("../src/index.ts");
+  let seed = 7;
+  const random = (n: number) => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed % n;
+  };
+  const words = ["ab", "b", "😀", "cab", "a", "**ba**", "`c`", "é"];
+  const line = () =>
+    Array.from({ length: 1 + random(6) }, () => words[random(words.length)])
+      .join(" ")
+      .trim();
+  const block = () =>
+    [line(), "# " + line(), "- " + line(), "> " + line(), "- [ ] " + line()][
+      random(5)
+    ]!;
+  for (let round = 0; round < 300; round++) {
+    const blocks = Array.from({ length: 1 + random(5) }, block);
+    const edited = blocks.map((b) => (random(3) ? b : block()));
+    if (random(2)) edited.splice(random(edited.length + 1), 0, block());
+    if (random(3) === 0 && edited.length > 1)
+      edited.splice(random(edited.length), 1);
+    const base = markdownToDoc(blocks.join("\n\n"));
+    const local = markdownToDoc(edited.join("\n\n"));
+    const steps = diffSteps(base, local);
+    assert.ok(steps, `round ${round}`);
+    const tr = new Transform(base);
+    for (const step of steps) tr.step(step);
+    assert.equal(contentKey(tr.doc), contentKey(local), `round ${round}`);
+  }
 });
