@@ -176,3 +176,27 @@ Verification:
 - Browser: 40 Playwright cases (desktop and mobile Chromium) and 2 production-offline cases.
 - Local real services: live proof (11 steps), Worker OAuth/MCP proof (31) and consent-browser proof (8).
 - The 20 mobile-WebKit cases still cannot launch on this host.
+
+## Response to Astra review round 8
+
+[Round 8](notes-v1-round8-astra-review.md) verified R7-1, R7-2, R7-3, R7-5 and R7-6 as fixed, kept the edge accepted, and did **not accept** the core. It reported five blockers. Most share one cause: a result assembled in steps could miss a fence recorded partway through. The fix is structural rather than per path:
+
+- Display and export reads now load their rows and the account's note fences in one IndexedDB transaction (`fenced`). In-memory snapshots are gathered first and filtered by the fences read in that transaction.
+- Fence messages from other tabs act only on fences still recorded.
+
+| Finding                                             | Fix                                                                                                                                                                                                                                                                                                                                       | Evidence                                                                                                                        |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| R8-1 — sign-out destroyed held work                 | `hasDrafts` counts held work as kept, unsaved work (`unsavedWork` reports how much is held). Sign-out therefore always asks first. The dialog says held drafts cannot be exported until the server confirms access, and that signing out discards them. Exports still exclude them, and "Wait for save" does not finish while they remain | `review-round8.test.ts`: held drafts count as unsaved but export nothing. After a confirmed denial nothing remains              |
+| R8-2 — search results ignored fences                | Search responses are filtered against `fencedNotes` before display, and the filter is repeated if a revocation or hold arrives meanwhile. A revocation or hold removes matching results already shown. Opening a result goes through the fenced reads                                                                                     | `fencedNotes` reports revoked and held notes. The App filtering awaits the reviewer's browser probes                            |
+| R8-3 — in-flight exports bypassed newer fences      | `exportDrafts`, `list`, `read`, `readDraft`, `localDrafts`, `adoptedDrafts` and `unsavedWork` read through `fenced`. A fence committed in any tab is either visible to the read or ordered after it. The export download is created synchronously from the result                                                                         | An export and a list paused at their in-memory phase while another tab revokes or holds the note leave it out                   |
+| R8-4 — a late revocation message erased new work    | A received revocation forgets snapshots only for notes whose regular fence is still recorded. A received hold closes editors only for notes still held, plus their copies, which the receiving tab works out itself                                                                                                                       | A revocation message delivered after access was renewed keeps the newer quota-failed typing. A current message still removes it |
+| R8-5 — old tabs wrote copy summaries without source | `list` resolves a missing `source` for local rows from their drafts in the same transaction, whichever version wrote them                                                                                                                                                                                                                 | A copy summary without `source`, written next to a draft that has it, is hidden with its source                                 |
+
+Mutation check: five of the seven new or rewritten tests fail on the previous code for the reason under test. The two that pause a read hook the renamed `recoverySnapshots`, so on the previous code they fail by construction; the reviewer's own pause probes are the independent check for those.
+
+Verification:
+
+- Unit tests: core 28, backend 42, edge 64, app 59 + 14. All typechecks pass.
+- Browser: 40 Playwright cases (desktop and mobile Chromium) and 2 production-offline cases.
+- Local real services: live proof (11 steps), Worker OAuth/MCP proof (31) and consent-browser proof (8).
+- The 20 mobile-WebKit cases still cannot launch on this host.
