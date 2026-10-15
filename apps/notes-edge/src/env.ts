@@ -3,6 +3,7 @@ import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 /** Bindings and configuration of the `palladian` Worker (see wrangler.jsonc). */
 export interface Env {
   ASSETS: Fetcher;
+  /** OAuth storage: KV, or the D1-backed equivalent when only D1 is bound. */
   OAUTH_KV: KVNamespace;
   /** Exact public origin, e.g. `https://palladian.example.workers.dev`. */
   PUBLIC_ORIGIN: string;
@@ -15,6 +16,12 @@ export interface Env {
   /** Injected by OAuthProvider before either handler runs. */
   OAUTH_PROVIDER: OAuthHelpers;
 }
+
+/** Bindings as deployed: either a KV namespace or a D1 database for OAuth storage. */
+export type DeployedEnv = Omit<Env, "OAUTH_KV" | "OAUTH_PROVIDER"> & {
+  OAUTH_KV?: KVNamespace;
+  OAUTH_DB?: D1Database;
+};
 
 /** What `completeAuthorization()` stores and every MCP request receives. */
 export interface AgentProps {

@@ -24,20 +24,21 @@
       "/connect",
     ],
   },
-  "kv_namespaces": [
+  // OAuth storage. The provider expects KV; the Worker adapts this D1
+  // database to the KV interface (src/d1-kv.ts) because the deploy token has
+  // D1 but not KV permissions. Bind OAUTH_KV instead to use KV directly.
+  "d1_databases": [
     {
-      "binding": "OAUTH_KV",
-      // PLACEHOLDER: replace with the id printed by
-      // `wrangler kv namespace create palladian-oauth` before deploying.
-      "id": "00000000000000000000000000000000",
+      "binding": "OAUTH_DB",
+      "database_name": "palladian-oauth",
+      "database_id": "3710b5b5-71cc-418c-8bf9-920608fabe54",
     },
   ],
   "vars": {
-    // PLACEHOLDERS for production; set at deploy time. Local development
-    // overrides them from .dev.vars (see README).
-    "PUBLIC_ORIGIN": "https://palladian.example.workers.dev",
-    "AGENT_JWT_ISSUER": "https://palladian.example.workers.dev",
-    "CONVEX_URL": "https://example-deployment-123.convex.cloud",
+    // Production values; local development overrides them from .dev.vars.
+    "PUBLIC_ORIGIN": "https://palladian.rdxx.workers.dev",
+    "AGENT_JWT_ISSUER": "https://palladian.rdxx.workers.dev",
+    "CONVEX_URL": "https://adamant-hound-861.convex.cloud",
   },
   // Secret (not in this file): AGENT_JWT_PRIVATE_KEY, the private ES256 JWK
   // as a JSON string. Set with `wrangler secret put AGENT_JWT_PRIVATE_KEY`.

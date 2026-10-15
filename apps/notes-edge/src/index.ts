@@ -9,7 +9,14 @@ import {
   handleDeny,
   handleRequestInfo,
 } from "./consent.ts";
-import { MCP_PATH, publicOrigin, resourceUrl, type Env } from "./env.ts";
+import { D1KV } from "./d1-kv.ts";
+import {
+  MCP_PATH,
+  publicOrigin,
+  resourceUrl,
+  type DeployedEnv,
+  type Env,
+} from "./env.ts";
 import { handleMcp, type McpContext } from "./mcp/handler.ts";
 import { REQUIRED_SCOPES, SCOPES_SUPPORTED } from "./scopes.ts";
 
@@ -108,8 +115,19 @@ const DISCOVERY_ALIASES: Record<string, string> = {
 
 let cached: { origin: string; provider: OAuthProvider<Env> } | undefined;
 
+/** Present one OAUTH_KV interface whichever storage binding is deployed. */
+export function withOAuthStorage(deployed: DeployedEnv): Env {
+  if (deployed.OAUTH_KV) return deployed as Env;
+  if (!deployed.OAUTH_DB)
+    throw new Error("Bind OAUTH_KV or OAUTH_DB for OAuth storage.");
+  // D1KV implements the KV subset the provider and consent handoff use.
+  const store = new D1KV(deployed.OAUTH_DB) as unknown as KVNamespace;
+  return { ...deployed, OAUTH_KV: store } as Env;
+}
+
 export default {
-  fetch(request, env, ctx) {
+  fetch(request, deployed, ctx) {
+    const env = withOAuthStorage(deployed);
     const origin = publicOrigin(env);
     if (cached?.origin !== origin)
       cached = { origin, provider: createProvider(origin) };
@@ -121,4 +139,4 @@ export default {
     }
     return cached.provider.fetch(request, env, ctx);
   },
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<DeployedEnv>;
