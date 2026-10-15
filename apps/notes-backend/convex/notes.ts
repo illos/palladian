@@ -95,6 +95,8 @@ export const create = mutation({
     clientKey: v.string(),
     doc: v.string(),
     deviceTime: v.optional(v.number()),
+    /** A conflict copy names the note whose content it holds. */
+    sourceNoteId: v.optional(v.id("notes")),
   },
   returns: v.object({
     noteId: v.id("notes"),
@@ -123,6 +125,12 @@ export const create = mutation({
         revision: content.revision,
         replayed: true,
       };
+    }
+    // A copy of another note's content needs access to that note now.
+    if (args.sourceNoteId) {
+      const source = await ctx.db.get(args.sourceNoteId);
+      if (!source || !(await noteRole(ctx, actor, source)))
+        fail("not_found", "Note not found.");
     }
     const notebook = await destination(ctx, actor, args.notebookId);
     const noteId = await createNoteRecord(ctx, {

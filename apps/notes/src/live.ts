@@ -1,4 +1,8 @@
-import { diffSteps, parseStoredDoc } from "@palladian/notes-core/document";
+import {
+  diffStep,
+  diffSteps,
+  parseStoredDoc,
+} from "@palladian/notes-core/document";
 import type { Node as ProseMirrorNode } from "prosemirror-model";
 import { plainText } from "@palladian/notes-core/projection";
 import { api } from "@palladian/notes-backend/api";
@@ -23,6 +27,9 @@ export interface LiveState {
   profile: Profile | null;
   connected: boolean;
 }
+
+/** The server's limit on steps in one send. */
+const MAX_STEPS_PER_SEND = 500;
 
 /** Equal documents, ignoring block IDs the server may have assigned. */
 function sameContent(a: ProseMirrorNode, b: ProseMirrorNode) {
@@ -480,81 +487,81 @@ export class LiveController {
     for (const draft of await this.store.localDrafts(accountId)) {
       if (this.openNotes.has(draft.id) || this.state.accountId !== accountId)
         continue;
-      // The local ID is the creation key: retries return the same note.
-      const created = await this.client.mutation(api.notes.create, {
-        clientKey: draft.id.slice(0, 64),
-        doc: draft.document,
-        ...(draft.notebookId
-          ? { notebookId: draft.notebookId as Id<"notebooks"> }
-          : {}),
-        deviceTime: draft.updatedAt,
-      });
-      const fence = await this.store.captureFence(accountId);
-      // Adoption marks the draft created, so it is never created again.
-      await this.store.adoptServerId(
-        accountId,
-        draft.id,
-        created.noteId,
-        fence,
-      );
+      try {
+        await this.createLocalDraft(accountId, draft);
+      } catch {
+        /* this draft waits for the next sync; others continue */
+      }
     }
   }
 
+  private async createLocalDraft(accountId: string, draft: Draft) {
+    if (draft.source) {
+      // A conflict copy holds its source note's content: it becomes a note only
+      // while the source is accessible, and goes with the source otherwise.
+      const verdict = await this.client.mutation(api.notes.verifyAccess, {
+        noteId: draft.source as Id<"notes">,
+      });
+      if (verdict.subject !== accountId || this.state.accountId !== accountId)
+        return;
+      if (!verdict.summary)
+        return this.store.revokeNotes(accountId, [draft.source]);
+    }
+    // The local ID is the creation key: retries return the same note.
+    const created = await this.client.mutation(api.notes.create, {
+      clientKey: draft.id.slice(0, 64),
+      doc: draft.document,
+      ...(draft.notebookId
+        ? { notebookId: draft.notebookId as Id<"notebooks"> }
+        : {}),
+      ...(draft.source ? { sourceNoteId: draft.source as Id<"notes"> } : {}),
+      deviceTime: draft.updatedAt,
+    });
+    const fence = await this.store.captureFence(accountId);
+    // Adoption marks the draft created, so it is never created again.
+    await this.store.adoptServerId(accountId, draft.id, created.noteId, fence);
+  }
+
   /**
-   * A creation may have been answered from an earlier attempt. Compare the
-   * note's creation version (revision 0) with the local draft and keep the
-   * differences as ordinary collaborative edits on that base, one step per
-   * changed region: the editor's rebasing then preserves edits others made
-   * since, and a fixed client ID makes resent steps recognizable if an earlier
-   * send was accepted. The journal replaces the draft only if no newer typing
-   * arrived meanwhile; otherwise the next sync starts from the newer draft.
-   * When no safe piecewise diff exists, both versions are kept as notes.
+   * A creation may have been answered from an earlier attempt, so the server's
+   * note can lag the local draft. A saved draft says what the note became, not
+   * how it was edited, so its difference is never rebased over anyone else's
+   * edits. While every change since creation came from this recovery, the
+   * difference is sent against the server's current revision, and the server
+   * accepts it only if that is still current. Once someone else has changed the
+   * note, both versions are kept. A fixed client ID recognizes this recovery's
+   * own earlier sends, including one whose reply was lost. Nothing replaces
+   * newer local typing, and an open note is left to its editor.
    */
   private async reconcileCreated(
     accountId: string,
     noteId: string,
     draft: Draft,
   ) {
-    const origin = await this.client.query(api.history.read, {
-      noteId: noteId as Id<"notes">,
-      revision: 0,
-    });
-    if (this.state.accountId !== accountId) return;
-    const base = parseStoredDoc(origin.doc);
+    const id = noteId as Id<"notes">;
+    const content = await this.client.query(api.notes.content, { noteId: id });
+    if (!content || this.state.accountId !== accountId) return;
+    const current = parseStoredDoc(content.doc);
     const local = parseStoredDoc(draft.document);
-    if (sameContent(base, local)) {
-      // Nothing local beyond creation: the server's current note is the truth.
-      const content = await this.client.query(api.notes.content, {
-        noteId: noteId as Id<"notes">,
-      });
-      if (!content) return;
-      const fence = await this.store.captureFence(accountId);
-      await this.store.settleDraft(
-        accountId,
-        noteId,
-        {
-          accountId,
-          id: noteId,
-          document: content.doc,
-          text: plainText(parseStoredDoc(content.doc)),
-          revision: content.revision,
-        },
-        draft.updatedAt,
-        draft,
-        fence,
-      );
-      return;
-    }
-    const steps = diffSteps(base, local);
-    if (!steps) {
-      // Too different to merge piece by piece: rebasing one broad replacement
-      // would erase others' edits. Keep both: the note takes the server's
-      // version and the local content becomes a separate new note.
+    if (sameContent(current, local))
+      return this.settleCreated(accountId, noteId, content, draft);
+    const clientId = draft.clientId ?? crypto.randomUUID().replace(/-/g, "");
+    const own =
+      content.role !== "read" &&
+      (await this.onlyOwnSteps(id, clientId, content.revision));
+    if (this.state.accountId !== accountId) return;
+    if (!own) {
+      if (content.role !== "read") {
+        const origin = await this.client.query(api.history.read, {
+          noteId: id,
+          revision: 0,
+        });
+        if (this.state.accountId !== accountId) return;
+        // Nothing local beyond creation: the server's note is the truth.
+        if (sameContent(parseStoredDoc(origin.doc), local))
+          return this.settleCreated(accountId, noteId, content, draft);
+      }
       if (this.openNotes.has(noteId)) return;
-      const content = await this.client.query(api.notes.content, {
-        noteId: noteId as Id<"notes">,
-      });
-      if (!content || this.state.accountId !== accountId) return;
       const fence = await this.store.captureFence(accountId);
       await this.store.splitConflict(
         draft,
@@ -563,57 +570,80 @@ export class LiveController {
           accountId,
           id: noteId,
           document: content.doc,
-          text: plainText(parseStoredDoc(content.doc)),
+          text: plainText(current),
           revision: content.revision,
         },
         fence,
       );
       return;
     }
-    if (!steps.length) return;
-    const clientId = draft.clientId ?? crypto.randomUUID().replace(/-/g, "");
-    const journal: Draft = {
-      ...draft,
-      baseDocument: origin.doc,
-      baseRevision: 0,
+    let steps = diffSteps(current, local);
+    if (!steps || steps.length > MAX_STEPS_PER_SEND)
+      steps = [diffStep(current, local)!];
+    if (this.openNotes.has(noteId)) return;
+    // Record the client ID before sending, so a lost reply is recognized.
+    const sending: Draft = { ...draft, clientId };
+    if (!draft.clientId && !(await this.store.replaceDraftIf(draft, sending)))
+      return;
+    const pushed = await this.client.mutation(api.notes.push, {
+      noteId: id,
+      revision: content.revision,
       steps: steps.map((step) => JSON.stringify(step.toJSON())),
       clientId,
-      created: true,
-    };
-    // Journal before sending, with the identity the send will use, and only
-    // over the exact snapshot it was derived from.
-    if (this.openNotes.has(noteId)) return;
-    if (!(await this.store.replaceDraftIf(draft, journal))) return;
-    try {
-      const pushed = await this.client.mutation(api.notes.push, {
-        noteId: noteId as Id<"notes">,
-        revision: 0,
-        steps: journal.steps!,
-        clientId,
-      });
-      if (pushed.status !== "accepted") return; // Others edited; the editor rebases on open.
-      const content = await this.client.query(api.notes.content, {
-        noteId: noteId as Id<"notes">,
-      });
-      if (!content) return;
-      const fence = await this.store.captureFence(accountId);
-      await this.store.settleDraft(
-        accountId,
+    });
+    // Someone else changed the note first; the next sync keeps both versions.
+    if (pushed.status !== "accepted") return;
+    const saved = await this.client.query(api.notes.content, { noteId: id });
+    if (!saved || this.state.accountId !== accountId) return;
+    await this.settleCreated(accountId, noteId, saved, sending);
+  }
+
+  /**
+   * Whether every change after creation, up to `revision`, was sent with
+   * `clientId`. The server's ID repairs directly follow the send they repair.
+   */
+  private async onlyOwnSteps(
+    noteId: Id<"notes">,
+    clientId: string,
+    revision: number,
+  ) {
+    let after = 0;
+    while (after < revision) {
+      const batch = await this.client.query(api.notes.steps, {
         noteId,
-        {
-          accountId,
-          id: noteId,
-          document: content.doc,
-          text: plainText(parseStoredDoc(content.doc)),
-          revision: content.revision,
-        },
-        journal.updatedAt,
-        journal,
-        fence,
-      );
-    } catch {
-      /* the journal stays; opening the note resends with the same client ID */
+        after,
+      });
+      if (!batch.steps.length) return false;
+      for (const step of batch.steps.slice(0, revision - after))
+        if (step.clientId !== clientId && step.clientId !== "server")
+          return false;
+      after += batch.steps.length;
     }
+    return true;
+  }
+
+  /** The server's note is current for this draft: cache it and retire the draft. */
+  private async settleCreated(
+    accountId: string,
+    noteId: string,
+    content: { doc: string; revision: number },
+    expected: Draft,
+  ) {
+    const fence = await this.store.captureFence(accountId);
+    await this.store.settleDraft(
+      accountId,
+      noteId,
+      {
+        accountId,
+        id: noteId,
+        document: content.doc,
+        text: plainText(parseStoredDoc(content.doc)),
+        revision: content.revision,
+      },
+      expected.updatedAt,
+      expected,
+      fence,
+    );
   }
 
   setOpen(noteId: string, open: boolean) {

@@ -1,9 +1,6 @@
 import "fake-indexeddb/auto";
-import { markdownToDoc, notesSchema } from "@palladian/notes-core";
+import { markdownToDoc } from "@palladian/notes-core";
 import { getFunctionName } from "convex/server";
-import { collab, receiveTransaction } from "prosemirror-collab";
-import { EditorState } from "prosemirror-state";
-import { Step } from "prosemirror-transform";
 import { describe, expect, test } from "vitest";
 import { NotesStore, type Draft } from "../../src/cache";
 import { LiveController } from "../../src/live";
@@ -135,47 +132,6 @@ describe("access rechecks", () => {
 });
 
 describe("creation recovery", () => {
-  test("separate local edits rebase around a collaborator's edit", async () => {
-    const store = new NotesStore("r3-" + crypto.randomUUID());
-    try {
-      const base = markdownToDoc("Alpha middle Omega");
-      const start = EditorState.create({ doc: base });
-      const local = start.tr
-        .insertText("ALPHA", 1, 6)
-        .insertText("OMEGA", 14, 19).doc;
-      const remote = start.tr.insertText("COLLABORATOR", 7, 13);
-      const draft: Draft = {
-        ...body,
-        document: JSON.stringify(local.toJSON()),
-        text: local.textContent,
-        updatedAt: 1,
-        created: true,
-      };
-      await store.writeDraft(draft);
-      await live(store, {
-        "history:read": () => ({
-          revision: 0,
-          doc: JSON.stringify(base.toJSON()),
-          markdown: "",
-        }),
-        "notes:push": () => ({ status: "behind", revision: 1 }),
-      }).reconcileCreated("account", "note", draft);
-      const journal = (await store.readDraft("account", "note"))!;
-      let state = EditorState.create({
-        doc: base,
-        plugins: [collab({ version: 0, clientID: journal.clientId! })],
-      });
-      const tr = state.tr;
-      for (const step of journal.steps!)
-        tr.step(Step.fromJSON(notesSchema, JSON.parse(step)));
-      state = state.apply(tr);
-      state = state.apply(receiveTransaction(state, remote.steps, ["them"]));
-      expect(state.doc.textContent).toBe("ALPHA COLLABORATOR OMEGA");
-    } finally {
-      store.close();
-    }
-  });
-
   test("newer typing during recovery is kept, not replaced by the older journal", async () => {
     const store = new NotesStore("r3-" + crypto.randomUUID());
     try {
@@ -191,7 +147,7 @@ describe("creation recovery", () => {
       let release!: (value: unknown) => void;
       let pushed = false;
       const controller = live(store, {
-        "history:read": () =>
+        "notes:content": () =>
           new Promise((resolve) => {
             release = resolve;
           }),
@@ -211,7 +167,7 @@ describe("creation recovery", () => {
       release({
         revision: 0,
         doc: JSON.stringify(base.toJSON()),
-        markdown: "Hello",
+        role: "owner",
       });
       await recovery;
       const kept = (await store.readDraft("account", "note"))!;
@@ -239,9 +195,9 @@ describe("creation recovery", () => {
       };
       await store.writeDraft(old);
       const controller = live(store, {
-        "history:read": () => {
+        "notes:content": () => {
           controller.openNotes.add("note");
-          return { revision: 0, doc: json("Hello"), markdown: "Hello" };
+          return { revision: 0, doc: json("Hello"), role: "owner" };
         },
       });
       await controller.reconcileCreated("account", "note", old);

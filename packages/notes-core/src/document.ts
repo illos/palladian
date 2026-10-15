@@ -421,11 +421,11 @@ function diffNode(
 }
 
 /**
- * Steps turning `from` into `to`, one per changed region, so that rebasing
- * them over others' edits keeps unchanged text between local changes. Null
- * when the documents differ too much to align piece by piece, or the pieces
- * do not reproduce `to` exactly: callers must then keep both versions rather
- * than rebase a broad replacement.
+ * Steps turning `from` into `to`, one per changed region, for a compact edit
+ * history. Null when the documents differ too much to align piece by piece,
+ * or the pieces do not reproduce `to` exactly. The steps reproduce what `to`
+ * is, not how it was edited, so they are valid only against `from` itself and
+ * must not be rebased over anyone else's edits.
  */
 export function diffSteps(
   from: ProseMirrorNode,

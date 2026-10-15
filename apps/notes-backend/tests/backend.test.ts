@@ -1519,3 +1519,46 @@ describe("review round 4 regressions", () => {
     expect(doc.child(1).type.name).toBe("bullet_list");
   });
 });
+
+describe("review round 5 regressions", () => {
+  test("a conflict copy is created only while its source is accessible", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const editor = await human(t, "Bo");
+    await share(t, owner.notebookId, editor.id, "edit", owner.id);
+    const { noteId: source } = await owner.as.mutation(api.notes.create, {
+      notebookId: owner.notebookId,
+      clientKey: "source",
+      doc: docJson("Team plan"),
+    });
+    const copy = await editor.as.mutation(api.notes.create, {
+      notebookId: owner.notebookId,
+      clientKey: "local-copy",
+      doc: docJson("Team plan, my version"),
+      sourceNoteId: source,
+    });
+    expect(copy.replayed).toBe(false);
+    await owner.as.mutation(api.sharing.setNoteMember, {
+      noteId: source,
+      principalId: editor.id,
+      role: "none",
+    });
+    await expect(
+      editor.as.mutation(api.notes.create, {
+        notebookId: owner.notebookId,
+        clientKey: "local-second-copy",
+        doc: docJson("Team plan, another version"),
+        sourceNoteId: source,
+      }),
+    ).rejects.toThrow(/not found/);
+    const notes = await t.run((ctx) =>
+      ctx.db
+        .query("notes")
+        .withIndex("by_creator_and_client_key", (q) =>
+          q.eq("creatorId", editor.id).eq("clientKey", "local-second-copy"),
+        )
+        .collect(),
+    );
+    expect(notes).toEqual([]);
+  });
+});

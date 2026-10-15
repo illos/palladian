@@ -43,6 +43,11 @@ export interface Draft extends NoteBody {
   /** False for a collaborative note whose server creation has not finished. */
   created?: boolean;
   notebookId?: string;
+  /**
+   * For a conflict copy not yet created: the note whose content it holds. It is
+   * authorized as that note and removed with it.
+   */
+  source?: string;
 }
 export interface CachedNotebook {
   accountId: string;
@@ -224,10 +229,7 @@ export class NotesStore {
       return Promise.reject(new Error("Account access changed"));
     const fence = this.captureFence(written.accountId);
     const key = JSON.stringify([written.accountId, written.id]);
-    // A note created on the server stays created, whichever editor saves it.
-    let draft = this.recoveryDrafts.get(key)?.created
-      ? { ...written, created: true }
-      : written;
+    let draft = keepSyncState(written, this.recoveryDrafts.get(key));
     // Keep the latest editor snapshot even when quota prevents a durable write.
     this.recoveryDrafts.set(key, { ...draft });
     this.recoveryFences.set(key, fence);
@@ -253,12 +255,15 @@ export class NotesStore {
               draft.accountId,
               draft.id,
             ]);
-            if (existing?.created && !draft.created) {
-              draft = { ...draft, created: true };
+            const kept = keepSyncState(draft, existing);
+            if (kept !== draft) {
+              draft = kept;
               const latest = this.recoveryDrafts.get(key);
               if (latest && latest.updatedAt === draft.updatedAt)
-                this.recoveryDrafts.set(key, { ...latest, created: true });
+                this.recoveryDrafts.set(key, keepSyncState(latest, existing));
             }
+            if (draft.source)
+              await this.assertNotRevoked(draft.accountId, draft.source);
             await this.db.drafts.put(draft);
             const previous = await this.db.summaries.get([
               draft.accountId,
@@ -450,7 +455,7 @@ export class NotesStore {
     // Work on notes this account lost access to is never exportable.
     const latest = new Map(
       drafts
-        .filter((draft) => !revoked.has(draft.id))
+        .filter((draft) => !isRevoked(revoked, draft))
         .map((draft) => [draft.id, draft]),
     );
     for (const draft of await this.accessibleRecovery(accountId, fence.epoch))
@@ -473,7 +478,7 @@ export class NotesStore {
     const drafts: Draft[] = [];
     const revoked = await this.revokedIds(accountId);
     for (const [key, draft] of this.recoveryDrafts) {
-      if (draft.accountId !== accountId || revoked.has(draft.id)) continue;
+      if (draft.accountId !== accountId || isRevoked(revoked, draft)) continue;
       const fence = await this.recoveryFences.get(key)?.catch(() => null);
       if (
         fence?.epoch === epoch &&
@@ -641,10 +646,26 @@ export class NotesStore {
       },
     );
   }
-  /** Delete a note's local copies and record a persistent fence. Inside a transaction. */
+  /**
+   * Delete notes' local copies, and conflict copies made from them, and record
+   * persistent fences. Inside a transaction. Returns every fenced ID.
+   */
   private async fenceNotes(accountId: string, ids: string[]) {
+    if (!ids.length) return [];
     const at = Date.now();
-    for (const id of ids) {
+    const gone = new Set(ids);
+    const copies = (
+      await this.db.drafts.where("accountId").equals(accountId).toArray()
+    )
+      .filter(
+        (draft) =>
+          draft.source !== undefined &&
+          gone.has(draft.source) &&
+          !gone.has(draft.id),
+      )
+      .map((draft) => draft.id);
+    const fenced = [...ids, ...copies];
+    for (const id of fenced) {
       await this.db.summaries.delete([accountId, id]);
       await this.db.bodies.delete([accountId, id]);
       await this.db.drafts.delete([accountId, id]);
@@ -655,6 +676,7 @@ export class NotesStore {
         nonce: crypto.randomUUID(),
       });
     }
+    return fenced;
   }
   private announceRevoked(accountId: string, ids: string[]) {
     if (!ids.length) return;
@@ -663,6 +685,12 @@ export class NotesStore {
     this.notify({ accountId, revokedNotes: ids });
   }
   private forgetNotes(accountId: string, ids: string[]) {
+    const gone = new Set(ids);
+    for (const [key, draft] of this.recoveryDrafts)
+      if (draft.accountId === accountId && isRevoked(gone, draft)) {
+        this.recoveryDrafts.delete(key);
+        this.recoveryFences.delete(key);
+      }
     for (const id of ids) {
       const key = JSON.stringify([accountId, id]);
       this.recoveryDrafts.delete(key);
@@ -680,6 +708,7 @@ export class NotesStore {
     const epoch = this.epoch(accountId);
     this.assertWritable(accountId, epoch);
     this.forgetNotes(accountId, ids);
+    let fenced = ids;
     await this.db.transaction(
       "rw",
       [
@@ -691,16 +720,18 @@ export class NotesStore {
       ],
       async () => {
         await this.assertPersistent(accountId, fence.epoch);
-        await this.fenceNotes(accountId, ids);
+        fenced = await this.fenceNotes(accountId, ids);
       },
     );
-    this.announceRevoked(accountId, ids);
+    this.announceRevoked(accountId, fenced);
     this.notify();
   }
   /**
    * Reconcile cached server notes against one complete authorization snapshot:
    * a note survives if its notebook is visible or it is shared individually.
-   * Local notes never sent to the server carry no role and are kept.
+   * That includes notes this device created whose summary has not arrived, once
+   * their notebook is known. A conflict copy survives only if its source note
+   * would. Local notes never sent to the server are kept.
    */
   async reconcileAccess(
     accountId: string,
@@ -728,15 +759,29 @@ export class NotesStore {
           .where("accountId")
           .equals(accountId)
           .toArray();
-        revoked = rows
+        const drafts = await this.db.drafts
+          .where("accountId")
+          .equals(accountId)
+          .toArray();
+        const reachable = (id: string, notebookId: string | undefined) =>
+          sharedNotes.has(id) ||
+          (notebookId !== undefined && visibleNotebooks.has(notebookId));
+        const notebookOf = new Map(rows.map((row) => [row.id, row.notebookId]));
+        const lost = rows
           .filter(
             (row) =>
-              row.role !== undefined &&
-              !sharedNotes.has(row.id) &&
-              !(row.notebookId && visibleNotebooks.has(row.notebookId)),
+              (row.role !== undefined ||
+                (!isLocalId(row.id) && row.notebookId !== undefined)) &&
+              !reachable(row.id, row.notebookId),
           )
           .map((row) => row.id);
-        await this.fenceNotes(accountId, revoked);
+        for (const draft of drafts) {
+          if (draft.source === undefined) continue;
+          const notebookId = notebookOf.get(draft.source) ?? draft.notebookId;
+          if (notebookId !== undefined && !reachable(draft.source, notebookId))
+            lost.push(draft.id);
+        }
+        revoked = await this.fenceNotes(accountId, lost);
         // Feeds for notebooks no longer visible restart from scratch if re-shared.
         const cursors = await this.db.cursors
           .where("accountId")
@@ -878,8 +923,9 @@ export class NotesStore {
   /**
    * Keep both versions when local work cannot be merged safely: the note
    * becomes the server's accepted version, and the local content moves to a
-   * new local draft that will be created as a separate note. Only if the draft
-   * is still exactly `expected`; resolves whether it split.
+   * new local draft that will be created as a separate note. The copy keeps
+   * the note as its source until then. Only if the draft is still exactly
+   * `expected`; resolves whether it split.
    */
   splitConflict(
     expected: Draft,
@@ -928,6 +974,7 @@ export class NotesStore {
               text: expected.text,
               updatedAt: Date.now(),
               ...(notebookId ? { notebookId } : {}),
+              source: id,
             };
             await this.db.drafts.put(copy);
             await this.db.summaries.put({
@@ -989,8 +1036,8 @@ export class NotesStore {
         const row = await this.db.summaries.get([accountId, localId]);
         const body = await this.db.bodies.get([accountId, localId]);
         // Adopted drafts are created: they are reconciled, never created again.
-        if (draft)
-          await this.db.drafts.put({ ...draft, id: noteId, created: true });
+        // A created copy is a note of its own, authorized by the server.
+        if (draft) await this.db.drafts.put(adopted(draft, noteId));
         if (row) await this.db.summaries.put({ ...row, id: noteId });
         if (body) await this.db.bodies.put({ ...body, id: noteId });
         await this.db.drafts.delete([accountId, localId]);
@@ -1004,7 +1051,7 @@ export class NotesStore {
       this.recoveryDrafts.delete(oldKey);
       this.recoveryFences.delete(oldKey);
       const newKey = JSON.stringify([accountId, noteId]);
-      this.recoveryDrafts.set(newKey, { ...memory, id: noteId, created: true });
+      this.recoveryDrafts.set(newKey, adopted(memory, noteId));
       if (fenceValue) this.recoveryFences.set(newKey, fenceValue);
     }
     this.notify();
@@ -1013,6 +1060,40 @@ export class NotesStore {
     this.channel?.close();
     this.db.close();
   }
+}
+/** Notes written on this device and not yet created on the server. */
+function isLocalId(id: string) {
+  return id.startsWith("local-");
+}
+function isRevoked(revoked: Set<string>, draft: Draft) {
+  return (
+    revoked.has(draft.id) ||
+    (draft.source !== undefined && revoked.has(draft.source))
+  );
+}
+/**
+ * Sync state an editor saving only content does not know: a note created on
+ * the server stays created and in its notebook, a recovery keeps its client
+ * ID, and a conflict copy keeps its source.
+ */
+function keepSyncState(written: Draft, previous: Draft | undefined): Draft {
+  if (!previous) return written;
+  const kept: Partial<Draft> = {};
+  if (previous.created && !written.created) kept.created = true;
+  if (previous.notebookId && !written.notebookId)
+    kept.notebookId = previous.notebookId;
+  if (previous.source && !written.source) kept.source = previous.source;
+  if (
+    previous.clientId &&
+    !written.clientId &&
+    written.baseRevision === undefined
+  )
+    kept.clientId = previous.clientId;
+  return Object.keys(kept).length ? { ...written, ...kept } : written;
+}
+function adopted(draft: Draft, noteId: string): Draft {
+  const { source: _source, ...rest } = draft;
+  return { ...rest, id: noteId, created: true };
 }
 function summary(body: Draft): Omit<NoteSummary, "kind"> {
   return {

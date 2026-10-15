@@ -1,9 +1,6 @@
 import "fake-indexeddb/auto";
-import { markdownToDoc, notesSchema } from "@palladian/notes-core";
+import { markdownToDoc } from "@palladian/notes-core";
 import { getFunctionName } from "convex/server";
-import { collab, receiveTransaction } from "prosemirror-collab";
-import { EditorState } from "prosemirror-state";
-import { Step } from "prosemirror-transform";
 import { describe, expect, test } from "vitest";
 import { NotesStore, type Draft } from "../../src/cache";
 import { LiveController } from "../../src/live";
@@ -153,96 +150,6 @@ describe("creation recovery", () => {
       expect((await store.adoptedDrafts("account")).map((d) => d.id)).toEqual([
         "server-1",
       ]);
-    } finally {
-      store.close();
-    }
-  });
-
-  test("a lost reply after an accepted push is recognized, not applied twice", async () => {
-    const store = new NotesStore("r2-" + crypto.randomUUID());
-    try {
-      const base = markdownToDoc("Hello");
-      const local = EditorState.create({ doc: base }).tr.insertText("!", 6).doc;
-      const draft: Draft = {
-        ...body,
-        document: JSON.stringify(local.toJSON()),
-        text: "Hello!",
-        updatedAt: 1,
-        created: true,
-      };
-      await store.writeDraft(draft);
-      let accepted: Record<string, unknown> | undefined;
-      const controller = live(store, {
-        "history:read": () => ({
-          revision: 0,
-          doc: JSON.stringify(base.toJSON()),
-          markdown: "Hello",
-        }),
-        "notes:push": (args) => {
-          accepted = args;
-          throw new Error("reply lost after commit");
-        },
-      });
-      await controller.reconcileCreated("account", "note", draft);
-      const journal = (await store.readDraft("account", "note"))!;
-      expect(journal.clientId).toBe(accepted!.clientId);
-      let reopened = EditorState.create({
-        doc: base,
-        plugins: [collab({ version: 0, clientID: journal.clientId! })],
-      });
-      const tr = reopened.tr;
-      for (const step of journal.steps!)
-        tr.step(Step.fromJSON(notesSchema, JSON.parse(step)));
-      reopened = reopened.apply(tr);
-      const echoed = (accepted!.steps as string[]).map((s) =>
-        Step.fromJSON(notesSchema, JSON.parse(s)),
-      );
-      reopened = reopened.apply(
-        receiveTransaction(
-          reopened,
-          echoed,
-          echoed.map(() => accepted!.clientId as string),
-        ),
-      );
-      expect(reopened.doc.textContent).toBe("Hello!");
-    } finally {
-      store.close();
-    }
-  });
-
-  test("recovery keeps edits made by others since creation", async () => {
-    const store = new NotesStore("r2-" + crypto.randomUUID());
-    try {
-      const base = markdownToDoc("Hello");
-      const draft: Draft = {
-        ...body,
-        document: json("Hello!"),
-        text: "Hello!",
-        updatedAt: 1,
-        created: true,
-      };
-      await store.writeDraft(draft);
-      let serverText = "Hello collaborator";
-      const controller = live(store, {
-        "history:read": () => ({
-          revision: 0,
-          doc: JSON.stringify(base.toJSON()),
-          markdown: "Hello",
-        }),
-        // Someone else edited since creation: the push at revision 0 is behind.
-        "notes:push": () => ({ status: "behind", revision: 1 }),
-        "notes:content": () => ({
-          doc: json(serverText),
-          revision: 1,
-          role: "edit",
-        }),
-      });
-      await controller.reconcileCreated("account", "note", draft);
-      expect(serverText).toBe("Hello collaborator");
-      const journal = (await store.readDraft("account", "note"))!;
-      expect(journal.baseRevision).toBe(0);
-      expect(journal.steps).toHaveLength(1);
-      serverText = "";
     } finally {
       store.close();
     }
