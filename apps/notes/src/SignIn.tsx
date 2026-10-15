@@ -4,9 +4,11 @@ import type { createAuthService } from "./auth-service";
 export function SignIn({
   connection,
   session,
+  inline = false,
 }: {
   connection: ReturnType<typeof createAuthService>;
   session: SessionController;
+  inline?: boolean;
 }) {
   const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot);
   const [error, setError] = useState<string | null>(null);
@@ -14,7 +16,7 @@ export function SignIn({
   if (snapshot.status === "ready") return null;
   return (
     <form
-      className="sign-in"
+      className={inline ? "sign-in inline" : "sign-in"}
       aria-label="Sign in"
       onSubmit={(event) => {
         event.preventDefault();
@@ -43,7 +45,7 @@ export function SignIn({
           .finally(() => setBusy(false));
       }}
     >
-      <h2>Sign in to reconnect</h2>
+      <h2>{inline ? "Sign in" : "Sign in to reconnect"}</h2>
       <label>
         Email
         <input name="email" type="email" autoComplete="username" required />

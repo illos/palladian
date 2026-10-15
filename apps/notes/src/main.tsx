@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { LiveBox } from "./liveBox";
 import { createNotesStore, type ActivationFence } from "./cache";
 import {
   browserAccountHints,
@@ -9,6 +10,13 @@ import {
 } from "./session";
 
 const store = createNotesStore();
+const liveBox = new LiveBox();
+const page =
+  location.pathname === "/connect"
+    ? "connect"
+    : location.pathname === "/invite"
+      ? "invite"
+      : "notes";
 const hints = browserAccountHints(localStorage);
 const query = new URLSearchParams(location.search);
 const fixture = __NOTES_DEV__ && query.has("fixture");
@@ -86,7 +94,10 @@ window.addEventListener("storage", (event) => {
 const element = document.getElementById("root");
 if (!element) throw new Error("Notes root missing");
 // No await, token provider, or network initialization stands before the notes UI.
-createRoot(element).render(<App session={session} store={store} />);
+if (page === "notes")
+  createRoot(element).render(
+    <App session={session} store={store} liveBox={liveBox} />,
+  );
 if (fixture) {
   Object.assign(window, {
     __notesHarness: {
@@ -107,16 +118,30 @@ if (fixture) {
 }
 
 const siteURL: unknown = __NOTES_AUTH_SITE_URL__;
+const convexURL: unknown = __NOTES_CONVEX_URL__;
 if (!fixture && typeof siteURL === "string" && siteURL) {
   void Promise.all([import("./auth-service"), import("./SignIn")])
-    .then(([{ createAuthService }, { SignIn }]) => {
+    .then(async ([{ createAuthService }, { SignIn }]) => {
       const connection = createAuthService(siteURL);
       transport = connection.service;
-      const panel = document.createElement("section");
-      document.body.append(panel);
-      createRoot(panel).render(
-        <SignIn connection={connection} session={session} />,
-      );
+      if (typeof convexURL === "string" && convexURL) {
+        const { createLive } = await import("./live");
+        liveBox.set(createLive(convexURL, connection.auth, store, session));
+      }
+      if (page !== "notes") {
+        const { ConnectPage, InvitePage } = await import("./pages");
+        const Page = page === "connect" ? ConnectPage : InvitePage;
+        createRoot(element).render(
+          <Page session={session} connection={connection} liveBox={liveBox} />,
+        );
+      } else {
+        const panel = document.createElement("section");
+        panel.className = "sign-in-layer";
+        document.body.append(panel);
+        createRoot(panel).render(
+          <SignIn connection={connection} session={session} />,
+        );
+      }
       if (
         session.getSnapshot().status !== "signed-out" &&
         session.getSnapshot().status !== "revoked"

@@ -878,3 +878,343 @@ textarea:focus-visible {
 .editor-host > .edited-date {
   margin-bottom: 8px;
 }
+
+/* ---- Checklists, sharing, settings and standalone pages ---- */
+.ProseMirror ul[data-type="tasks"] {
+  list-style: none;
+  padding-left: 2px;
+}
+.ProseMirror li.task-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.ProseMirror li.task-item > input {
+  margin: 0.42em 0 0;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  flex: none;
+  cursor: pointer;
+}
+.ProseMirror li.task-item > div {
+  flex: 1;
+  min-width: 0;
+}
+.ProseMirror li.task-item[data-checked="true"] > div {
+  color: var(--secondary);
+  text-decoration: line-through;
+}
+.nav-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.nav-label-action {
+  color: var(--secondary);
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+.nav-label-action:hover {
+  color: var(--ink);
+  background: var(--sel);
+}
+.link-button {
+  color: var(--accent);
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.note-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: 8px;
+}
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: var(--secondary);
+}
+.icon-button:hover {
+  color: var(--ink);
+  background: var(--sel);
+}
+.muted {
+  color: var(--secondary);
+  font-size: 0.92em;
+}
+.panel-dialog {
+  width: min(560px, calc(100vw - 24px));
+  max-height: min(80dvh, 760px);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--paper);
+  color: var(--body);
+  padding: 20px 22px 24px;
+  box-shadow: 0 24px 60px rgb(0 0 0 / 0.18);
+}
+.panel-dialog::backdrop {
+  background: rgb(0 0 0 / 0.28);
+}
+.panel-dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.panel-dialog-header h2 {
+  margin: 0;
+  font-size: var(--h2);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.panel-dialog h3,
+.agents-panel h3,
+.account-panel h3 {
+  font-size: 13px;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--secondary);
+  margin: 18px 0 6px;
+}
+.agent-card h4 {
+  font-size: 12px;
+  color: var(--secondary);
+  margin: 14px 0 4px;
+  font-weight: 500;
+}
+.member-list ul,
+ul.member-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.member-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+.member-list li > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.member-role {
+  color: var(--secondary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.panel-dialog select,
+.panel-dialog input,
+.panel-dialog textarea,
+.stacked-form input,
+.stacked-form textarea,
+.stacked-form select,
+.agents-panel select,
+.add-member select,
+.add-member input,
+.invite-link input {
+  font: inherit;
+  color: var(--ink);
+  background: var(--list);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 9px;
+  min-width: 0;
+}
+.add-member form {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.add-member form > :first-child {
+  flex: 1;
+}
+.panel-dialog button:not(.link-button),
+.stacked-form button,
+.add-member button,
+.invite-link button,
+.agents-panel button,
+.account-panel > button,
+.standalone-card button:not(.link-button) {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-weight: 500;
+}
+.stacked-form button.secondary,
+.button-row .secondary {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--border);
+}
+.invite-link {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--list);
+  display: grid;
+  gap: 8px;
+}
+.invite-link p {
+  margin: 0;
+  font-size: 14px;
+}
+.share-scope {
+  border: 0;
+  padding: 0;
+  margin: 8px 0 0;
+  display: grid;
+  gap: 6px;
+}
+.share-scope legend,
+.consent legend {
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+.stacked-form {
+  display: grid;
+  gap: 12px;
+}
+.stacked-form label {
+  display: grid;
+  gap: 5px;
+  font-size: 14px;
+}
+.stacked-form textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+.checkbox-row {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  padding: 3px 0;
+}
+.agents-panel,
+.account-panel {
+  display: grid;
+  gap: 14px;
+  max-width: 640px;
+}
+.agent-card,
+.connect-help {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.agent-card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.agent-card header h3 {
+  margin: 0;
+  text-transform: none;
+  font-family: var(--ff);
+  font-size: 16px;
+  letter-spacing: 0;
+  color: var(--ink);
+}
+.connector-url {
+  display: block;
+  font-family: var(--mono);
+  font-size: 13px;
+  background: var(--list);
+  border-radius: 8px;
+  padding: 8px 10px;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.standalone-page {
+  min-height: 100dvh;
+  display: grid;
+  place-items: start center;
+  padding: 8vh 16px 40px;
+  background: var(--nav);
+}
+.standalone-card {
+  width: min(520px, 100%);
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 22px 24px 28px;
+}
+.standalone-card h1 {
+  font-size: 24px;
+  color: var(--ink);
+  margin: 0 0 12px;
+}
+.standalone-card .wordmark {
+  padding: 0 0 12px;
+  min-height: 0;
+}
+.consent fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+.consent-notebook {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.button-row {
+  display: flex;
+  gap: 10px;
+}
+.sign-in {
+  display: grid;
+  gap: 10px;
+}
+.sign-in label {
+  display: grid;
+  gap: 5px;
+  font-size: 14px;
+}
+.sign-in input {
+  font: inherit;
+  color: var(--ink);
+  background: var(--list);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.sign-in button {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-weight: 500;
+}
+.sign-in h2 {
+  margin: 0;
+  font-size: var(--h2);
+  color: var(--ink);
+}
+.sign-in-layer .sign-in {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  width: min(340px, calc(100vw - 36px));
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px 18px 18px;
+  box-shadow: 0 16px 40px rgb(0 0 0 / 0.16);
+  z-index: 20;
+}

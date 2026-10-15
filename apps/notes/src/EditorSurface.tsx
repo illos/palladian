@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { isPlainDocument, textDocument } from "./document";
 import type { NoteEditor } from "./editor";
+import type { EditorBinding } from "./binding";
 
 let editorModule: Promise<typeof import("./editor")> | undefined;
 export function EditorSurface({
@@ -9,17 +10,22 @@ export function EditorSurface({
   text,
   editable,
   onChange,
+  binding,
 }: {
   document: string;
   editedLabel?: string;
   text: string;
   editable: boolean;
   onChange: (document: string, text: string) => void;
+  binding?: EditorBinding | undefined;
 }) {
   const [Editor, setEditor] = useState<typeof NoteEditor | null>(null);
   const [plainText, setPlainText] = useState(text);
-  const plainEditable = editable && isPlainDocument(document);
+  // Collaborative notes need the rich editor; plain fallback typing is for local drafts.
+  const plainEditable = editable && !binding && isPlainDocument(document);
   const latestDocument = useRef(document);
+  // Collaborative and read-only views follow the document prop; local drafts keep typing.
+  if (binding || !editable) latestDocument.current = document;
   const [loadError, setLoadError] = useState(false);
   const host = useRef<HTMLDivElement>(null);
   const scrollBeforeUpgrade = useRef<number | null>(null);
@@ -36,7 +42,9 @@ export function EditorSurface({
         selection.anchorNode &&
         host.current.contains(selection.anchorNode);
       const typing =
-        editable && host.current.contains(window.document.activeElement);
+        editable &&
+        !binding &&
+        host.current.contains(window.document.activeElement);
       if (selecting || typing) return;
       try {
         loaded.validateDocument(latestDocument.current);
@@ -64,7 +72,7 @@ export function EditorSurface({
       window.document.removeEventListener("selectionchange", upgrade);
       window.document.removeEventListener("focusout", upgrade);
     };
-  }, [editable]);
+  }, [editable, binding]);
   useLayoutEffect(() => {
     if (Editor && host.current && scrollBeforeUpgrade.current !== null) {
       const surface = host.current.closest(".note-surface");
@@ -73,7 +81,7 @@ export function EditorSurface({
   }, [Editor]);
   return (
     <div ref={host}>
-      {editable && !plainEditable && !Editor && (
+      {editable && !binding && !plainEditable && !Editor && (
         <p className="foundation-banner">
           This formatted draft will be editable when formatting is ready.
         </p>
@@ -89,6 +97,7 @@ export function EditorSurface({
           document={latestDocument.current}
           editable={editable}
           onChange={onChange}
+          binding={binding}
         />
       ) : plainEditable ? (
         <div className="editor-host">

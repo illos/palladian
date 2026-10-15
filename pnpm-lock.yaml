@@ -77,6 +77,12 @@ importers:
       '@convex-dev/better-auth':
         specifier: 0.12.5
         version: 0.12.5(patch_hash=4cdeb67452d6ccdc63a77801df78c25b10651e2a4df42312359b8f1e49ab1e5c)(@standard-schema/spec@1.1.0)(better-auth@1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(convex@1.45.0(react@19.3.0))(react@19.3.0)(typescript@7.0.2)
+      '@palladian/notes-backend':
+        specifier: workspace:*
+        version: link:../notes-backend
+      '@palladian/notes-core':
+        specifier: workspace:*
+        version: link:../../packages/notes-core
       better-auth:
         specifier: 1.6.30
         version: 1.6.30(patch_hash=8a91f0f69bc3b84dae0e5398339a49bcb56bb7a7e936cdbd505a089fee69729b)(@cloudflare/workers-types@5.20260908.1)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vitest@5.0.4(@edge-runtime/vm@5.0.0)(@types/node@26.4.0)(vite@8.2.2(@types/node@26.4.0)(esbuild@0.28.1)))
@@ -86,6 +92,9 @@ importers:
       dexie:
         specifier: 4.4.6
         version: 4.4.6
+      prosemirror-collab:
+        specifier: 1.3.1
+        version: 1.3.1
       prosemirror-commands:
         specifier: 1.7.2
         version: 1.7.2
@@ -101,15 +110,15 @@ importers:
       prosemirror-model:
         specifier: 1.25.12
         version: 1.25.12
-      prosemirror-schema-basic:
-        specifier: 1.2.5
-        version: 1.2.5
       prosemirror-schema-list:
         specifier: 1.5.1
         version: 1.5.1
       prosemirror-state:
         specifier: 1.4.4
         version: 1.4.4
+      prosemirror-transform:
+        specifier: 1.12.2
+        version: 1.12.2
       prosemirror-view:
         specifier: 1.42.6
         version: 1.42.6
@@ -1655,9 +1664,6 @@ packages:
   prosemirror-model@1.25.12:
     resolution: {integrity: sha512-Ue2gTmXMa7EhpLNhC7J+h4+ykD8ha12K6rrZFFKKJHBForfIStw5gJ6Zrf1mqqAa9NmpmEB4wp9bKmA4eUVjWg==}
 
-  prosemirror-schema-basic@1.2.5:
-    resolution: {integrity: sha512-McBWhfgOfThyu3Nltbs8SOUbM4t/h0pxteibaaHd1QR4S+F1t0u7M1ETaCE6/cveFoF+2fowTIBNkJOyeZQjNg==}
-
   prosemirror-schema-list@1.5.1:
     resolution: {integrity: sha512-927lFx/uwyQaGwJxLWCZRkjXG0p48KpMj6ueoYiu4JX05GGuGcgzAy62dfiV8eFZftgyBUvLx76RsMe20fJl+Q==}
 
@@ -2863,10 +2869,6 @@ snapshots:
   prosemirror-model@1.25.12:
     dependencies:
       orderedmap: 2.1.1
-
-  prosemirror-schema-basic@1.2.5:
-    dependencies:
-      prosemirror-model: 1.25.12
 
   prosemirror-schema-list@1.5.1:
     dependencies:

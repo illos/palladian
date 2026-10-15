@@ -1,5 +1,6 @@
 import Dexie, { type Table } from "dexie";
 
+export type NoteRole = "owner" | "edit" | "read";
 export interface NoteSummary {
   accountId: string;
   id: string;
@@ -7,15 +8,50 @@ export interface NoteSummary {
   preview: string;
   updatedAt: number;
   kind: "cached" | "draft";
+  notebookId?: string;
+  role?: NoteRole;
+  trashed?: boolean;
+}
+/** Server-side summary fields delivered by the library feed. */
+export interface RemoteSummary {
+  id: string;
+  title: string;
+  preview: string;
+  updatedAt: number;
+  notebookId: string;
+  role: NoteRole;
+  trashed: boolean;
 }
 export interface NoteBody {
   accountId: string;
   id: string;
   document: string;
   text: string;
+  revision?: number;
 }
+/**
+ * Recovery journal entry. Local notes not yet on the server carry only their
+ * current document. Live notes also carry the accepted base revision and the
+ * unconfirmed editor steps made on top of it.
+ */
 export interface Draft extends NoteBody {
   updatedAt: number;
+  baseDocument?: string;
+  baseRevision?: number;
+  steps?: string[];
+  clientId?: string;
+  /** False for a collaborative note whose server creation has not finished. */
+  created?: boolean;
+  notebookId?: string;
+}
+export interface CachedNotebook {
+  accountId: string;
+  id: string;
+  name: string;
+  description: string;
+  role: NoteRole;
+  ownerName: string;
+  isDefault: boolean;
 }
 export interface ActivationFence {
   epoch: number;
@@ -39,6 +75,11 @@ class NotesDatabase extends Dexie {
     string
   >;
   privacy!: Table<{ key: string; epoch: number }, string>;
+  notebooks!: Table<CachedNotebook, [string, string]>;
+  cursors!: Table<
+    { accountId: string; key: string; value: number },
+    [string, string]
+  >;
   constructor(name: string) {
     super(name);
     this.version(1).stores({
@@ -47,6 +88,10 @@ class NotesDatabase extends Dexie {
       drafts: "[accountId+id], accountId",
       accounts: "accountId",
       privacy: "key",
+    });
+    this.version(2).stores({
+      notebooks: "[accountId+id], accountId",
+      cursors: "[accountId+key], accountId",
     });
   }
 }
@@ -116,7 +161,11 @@ export class NotesStore {
       accountId,
       persisted?.epoch ?? 0,
     ))
-      visible.set(draft.id, { ...summary(draft), kind: "draft" });
+      visible.set(draft.id, {
+        ...visible.get(draft.id),
+        ...summary(draft),
+        kind: "draft",
+      });
     const after = await this.db.accounts.get(accountId);
     return this.epoch(accountId) === epoch &&
       !this.blocked.has(accountId) &&
@@ -168,7 +217,16 @@ export class NotesStore {
             await this.assertPersistent(draft.accountId, captured.epoch);
             this.assertWritable(draft.accountId, epoch);
             await this.db.drafts.put(draft);
-            await this.db.summaries.put({ ...summary(draft), kind: "draft" });
+            const previous = await this.db.summaries.get([
+              draft.accountId,
+              draft.id,
+            ]);
+            await this.db.summaries.put({
+              ...previous,
+              ...(draft.notebookId ? { notebookId: draft.notebookId } : {}),
+              ...summary(draft),
+              kind: "draft",
+            });
           },
         );
         this.notify();
@@ -212,7 +270,12 @@ export class NotesStore {
         await this.db.bodies.put(body);
         // Accepted refresh must not overwrite unsaved local recovery content.
         if (!(await this.db.drafts.get([body.accountId, body.id]))) {
+          const previous = await this.db.summaries.get([
+            body.accountId,
+            body.id,
+          ]);
           await this.db.summaries.put({
+            ...previous,
             ...summary({ ...body, updatedAt }),
             kind: "cached",
           });
@@ -231,17 +294,23 @@ export class NotesStore {
     this.channel?.postMessage({ accountId });
     await this.db.transaction(
       "rw",
-      this.db.summaries,
-      this.db.bodies,
-      this.db.drafts,
-      this.db.accounts,
-      this.db.privacy,
+      [
+        this.db.summaries,
+        this.db.bodies,
+        this.db.drafts,
+        this.db.accounts,
+        this.db.privacy,
+        this.db.notebooks,
+        this.db.cursors,
+      ],
       async () => {
         const privacy = await this.db.privacy.get("activation");
         await this.db.privacy.put({
           key: "activation",
           epoch: (privacy?.epoch ?? 0) + 1,
         });
+        await this.db.notebooks.where("accountId").equals(accountId).delete();
+        await this.db.cursors.where("accountId").equals(accountId).delete();
         const account = await this.db.accounts.get(accountId);
         await this.db.accounts.put({
           accountId,
@@ -349,6 +418,233 @@ export class NotesStore {
     const account = await this.db.accounts.get(accountId);
     if (account?.blocked || (account?.epoch ?? 0) !== epoch)
       throw new Error("Account access changed; local write was rejected.");
+  }
+  /** Apply library feed rows. Unsaved local recovery keeps its own title. */
+  async cacheSummaries(
+    accountId: string,
+    rows: RemoteSummary[],
+    removed: string[],
+    fence: CacheFence,
+    cursor?: { key: string; value: number },
+  ): Promise<void> {
+    if (fence.accountId !== accountId)
+      throw new Error("Account cache fence does not match.");
+    const epoch = this.epoch(accountId);
+    this.assertWritable(accountId, epoch);
+    await this.db.transaction(
+      "rw",
+      [
+        this.db.summaries,
+        this.db.bodies,
+        this.db.drafts,
+        this.db.accounts,
+        this.db.cursors,
+      ],
+      async () => {
+        await this.assertPersistent(accountId, fence.epoch);
+        this.assertWritable(accountId, epoch);
+        for (const row of rows) {
+          const draft = await this.db.drafts.get([accountId, row.id]);
+          const previous = await this.db.summaries.get([accountId, row.id]);
+          await this.db.summaries.put({
+            accountId,
+            id: row.id,
+            title: draft && previous ? previous.title : row.title,
+            preview: draft && previous ? previous.preview : row.preview,
+            updatedAt:
+              draft && previous
+                ? Math.max(previous.updatedAt, row.updatedAt)
+                : row.updatedAt,
+            kind: draft ? "draft" : "cached",
+            notebookId: row.notebookId,
+            role: row.role,
+            trashed: row.trashed,
+          });
+        }
+        // Lost access removes cached content and any pending work for it.
+        for (const id of removed) {
+          await this.db.summaries.delete([accountId, id]);
+          await this.db.bodies.delete([accountId, id]);
+          await this.db.drafts.delete([accountId, id]);
+          this.recoveryDrafts.delete(JSON.stringify([accountId, id]));
+        }
+        if (cursor)
+          await this.db.cursors.put({
+            accountId,
+            key: cursor.key,
+            value: cursor.value,
+          });
+      },
+    );
+    this.notify();
+  }
+  async cursor(accountId: string, key: string): Promise<number> {
+    return (await this.db.cursors.get([accountId, key]))?.value ?? 0;
+  }
+  async notebooks(accountId: string): Promise<CachedNotebook[]> {
+    if (this.blocked.has(accountId)) return [];
+    const rows = await this.db.notebooks
+      .where("accountId")
+      .equals(accountId)
+      .toArray();
+    return rows.sort((a, b) => a.name.localeCompare(b.name));
+  }
+  /** Replace the notebook list; cached notes of notebooks no longer visible are removed. */
+  async setNotebooks(
+    accountId: string,
+    notebooks: Omit<CachedNotebook, "accountId">[],
+    keepNoteIds: Set<string>,
+    fence: CacheFence,
+  ): Promise<void> {
+    if (fence.accountId !== accountId)
+      throw new Error("Account cache fence does not match.");
+    const epoch = this.epoch(accountId);
+    this.assertWritable(accountId, epoch);
+    await this.db.transaction(
+      "rw",
+      [
+        this.db.notebooks,
+        this.db.summaries,
+        this.db.bodies,
+        this.db.drafts,
+        this.db.accounts,
+        this.db.cursors,
+      ],
+      async () => {
+        await this.assertPersistent(accountId, fence.epoch);
+        this.assertWritable(accountId, epoch);
+        const visible = new Set(notebooks.map((n) => n.id));
+        const previous = await this.db.notebooks
+          .where("accountId")
+          .equals(accountId)
+          .toArray();
+        await this.db.notebooks.where("accountId").equals(accountId).delete();
+        await this.db.notebooks.bulkPut(
+          notebooks.map((n) => ({ ...n, accountId })),
+        );
+        for (const old of previous) {
+          if (visible.has(old.id)) continue;
+          await this.db.cursors.delete([accountId, "notebook:" + old.id]);
+          const rows = await this.db.summaries
+            .where("accountId")
+            .equals(accountId)
+            .toArray();
+          for (const row of rows) {
+            if (row.notebookId !== old.id || keepNoteIds.has(row.id)) continue;
+            await this.db.summaries.delete([accountId, row.id]);
+            await this.db.bodies.delete([accountId, row.id]);
+            await this.db.drafts.delete([accountId, row.id]);
+            this.recoveryDrafts.delete(JSON.stringify([accountId, row.id]));
+          }
+        }
+      },
+    );
+    this.notify();
+  }
+  async bodyRevision(accountId: string, id: string): Promise<number | null> {
+    const body = await this.db.bodies.get([accountId, id]);
+    return body?.revision ?? null;
+  }
+  async summaryRows(accountId: string): Promise<NoteSummary[]> {
+    if (this.blocked.has(accountId)) return [];
+    return this.db.summaries.where("accountId").equals(accountId).toArray();
+  }
+  async readDraft(accountId: string, id: string): Promise<Draft | undefined> {
+    if (this.blocked.has(accountId)) return undefined;
+    const key = JSON.stringify([accountId, id]);
+    return (
+      this.recoveryDrafts.get(key) ??
+      (await this.db.drafts.get([accountId, id]))
+    );
+  }
+  async localDrafts(accountId: string): Promise<Draft[]> {
+    if (this.blocked.has(accountId)) return [];
+    const rows = await this.db.drafts
+      .where("accountId")
+      .equals(accountId)
+      .toArray();
+    return rows.filter((draft) => draft.baseRevision === undefined);
+  }
+  /**
+   * Retire a journal entry once the server accepted everything in it, keeping
+   * the accepted document as the cached body. A newer entry is left alone.
+   */
+  async settleDraft(
+    accountId: string,
+    id: string,
+    accepted: NoteBody & { revision: number },
+    updatedAt: number,
+    expected: Draft | null,
+    fence: CacheFence,
+  ): Promise<void> {
+    const epoch = this.epoch(accountId);
+    this.assertWritable(accountId, epoch);
+    const key = JSON.stringify([accountId, id]);
+    await Promise.allSettled([this.draftQueues.get(key)]);
+    await this.db.transaction(
+      "rw",
+      [this.db.drafts, this.db.summaries, this.db.bodies, this.db.accounts],
+      async () => {
+        await this.assertPersistent(accountId, fence.epoch);
+        this.assertWritable(accountId, epoch);
+        const current = await this.db.drafts.get([accountId, id]);
+        if (expected && current && current.updatedAt !== expected.updatedAt)
+          return;
+        await this.db.drafts.delete([accountId, id]);
+        await this.db.bodies.put({ ...accepted, accountId, id });
+        const previous = await this.db.summaries.get([accountId, id]);
+        await this.db.summaries.put({
+          ...previous,
+          ...summary({ ...accepted, accountId, id, updatedAt }),
+          kind: "cached",
+        });
+      },
+    );
+    const memory = this.recoveryDrafts.get(key);
+    if (memory && (!expected || memory.updatedAt === expected.updatedAt)) {
+      this.recoveryDrafts.delete(key);
+      this.recoveryFences.delete(key);
+    }
+    this.notify();
+  }
+  /** Move a local note's records to the ID the server assigned. */
+  async adoptServerId(
+    accountId: string,
+    localId: string,
+    noteId: string,
+    fence: CacheFence,
+  ): Promise<void> {
+    const epoch = this.epoch(accountId);
+    this.assertWritable(accountId, epoch);
+    const oldKey = JSON.stringify([accountId, localId]);
+    await Promise.allSettled([this.draftQueues.get(oldKey)]);
+    await this.db.transaction(
+      "rw",
+      [this.db.drafts, this.db.summaries, this.db.bodies, this.db.accounts],
+      async () => {
+        await this.assertPersistent(accountId, fence.epoch);
+        this.assertWritable(accountId, epoch);
+        const draft = await this.db.drafts.get([accountId, localId]);
+        const row = await this.db.summaries.get([accountId, localId]);
+        const body = await this.db.bodies.get([accountId, localId]);
+        if (draft) await this.db.drafts.put({ ...draft, id: noteId });
+        if (row) await this.db.summaries.put({ ...row, id: noteId });
+        if (body) await this.db.bodies.put({ ...body, id: noteId });
+        await this.db.drafts.delete([accountId, localId]);
+        await this.db.summaries.delete([accountId, localId]);
+        await this.db.bodies.delete([accountId, localId]);
+      },
+    );
+    const memory = this.recoveryDrafts.get(oldKey);
+    if (memory) {
+      const fenceValue = this.recoveryFences.get(oldKey);
+      this.recoveryDrafts.delete(oldKey);
+      this.recoveryFences.delete(oldKey);
+      const newKey = JSON.stringify([accountId, noteId]);
+      this.recoveryDrafts.set(newKey, { ...memory, id: noteId });
+      if (fenceValue) this.recoveryFences.set(newKey, fenceValue);
+    }
+    this.notify();
   }
   close() {
     this.channel?.close();

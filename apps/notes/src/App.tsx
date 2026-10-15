@@ -1,47 +1,122 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { SessionController } from "./session";
-import { type NoteBody, type NoteSummary, type NotesStore } from "./cache";
+import type {
+  CachedNotebook,
+  NoteBody,
+  NoteRole,
+  NoteSummary,
+  NotesStore,
+} from "./cache";
 import { emptyDocument, validateCachedDocument } from "./document";
 import { EditorSurface } from "./EditorSurface";
 import { Icon } from "./Icons";
 import { Appearance } from "./Appearance";
+import { NoteChannel, type ChannelStatus } from "./channel";
+import { liveStateSource, type LiveBox } from "./liveBox";
+import type { SearchHit } from "./live";
 import "./theme.css";
 import "./styles.css";
 
+const Panels = lazy(() => import("./panels"));
+
+type OpenKind = "cached" | "draft" | "live" | "reader";
 interface OpenNote extends NoteBody {
-  kind: "cached" | "draft";
+  kind: OpenKind;
+  key: string;
   generation: number;
+  role: NoteRole | null;
+  trashed: boolean;
+  channel: NoteChannel | null;
 }
+type Section =
+  { kind: "all" } | { kind: "notebook"; id: string } | { kind: "trash" };
+type Dialog =
+  | { kind: "share"; noteId: string }
+  | { kind: "notebook"; notebookId: string | null }
+  | null;
+type SettingsTab = "appearance" | "agents" | "account";
+
 const statusLabels = {
   connecting: "Connecting — cached notes remain available",
-  ready: "Session connected — local foundation",
+  ready: "Connected",
   retrying: "Reconnecting — cached notes remain available",
   expired: "Sign in again to reconnect — cached notes remain available",
   revoked: "Device access revoked",
   "signed-out": "Signed out",
 };
+
+function randomId() {
+  return crypto.randomUUID().replace(/-/g, "");
+}
+
+function channelLabel(status: ChannelStatus | null, ready: boolean) {
+  if (!status) return "";
+  switch (status.kind) {
+    case "offline":
+      if (status.pending) return "Offline — changes kept on this device";
+      return ready ? "Offline" : "Cached copy — read only";
+    case "syncing":
+      return "Connecting…";
+    case "saving":
+      return "Saving…";
+    case "saved":
+      return "Saved";
+    case "blocked":
+      return status.message;
+  }
+}
+
+function routeNoteId() {
+  const match = /^\/notes\/([A-Za-z0-9_-]+)$/.exec(location.pathname);
+  return match ? match[1]! : null;
+}
+
 export function App({
   session,
   store,
+  liveBox,
 }: {
   session: SessionController;
   store: NotesStore;
+  liveBox: LiveBox;
 }) {
   const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot);
-  const [view, setView] = useState<"notes" | "appearance">("notes");
+  const live = useSyncExternalStore(liveBox.subscribe, liveBox.get);
+  const source = useMemo(() => liveStateSource(live), [live]);
+  const liveState = useSyncExternalStore(source.subscribe, source.get);
+  const [view, setView] = useState<"notes" | "settings">("notes");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("appearance");
+  const [section, setSection] = useState<Section>({ kind: "all" });
+  const [dialog, setDialog] = useState<Dialog>(null);
   const navSheet = useRef<HTMLDialogElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const [rows, setRows] = useState<NoteSummary[]>([]);
+  const [notebooks, setNotebooks] = useState<CachedNotebook[]>([]);
   const [open, setOpen] = useState<OpenNote | null>(null);
   const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<SearchHit[]>([]);
   const [rowLimit, setRowLimit] = useState(60);
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState(
     "Local draft — not saved to server",
   );
+  const [channelStatus, setChannelStatus] = useState<ChannelStatus | null>(
+    null,
+  );
   const openRequest = useRef(0);
   const listRequest = useRef(0);
   const writeRequest = useRef(0);
+  const pendingRoute = useRef(routeNoteId());
+  const openKey = useRef<string | null>(null);
+  openKey.current = open?.key ?? null;
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
   const accountId = snapshot.accountId;
@@ -49,14 +124,20 @@ export function App({
     accountId !== null &&
     snapshot.status !== "revoked" &&
     snapshot.status !== "signed-out";
+  const liveReady =
+    !!live && liveState.ready && liveState.accountId === accountId;
   const currentOpen = permitted && open?.accountId === accountId ? open : null;
+
   useEffect(() => {
     session.start();
     return () => session.stop();
   }, [session]);
+
+  // Library rows and notebooks come from the local cache; the live layer fills it.
   useEffect(() => {
     let mounted = true;
     setRows([]);
+    setNotebooks([]);
     setRowLimit(60);
     setOpen(null);
     setError(null);
@@ -65,13 +146,18 @@ export function App({
       const request = ++listRequest.current;
       if (!accountId || !permitted) return;
       try {
-        const result = await store.list(accountId);
+        const [result, books] = await Promise.all([
+          store.list(accountId),
+          store.notebooks(accountId),
+        ]);
         if (
           mounted &&
           request === listRequest.current &&
           snapshotRef.current.accountId === accountId
-        )
+        ) {
           setRows(result);
+          setNotebooks(books);
+        }
       } catch {
         if (mounted)
           setError(
@@ -84,6 +170,7 @@ export function App({
       if (event.invalidated && event.accountId === accountId) {
         openRequest.current++;
         setRows([]);
+        setNotebooks([]);
         setOpen(null);
       }
       void refresh();
@@ -93,13 +180,155 @@ export function App({
       unsubscribe();
     };
   }, [accountId, permitted, store]);
+
+  // Open channels follow live availability without remounting the editor.
+  const transport = liveReady ? live!.transport : null;
+  useEffect(() => {
+    currentOpen?.channel?.connect(transport);
+  }, [currentOpen?.channel, transport]);
+
+  // Background sync leaves the open note to its editor.
+  useEffect(() => {
+    if (!live || !currentOpen) return;
+    const id = currentOpen.id;
+    live.setOpen(id, true);
+    return () => live.setOpen(id, false);
+  }, [live, currentOpen?.id]);
+
+  // Read-only notes follow the accepted document.
+  useEffect(() => {
+    if (!liveReady || currentOpen?.kind !== "reader") return;
+    const key = currentOpen.key;
+    return live!.subscribeContent(currentOpen.id, (content) => {
+      if (!content) return;
+      setOpen((prev) =>
+        prev && prev.key === key && prev.revision !== content.revision
+          ? { ...prev, document: content.doc, revision: content.revision }
+          : prev,
+      );
+    });
+  }, [liveReady, live, currentOpen?.kind, currentOpen?.id, currentOpen?.key]);
+
+  // Server search complements instant local filtering.
+  useEffect(() => {
+    if (!liveReady || query.trim().length < 2) {
+      setHits([]);
+      return;
+    }
+    const term = query;
+    const timer = setTimeout(() => {
+      void live!
+        .search(term)
+        .then((result) => setHits(result))
+        .catch(() => setHits([]));
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [liveReady, live, query]);
+
+  // A deep link opens its note once the library knows about it.
+  useEffect(() => {
+    const id = pendingRoute.current;
+    if (!id || !permitted) return;
+    const row = rows.find((r) => r.id === id);
+    if (row) {
+      pendingRoute.current = null;
+      void selectNote(row);
+    } else if (liveReady) {
+      pendingRoute.current = null;
+      void openRemote(id);
+    }
+  }, [rows, permitted, liveReady]);
+
+  function closeOpen() {
+    openRequest.current++;
+    open?.channel?.close();
+    setOpen(null);
+    setChannelStatus(null);
+    if (location.pathname !== "/") history.replaceState(null, "", "/");
+  }
+
+  function show(note: OpenNote) {
+    open?.channel?.close();
+    setChannelStatus(null);
+    openKey.current = note.key;
+    setOpen(note);
+    if (!note.id.startsWith("local-") && note.kind !== "draft")
+      history.replaceState(null, "", "/notes/" + note.id);
+    else if (location.pathname !== "/") history.replaceState(null, "", "/");
+  }
+
+  function makeChannel(
+    note: {
+      id: string;
+      created: boolean;
+      baseDocument: string;
+      baseRevision: number;
+      clientId: string;
+      pending: string[];
+      notebookId?: string | undefined;
+    },
+    key: string,
+  ) {
+    const channel: NoteChannel = new NoteChannel({
+      store,
+      accountId: accountId!,
+      noteId: note.id,
+      created: note.created,
+      baseDocument: note.baseDocument,
+      baseRevision: note.baseRevision,
+      clientId: note.clientId,
+      pending: note.pending,
+      ...(note.notebookId ? { notebookId: note.notebookId } : {}),
+      onStatus: (status) => {
+        if (openKey.current === key) setChannelStatus(status);
+      },
+      onCreated: (noteId) => {
+        setOpen((prev) => (prev?.key === key ? { ...prev, id: noteId } : prev));
+        history.replaceState(null, "", "/notes/" + noteId);
+      },
+    });
+    return channel;
+  }
+
+  async function openRemote(noteId: string) {
+    if (!live || !accountId) return;
+    try {
+      const content = await live.fetchContent(noteId);
+      if (!content) {
+        setError("This note is not available to you.");
+        return;
+      }
+      const { parseStoredDoc, plainText } =
+        await import("@palladian/notes-core");
+      const fence = await store.captureFence(accountId);
+      await store.cacheAccepted(
+        {
+          accountId,
+          id: noteId,
+          document: content.doc,
+          text: plainText(parseStoredDoc(content.doc)),
+          revision: content.revision,
+        },
+        Date.now(),
+        fence,
+      );
+      const row = (await store.list(accountId)).find((r) => r.id === noteId);
+      if (row) await selectNote({ ...row, role: row.role ?? content.role });
+    } catch {
+      setError("This note could not be opened.");
+    }
+  }
+
   async function selectNote(row: NoteSummary) {
     setView("notes");
     if (currentOpen?.id === row.id) return;
     const request = ++openRequest.current;
     const generation = snapshot.generation;
     try {
-      const body = await store.read(row.accountId, row.id);
+      const [body, draft] = await Promise.all([
+        store.read(row.accountId, row.id),
+        store.readDraft(row.accountId, row.id),
+      ]);
       if (
         request !== openRequest.current ||
         snapshotRef.current.accountId !== row.accountId ||
@@ -107,33 +336,107 @@ export function App({
       )
         return;
       if (!body) {
+        if (liveReady) return void openRemote(row.id);
         setError("This note's text is not cached on this device yet.");
         return;
       }
       validateCachedDocument(body.document);
       setError(null);
-      setOpen({ ...body, kind: row.kind, generation });
-      setSaveState("Local draft — not saved to server");
+      const base = {
+        ...body,
+        key: row.id,
+        generation,
+        role: row.role ?? null,
+        trashed: !!row.trashed,
+      };
+      const baseRevision = draft?.baseRevision ?? body.revision;
+      if (draft && draft.baseRevision === undefined) {
+        show({ ...base, kind: "draft", channel: null });
+        setSaveState("Local draft — not saved to server");
+      } else if (row.role === "read") {
+        show({ ...base, kind: "reader", channel: null });
+      } else if (
+        (row.role === "owner" || row.role === "edit") &&
+        baseRevision !== undefined
+      ) {
+        const channel = makeChannel(
+          {
+            id: row.id,
+            created: draft?.created ?? true,
+            baseDocument: draft?.baseDocument ?? body.document,
+            baseRevision,
+            clientId: draft?.clientId ?? randomId(),
+            pending: draft?.steps ?? [],
+            notebookId: draft?.notebookId ?? row.notebookId,
+          },
+          row.id,
+        );
+        show({ ...base, kind: "live", channel });
+      } else {
+        show({ ...base, kind: "cached", channel: null });
+      }
     } catch {
       setError("This note could not be opened from local storage.");
     }
   }
-  async function createDraft() {
+
+  async function createNote() {
     if (!accountId || !permitted) return;
+    openRequest.current++;
+    setView("notes");
+    if (liveReady) {
+      const { emptyDoc } = await import("@palladian/notes-core");
+      const id = "local-" + randomId();
+      const doc = JSON.stringify(emptyDoc().toJSON());
+      const notebookId =
+        section.kind === "notebook"
+          ? section.id
+          : (liveState.profile?.defaultNotebookId ?? undefined);
+      const channel = makeChannel(
+        {
+          id,
+          created: false,
+          baseDocument: doc,
+          baseRevision: 0,
+          clientId: randomId(),
+          pending: [],
+          notebookId,
+        },
+        id,
+      );
+      show({
+        accountId,
+        id,
+        key: id,
+        document: doc,
+        text: "",
+        revision: 0,
+        kind: "live",
+        generation: snapshot.generation,
+        role: "owner",
+        trashed: false,
+        channel,
+      });
+      return;
+    }
     const draft: OpenNote = {
       accountId,
       id: crypto.randomUUID(),
+      key: "",
       document: emptyDocument(),
       text: "",
       kind: "draft",
       generation: snapshot.generation,
+      role: null,
+      trashed: false,
+      channel: null,
     };
-    openRequest.current++;
-    setView("notes");
-    setOpen(draft); // Typing can start before IDB or authentication completes.
+    draft.key = draft.id;
+    show(draft); // Typing can start before IDB or authentication completes.
     setSaveState("Saving draft on this device…");
     await persistDraft(draft, draft.document, "");
   }
+
   async function persistDraft(note: OpenNote, document: string, text: string) {
     const request = ++writeRequest.current;
     setSaveState("Saving draft on this device…");
@@ -144,6 +447,7 @@ export function App({
         document,
         text,
         updatedAt: Date.now(),
+        ...(section.kind === "notebook" ? { notebookId: section.id } : {}),
       });
       if (
         snapshotRef.current.accountId === note.accountId &&
@@ -166,36 +470,154 @@ export function App({
       }
     }
   }
-  const visibleRows = permitted
-    ? rows.filter(
-        (row) =>
-          row.accountId === accountId &&
-          (row.title + " " + row.preview)
-            .toLocaleLowerCase()
-            .includes(query.toLocaleLowerCase()),
-      )
+
+  async function toggleTrash(note: OpenNote) {
+    if (!live) return;
+    try {
+      await live.trash(note.id, !note.trashed);
+      if (!note.trashed) closeOpen();
+      else
+        setOpen((prev) =>
+          prev?.key === note.key ? { ...prev, trashed: false } : prev,
+        );
+    } catch (failure) {
+      setError(
+        failure instanceof Error ? failure.message : "That change failed.",
+      );
+    }
+  }
+
+  const visibleNotebookIds = new Set(notebooks.map((n) => n.id));
+  const sectionRows = permitted
+    ? rows.filter((row) => {
+        if (row.accountId !== accountId) return false;
+        if (section.kind === "trash") return !!row.trashed;
+        if (section.kind === "notebook")
+          return row.notebookId === section.id && !row.trashed;
+        return true;
+      })
     : [];
-  function navigate(next: "notes" | "appearance") {
+  const needle = query.toLocaleLowerCase();
+  const visibleRows = sectionRows.filter((row) =>
+    (row.title + " " + row.preview).toLocaleLowerCase().includes(needle),
+  );
+  const shownIds = new Set(visibleRows.map((r) => r.id));
+  const extraHits = hits.filter((hit) => !shownIds.has(hit.summary.id));
+  const sectionTitle =
+    section.kind === "trash"
+      ? "Trash"
+      : section.kind === "notebook"
+        ? (notebooks.find((n) => n.id === section.id)?.name ?? "Notebook")
+        : "All notes";
+  const openRole = currentOpen?.role ?? null;
+  const canEdit = openRole === "owner" || openRole === "edit";
+  const editable =
+    !!currentOpen &&
+    (currentOpen.kind === "draft" ||
+      (currentOpen.kind === "live" &&
+        !currentOpen.trashed &&
+        !!currentOpen.channel?.ready &&
+        channelStatus?.kind !== "blocked"));
+  const statusText = !currentOpen
+    ? ""
+    : currentOpen.kind === "draft"
+      ? saveState
+      : currentOpen.kind === "cached"
+        ? "Cached copy — read only"
+        : currentOpen.kind === "reader"
+          ? liveReady
+            ? "Read only"
+            : "Cached copy — read only"
+          : currentOpen.trashed
+            ? "In Trash — restore to edit"
+            : channelLabel(channelStatus, !!currentOpen.channel?.ready);
+  const serverNote =
+    !!currentOpen &&
+    currentOpen.kind !== "draft" &&
+    !currentOpen.id.startsWith("local-");
+
+  function navigate(next: "notes" | "settings", tab?: SettingsTab) {
     setView(next);
+    if (tab) setSettingsTab(tab);
     navSheet.current?.close();
   }
+  function choose(next: Section) {
+    setSection(next);
+    setRowLimit(60);
+    navigate("notes");
+  }
+
   const navigation = (
     <>
       <div className="wordmark">palladian</div>
       <p className="nav-label">Collections</p>
       <button
-        className={view === "notes" ? "nav-item active" : "nav-item"}
-        onClick={() => navigate("notes")}
+        className={
+          view === "notes" && section.kind === "all"
+            ? "nav-item active"
+            : "nav-item"
+        }
+        onClick={() => choose({ kind: "all" })}
       >
         <Icon name="notes" size={17} />
         <span>All Notes</span>
-        <small>{permitted ? rows.length : 0}</small>
+        <small>
+          {permitted ? rows.filter((r) => r.accountId === accountId).length : 0}
+        </small>
+      </button>
+      {(notebooks.length > 0 || liveReady) && (
+        <p className="nav-label nav-label-row">
+          Notebooks
+          {liveReady && (
+            <button
+              className="nav-label-action"
+              aria-label="New notebook"
+              title="New notebook"
+              onClick={() => setDialog({ kind: "notebook", notebookId: null })}
+            >
+              <Icon name="plus" size={14} />
+            </button>
+          )}
+        </p>
+      )}
+      {notebooks.map((notebook) => (
+        <button
+          key={notebook.id}
+          className={
+            view === "notes" &&
+            section.kind === "notebook" &&
+            section.id === notebook.id
+              ? "nav-item active"
+              : "nav-item"
+          }
+          onClick={() => choose({ kind: "notebook", id: notebook.id })}
+          title={
+            notebook.role === "owner"
+              ? notebook.name
+              : `${notebook.name} — shared by ${notebook.ownerName}`
+          }
+        >
+          <Icon name="notebook" size={17} />
+          <span>{notebook.name}</span>
+          {notebook.role !== "owner" && <small>Shared</small>}
+        </button>
+      ))}
+      <button
+        className={
+          view === "notes" && section.kind === "trash"
+            ? "nav-item active"
+            : "nav-item"
+        }
+        onClick={() => choose({ kind: "trash" })}
+      >
+        <Icon name="trash" size={17} />
+        <span>Trash</span>
       </button>
       <div className="nav-spacer" />
       <div className="nav-footer">
         <button
-          className={view === "appearance" ? "nav-item active" : "nav-item"}
-          onClick={() => navigate("appearance")}
+          className={view === "settings" ? "nav-item active" : "nav-item"}
+          onClick={() => navigate("settings")}
         >
           <Icon name="settings" size={17} />
           <span>Settings</span>
@@ -203,12 +625,18 @@ export function App({
       </div>
     </>
   );
+
+  const activeNotebook =
+    section.kind === "notebook"
+      ? notebooks.find((n) => n.id === section.id)
+      : undefined;
+
   return (
     <div
       className={[
         "notes-app",
         currentOpen && "has-note",
-        view === "appearance" && "settings-view",
+        view === "settings" && "settings-view",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -220,14 +648,36 @@ export function App({
         <div className="library-notes" hidden={view !== "notes"}>
           <header className="library-header">
             <div>
-              <h1>All notes</h1>
-              <p className="note-count">{visibleRows.length} notes</p>
+              <h1>{sectionTitle}</h1>
+              <p className="note-count">
+                {visibleRows.length} notes
+                {activeNotebook && liveReady && (
+                  <>
+                    {" · "}
+                    <button
+                      className="link-button"
+                      onClick={() =>
+                        setDialog({
+                          kind: "notebook",
+                          notebookId: activeNotebook.id,
+                        })
+                      }
+                    >
+                      {activeNotebook.role === "owner" ? "Sharing" : "Members"}
+                    </button>
+                  </>
+                )}
+              </p>
             </div>
             <button
               onClick={() => {
-                void createDraft();
+                void createNote();
               }}
-              disabled={!permitted}
+              disabled={
+                !permitted ||
+                section.kind === "trash" ||
+                (activeNotebook !== undefined && activeNotebook.role === "read")
+              }
               aria-label="New note"
             >
               <Icon name="compose" size={21} />
@@ -235,7 +685,7 @@ export function App({
           </header>
           <label className="search">
             <Icon name="search" size={17} />
-            <span className="sr-only">Search cached titles and previews</span>
+            <span className="sr-only">Search notes</span>
             <input
               ref={search}
               type="search"
@@ -268,7 +718,7 @@ export function App({
                   void selectNote(row);
                 }}
               >
-                <strong>{row.title}</strong>
+                <strong>{row.title || "Untitled"}</strong>
                 <span className="row-detail">
                   <time dateTime={new Date(row.updatedAt).toISOString()}>
                     {smartDate(row.updatedAt)}
@@ -277,7 +727,15 @@ export function App({
                     {row.preview || "Empty note"}
                   </span>
                 </span>
-                {row.kind === "draft" && <small>Local draft</small>}
+                {row.kind === "draft" && (
+                  <small>{row.role ? "Unsaved changes" : "Local draft"}</small>
+                )}
+                {row.trashed && section.kind !== "trash" && (
+                  <small>In Trash</small>
+                )}
+                {row.notebookId &&
+                  !visibleNotebookIds.has(row.notebookId) &&
+                  !row.trashed && <small>Shared with you</small>}
               </button>
             ))}
             {rowLimit < visibleRows.length && (
@@ -288,17 +746,43 @@ export function App({
                 Show more notes
               </button>
             )}
-            {!visibleRows.length && (
+            {extraHits.length > 0 && (
+              <>
+                <p className="nav-label">Matches in note text</p>
+                {extraHits.map((hit) => (
+                  <button
+                    key={hit.summary.id}
+                    className="note-row"
+                    onClick={() => {
+                      const row = rows.find((r) => r.id === hit.summary.id);
+                      if (row) void selectNote(row);
+                      else void openRemote(hit.summary.id);
+                    }}
+                  >
+                    <strong>{hit.summary.title || "Untitled"}</strong>
+                    <span className="row-detail">
+                      <span className="row-preview">{hit.excerpt}</span>
+                    </span>
+                  </button>
+                ))}
+              </>
+            )}
+            {!visibleRows.length && !extraHits.length && (
               <p className="empty-list">
-                {permitted
-                  ? "No matching notes cached here yet."
-                  : "Connect an account to open its cached library."}
+                {!permitted
+                  ? "Connect an account to open its cached library."
+                  : section.kind === "trash"
+                    ? "Trash is empty."
+                    : "No matching notes cached here yet."}
               </p>
             )}
           </div>
           <footer className="connection-footer">
             <p role="status" data-testid="session-status">
               {statusLabels[snapshot.status]}
+              {snapshot.status === "ready" && live && !liveState.connected
+                ? " — server unreachable"
+                : ""}
             </p>
             {snapshot.error && <p>{snapshot.error}</p>}
             <details>
@@ -321,15 +805,45 @@ export function App({
             </details>
           </footer>
         </div>
-        <div className="settings-rail" hidden={view !== "appearance"}>
+        <div className="settings-rail" hidden={view !== "settings"}>
           <button className="settings-back" onClick={() => navigate("notes")}>
             <Icon name="back" size={15} />
             Notes
           </button>
           <h1>Settings</h1>
-          <button className="settings-tab active" aria-current="page">
+          <button
+            className={
+              settingsTab === "appearance"
+                ? "settings-tab active"
+                : "settings-tab"
+            }
+            aria-current={settingsTab === "appearance" ? "page" : undefined}
+            onClick={() => setSettingsTab("appearance")}
+          >
             <Icon name="sun" size={20} />
             Appearance
+          </button>
+          <button
+            className={
+              settingsTab === "agents" ? "settings-tab active" : "settings-tab"
+            }
+            aria-current={settingsTab === "agents" ? "page" : undefined}
+            onClick={() => setSettingsTab("agents")}
+            disabled={!liveReady}
+          >
+            <Icon name="agent" size={20} />
+            Connected agents
+          </button>
+          <button
+            className={
+              settingsTab === "account" ? "settings-tab active" : "settings-tab"
+            }
+            aria-current={settingsTab === "account" ? "page" : undefined}
+            onClick={() => setSettingsTab("account")}
+            disabled={!liveReady}
+          >
+            <Icon name="user" size={20} />
+            Account
           </button>
         </div>
         <div className="mobile-home-bar" hidden={view !== "notes"}>
@@ -344,9 +858,9 @@ export function App({
             <button
               aria-label="New note"
               onClick={() => {
-                void createDraft();
+                void createNote();
               }}
-              disabled={!permitted}
+              disabled={!permitted || section.kind === "trash"}
             >
               <Icon name="compose" size={22} />
               <span>New</span>
@@ -372,13 +886,7 @@ export function App({
           {currentOpen ? (
             <>
               <div className="note-toolbar">
-                <button
-                  className="back-button"
-                  onClick={() => {
-                    openRequest.current++;
-                    setOpen(null);
-                  }}
-                >
+                <button className="back-button" onClick={closeOpen}>
                   <Icon name="back" size={18} />
                   All notes
                 </button>
@@ -390,14 +898,43 @@ export function App({
                 >
                   <Icon name="menu" size={20} />
                 </button>
-                <span className="save-status">
-                  {currentOpen.kind === "draft"
-                    ? saveState
-                    : "Cached copy — read only"}
-                </span>
+                <span className="save-status">{statusText}</span>
+                {serverNote && liveReady && (
+                  <span className="note-actions">
+                    <button
+                      className="icon-button"
+                      aria-label="Share note"
+                      title="Share"
+                      onClick={() =>
+                        setDialog({ kind: "share", noteId: currentOpen.id })
+                      }
+                    >
+                      <Icon name="share" size={18} />
+                    </button>
+                    {canEdit && (
+                      <button
+                        className="icon-button"
+                        aria-label={
+                          currentOpen.trashed
+                            ? "Restore note"
+                            : "Move note to Trash"
+                        }
+                        title={
+                          currentOpen.trashed ? "Restore" : "Move to Trash"
+                        }
+                        onClick={() => void toggleTrash(currentOpen)}
+                      >
+                        <Icon
+                          name={currentOpen.trashed ? "restore" : "trash"}
+                          size={18}
+                        />
+                      </button>
+                    )}
+                  </span>
+                )}
               </div>
               <EditorSurface
-                key={currentOpen.id + ":" + currentOpen.generation}
+                key={currentOpen.key + ":" + currentOpen.generation}
                 editedLabel={
                   "Edited " +
                   smartDate(
@@ -407,9 +944,11 @@ export function App({
                 }
                 document={currentOpen.document}
                 text={currentOpen.text}
-                editable={currentOpen.kind === "draft"}
+                editable={editable}
+                binding={currentOpen.channel ?? undefined}
                 onChange={(document, text) => {
-                  void persistDraft(currentOpen, document, text);
+                  if (currentOpen.kind === "draft")
+                    void persistDraft(currentOpen, document, text);
                 }}
               />
             </>
@@ -419,7 +958,7 @@ export function App({
               <button
                 disabled={!permitted}
                 onClick={() => {
-                  void createDraft();
+                  void createNote();
                 }}
               >
                 New note
@@ -427,19 +966,59 @@ export function App({
             </div>
           )}
         </section>
-        <section className="appearance-region" hidden={view !== "appearance"}>
+        <section className="appearance-region" hidden={view !== "settings"}>
           <header className="settings-pane-header">
             <button className="back-button" onClick={() => navigate("notes")}>
               <Icon name="back" size={18} />
               Notes
             </button>
-            <h2>Appearance</h2>
+            <h2>
+              {settingsTab === "appearance"
+                ? "Appearance"
+                : settingsTab === "agents"
+                  ? "Connected agents"
+                  : "Account"}
+            </h2>
           </header>
           <div className="settings-pane-body">
-            <Appearance />
+            {settingsTab === "appearance" ? (
+              <Appearance />
+            ) : live && liveReady ? (
+              <Suspense fallback={<p>Loading…</p>}>
+                <Panels
+                  live={live}
+                  panel={settingsTab}
+                  session={session}
+                  notebooks={notebooks}
+                />
+              </Suspense>
+            ) : (
+              <p>Connect to the server to manage this.</p>
+            )}
           </div>
         </section>
       </main>
+      {dialog && live && liveReady && (
+        <Suspense fallback={null}>
+          <Panels
+            live={live}
+            panel={dialog.kind}
+            session={session}
+            notebooks={notebooks}
+            noteId={dialog.kind === "share" ? dialog.noteId : undefined}
+            notebookId={
+              dialog.kind === "notebook"
+                ? (dialog.notebookId ?? undefined)
+                : undefined
+            }
+            onClose={() => setDialog(null)}
+            onNotebookCreated={(id) => {
+              setDialog(null);
+              choose({ kind: "notebook", id });
+            }}
+          />
+        </Suspense>
+      )}
       <dialog
         ref={navSheet}
         className="mobile-nav-sheet"

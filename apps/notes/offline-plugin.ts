@@ -61,7 +61,13 @@ self.addEventListener('install', event => event.waitUntil(caches.open(NAME).then
 self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('palladian-notes-shell-') && key !== NAME).map(key => caches.delete(key)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
-  if (event.request.method !== 'GET' || url.search || event.request.headers.has('authorization') || url.origin !== self.location.origin || !ASSETS.includes(url.pathname)) return;
+  if (event.request.method !== 'GET' || url.search || event.request.headers.has('authorization') || url.origin !== self.location.origin) return;
+  // Note deep links open the cached shell; the app reads the note from the local cache.
+  if (event.request.mode === 'navigate' && /^\\/notes\\/[A-Za-z0-9_-]+$/.test(url.pathname)) {
+    event.respondWith(caches.open(NAME).then(cache => cache.match('/')).then(hit => hit || fetch(event.request)));
+    return;
+  }
+  if (!ASSETS.includes(url.pathname)) return;
   event.respondWith(caches.open(NAME).then(cache => cache.match(url.pathname)).then(hit => hit || fetch(event.request)));
 });`;
       this.emitFile({ type: "asset", fileName: "sw.js", source });

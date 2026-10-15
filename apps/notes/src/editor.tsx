@@ -1,15 +1,25 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Schema } from "prosemirror-model";
-import { schema as basicSchema } from "prosemirror-schema-basic";
 import {
-  addListNodes,
+  blockIdPlugin,
+  notesSchema,
+  parseStoredDoc,
+} from "@palladian/notes-core";
+import {
   liftListItem,
+  sinkListItem,
+  splitListItem,
   wrapInList,
 } from "prosemirror-schema-list";
-import { EditorState, type Command } from "prosemirror-state";
-import { EditorView } from "prosemirror-view";
+import {
+  EditorState,
+  type Command,
+  type Plugin,
+  type Transaction,
+} from "prosemirror-state";
+import { EditorView, type NodeViewConstructor } from "prosemirror-view";
 import {
   baseKeymap,
+  chainCommands,
   lift,
   setBlockType,
   toggleMark,
@@ -17,18 +27,20 @@ import {
 } from "prosemirror-commands";
 import { history, undo, redo } from "prosemirror-history";
 import { keymap } from "prosemirror-keymap";
-import { inputRules, textblockTypeInputRule } from "prosemirror-inputrules";
+import {
+  InputRule,
+  inputRules,
+  textblockTypeInputRule,
+  wrappingInputRule,
+} from "prosemirror-inputrules";
+import { collab } from "prosemirror-collab";
+import { Step } from "prosemirror-transform";
+import type { MarkType } from "prosemirror-model";
+import type { EditorBinding } from "./binding";
 
-export const notesSchema = new Schema({
-  nodes: addListNodes(basicSchema.spec.nodes, "paragraph block*", "block"),
-  marks: basicSchema.spec.marks,
-});
+export { notesSchema };
 export function validateDocument(document: string) {
-  const node = notesSchema.nodeFromJSON(JSON.parse(document));
-  node.check();
-  if (node.type !== notesSchema.topNodeType)
-    throw new Error("Invalid note document.");
-  return node;
+  return parseStoredDoc(document);
 }
 export { emptyDocument, textDocument } from "./document";
 
@@ -44,7 +56,14 @@ type ToolGroup = "Style" | "Format" | "Lists";
 function EditorGlyph({
   name,
 }: {
-  name: "undo" | "redo" | "code" | "bullet-list" | "numbered-list" | "quote";
+  name:
+    | "undo"
+    | "redo"
+    | "code"
+    | "bullet-list"
+    | "numbered-list"
+    | "quote"
+    | "checklist";
 }) {
   const numberedStyle = {
     fontSize: "7px",
@@ -80,6 +99,14 @@ function EditorGlyph({
         <>
           <path d="M9 8l-4 4 4 4" />
           <path d="M15 8l4 4-4 4" />
+        </>
+      ) : name === "checklist" ? (
+        <>
+          <rect x="3" y="4.5" width="5" height="5" rx="1" />
+          <path d="M4.2 7.1l1.2 1.2 2-2.3" />
+          <rect x="3" y="14.5" width="5" height="5" rx="1" />
+          <line x1="11" y1="7" x2="20" y2="7" />
+          <line x1="11" y1="17" x2="20" y2="17" />
         </>
       ) : name === "quote" ? (
         <>
@@ -134,6 +161,9 @@ function EditorGlyph({
   );
 }
 const boldGlyph = <strong style={{ fontWeight: 600 }}>B</strong>;
+const strikeGlyph = (
+  <span style={{ textDecoration: "line-through", fontWeight: 500 }}>S</span>
+);
 const italicGlyph = <em style={{ fontFamily: "Georgia, serif" }}>I</em>;
 
 function inNode(state: EditorState, name: string) {
@@ -161,12 +191,16 @@ function blockStyle(label: string, type: string, level?: number): Tool {
   };
 }
 function listTool(label: string, type: string, glyph: ReactNode): Tool {
+  const item =
+    type === "task_list"
+      ? notesSchema.nodes.task_item!
+      : notesSchema.nodes.list_item!;
   return {
     label,
     glyph,
     command: (state, dispatch, view) =>
       inNode(state, type)
-        ? liftListItem(notesSchema.nodes.list_item!)(state, dispatch, view)
+        ? liftListItem(item)(state, dispatch, view)
         : wrapInList(notesSchema.nodes[type]!)(state, dispatch, view),
     active: (state) => inNode(state, type),
   };
@@ -193,6 +227,12 @@ const toolGroups: Record<ToolGroup, Tool[]> = {
       active: (state) => markActive(state, "em"),
     },
     {
+      label: "Strikethrough",
+      glyph: strikeGlyph,
+      command: toggleMark(notesSchema.marks.strike!),
+      active: (state) => markActive(state, "strike"),
+    },
+    {
       label: "Inline code",
       glyph: <EditorGlyph name="code" />,
       command: toggleMark(notesSchema.marks.code!),
@@ -210,6 +250,7 @@ const toolGroups: Record<ToolGroup, Tool[]> = {
       "ordered_list",
       <EditorGlyph name="numbered-list" />,
     ),
+    listTool("Checklist", "task_list", <EditorGlyph name="checklist" />),
     {
       label: "Quote",
       glyph: <EditorGlyph name="quote" />,
@@ -226,16 +267,178 @@ const historyTools: Tool[] = [
   { label: "Redo", glyph: <EditorGlyph name="redo" />, command: redo },
 ];
 
+/** Inline Markdown shortcuts: **bold**, *italic*, `code`, ~~strike~~. */
+function markRule(pattern: RegExp, type: MarkType) {
+  return new InputRule(pattern, (state, match, start, end) => {
+    const text = match[1];
+    if (!text) return null;
+    const $start = state.doc.resolve(start);
+    if ($start.parent.type.spec.code) return null;
+    const tr = state.tr.replaceWith(
+      start,
+      end,
+      notesSchema.text(text, [type.create()]),
+    );
+    return tr.removeStoredMark(type);
+  });
+}
+
+const {
+  heading,
+  paragraph,
+  code_block,
+  bullet_list,
+  ordered_list,
+  task_list,
+  list_item,
+  task_item,
+  blockquote,
+} = notesSchema.nodes as Record<string, import("prosemirror-model").NodeType>;
+const marks = notesSchema.marks as Record<string, MarkType>;
+
+/** `#HEADER` then Tab makes a heading (confirmed behavior). */
+const hashHeading: Command = (state, dispatch) => {
+  const { $from } = state.selection;
+  const text = $from.parent.textContent;
+  const match = /^(#{1,3})(.+)$/.exec(text);
+  if (
+    !match ||
+    $from.parent.type !== paragraph ||
+    $from.parentOffset !== text.length
+  )
+    return false;
+  if (dispatch) {
+    const tr = state.tr.delete($from.start(), $from.start() + match[1]!.length);
+    tr.setBlockType(
+      $from.before(),
+      $from.before() + tr.doc.nodeAt($from.before())!.nodeSize,
+      heading!,
+      { level: match[1]!.length },
+    );
+    dispatch(tr);
+  }
+  return true;
+};
+
+/** Three backticks then Enter starts a code block. */
+const fenceToCode: Command = (state, dispatch) => {
+  const { $from } = state.selection;
+  const match = /^```([\w-]{0,40})$/.exec($from.parent.textContent);
+  if (!match || $from.parent.type !== paragraph) return false;
+  if (dispatch) {
+    const tr = state.tr.delete($from.start(), $from.end());
+    tr.setBlockType($from.before(), $from.before() + 2, code_block!, {
+      language: match[1] ?? "",
+    });
+    dispatch(tr);
+  }
+  return true;
+};
+
+const taskView: NodeViewConstructor = (node, view, getPos) => {
+  const dom = document.createElement("li");
+  dom.className = "task-item";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = !!node.attrs.checked;
+  box.contentEditable = "false";
+  box.setAttribute("aria-label", "Done");
+  box.addEventListener("mousedown", (event) => event.preventDefault());
+  box.addEventListener("click", (event) => {
+    event.preventDefault();
+    const pos = getPos();
+    if (pos === undefined || !view.editable) return;
+    view.dispatch(
+      view.state.tr.setNodeAttribute(pos, "checked", !node.attrs.checked),
+    );
+  });
+  const content = document.createElement("div");
+  dom.append(box, content);
+  dom.dataset.checked = String(!!node.attrs.checked);
+  return {
+    dom,
+    contentDOM: content,
+    update(next) {
+      if (next.type !== node.type) return false;
+      node = next;
+      box.checked = !!next.attrs.checked;
+      dom.dataset.checked = String(!!next.attrs.checked);
+      return true;
+    },
+    ignoreMutation: (mutation) =>
+      mutation.type === "attributes" || mutation.target === box,
+  };
+};
+
+function plugins(binding: EditorBinding | undefined): Plugin[] {
+  const list = [
+    ...(binding
+      ? [collab({ version: binding.version, clientID: binding.clientId })]
+      : []),
+    blockIdPlugin((tr) => tr.getMeta("rebased") !== undefined),
+    history(),
+    inputRules({
+      rules: [
+        textblockTypeInputRule(/^(#{1,3})\s$/, heading!, (match) => ({
+          level: match[1]!.length,
+        })),
+        wrappingInputRule(/^\s*([-+*])\s$/, bullet_list!),
+        wrappingInputRule(
+          /^(\d+)\.\s$/,
+          ordered_list!,
+          (match) => ({ order: Number(match[1]) }),
+          (match, node) =>
+            node.childCount + Number(node.attrs.order) === Number(match[1]),
+        ),
+        wrappingInputRule(/^\[( |x)?\]\s$/, task_list!),
+        wrappingInputRule(/^\s*>\s$/, blockquote!),
+        markRule(/\*\*([^*]+)\*\*$/, marks.strong!),
+        markRule(/(?:^|[^*])\*([^*]+)\*$/, marks.em!),
+        markRule(/~~([^~]+)~~$/, marks.strike!),
+        markRule(/`([^`]+)`$/, marks.code!),
+      ],
+    }),
+    keymap({
+      "Mod-z": undo,
+      "Mod-Shift-z": redo,
+      "Mod-y": redo,
+      "Mod-b": toggleMark(marks.strong!),
+      "Mod-i": toggleMark(marks.em!),
+      "Mod-Shift-x": toggleMark(marks.strike!),
+      "Mod-e": toggleMark(marks.code!),
+      Enter: chainCommands(
+        fenceToCode,
+        splitListItem(task_item!),
+        splitListItem(list_item!),
+      ),
+      Tab: chainCommands(
+        hashHeading,
+        sinkListItem(list_item!),
+        sinkListItem(task_item!),
+      ),
+      "Shift-Tab": chainCommands(
+        liftListItem(list_item!),
+        liftListItem(task_item!),
+      ),
+      "Mod-Alt-0": setBlockType(paragraph!),
+    }),
+    keymap(baseKeymap),
+  ];
+  return list;
+}
+
 export function NoteEditor({
   document,
   editedLabel,
   editable,
   onChange,
+  binding,
 }: {
   document: string;
   editedLabel?: string | undefined;
   editable: boolean;
   onChange: (document: string, text: string) => void;
+  binding?: EditorBinding | undefined;
 }) {
   const [toolbarState, setToolbarState] = useState<EditorState | null>(null);
   const [mobileGroup, setMobileGroup] = useState<ToolGroup | null>(null);
@@ -245,67 +448,32 @@ export function NoteEditor({
   callback.current = onChange;
   useEffect(() => {
     if (!host.current) return;
-    const editor = new EditorView(host.current, {
+    const editor: EditorView = new EditorView(host.current, {
       state: EditorState.create({
         schema: notesSchema,
         doc: validateDocument(document),
-        plugins: [
-          history(),
-          inputRules({
-            rules: [
-              textblockTypeInputRule(
-                /^(#{1,3})\s$/,
-                notesSchema.nodes.heading!,
-                (match) => ({ level: match[1]!.length }),
-              ),
-            ],
-          }),
-          keymap({
-            "Mod-z": undo,
-            "Mod-Shift-z": redo,
-            "Mod-y": redo,
-            "Mod-b": toggleMark(notesSchema.marks.strong!),
-            "Mod-i": toggleMark(notesSchema.marks.em!),
-            Tab: (state, dispatch) => {
-              const { $from } = state.selection;
-              const text = $from.parent.textContent;
-              const match = /^(#{1,3})(.+)$/.exec(text);
-              if (
-                !match ||
-                $from.parent.type.name !== "paragraph" ||
-                $from.parentOffset !== text.length
-              )
-                return false;
-              if (dispatch) {
-                const tr = state.tr.delete(
-                  $from.start(),
-                  $from.start() + match[1]!.length,
-                );
-                tr.setBlockType(
-                  $from.before(),
-                  $from.before() + tr.doc.nodeAt($from.before())!.nodeSize,
-                  notesSchema.nodes.heading!,
-                  { level: match[1]!.length },
-                );
-                dispatch(tr);
-              }
-              return true;
-            },
-            "Mod-Alt-0": setBlockType(notesSchema.nodes.paragraph!),
-          }),
-          keymap(baseKeymap),
-        ],
+        plugins: plugins(binding),
       }),
       editable: () => editable,
+      nodeViews: { task_item: taskView },
       attributes: {
         "aria-label": "Note content",
         role: "textbox",
         "aria-multiline": "true",
       },
-      dispatchTransaction(transaction) {
+      handleClickOn(_view, _pos, _node, _nodePos, event) {
+        const link = (event.target as HTMLElement | null)?.closest("a[href]");
+        if (link && (event.metaKey || event.ctrlKey || !editor.editable)) {
+          window.open(link.getAttribute("href")!, "_blank", "noopener");
+          return true;
+        }
+        return false;
+      },
+      dispatchTransaction(transaction: Transaction) {
         editor.updateState(editor.state.apply(transaction));
         setToolbarState(editor.state);
-        if (transaction.docChanged)
+        if (binding) binding.changed(editor, transaction);
+        else if (transaction.docChanged)
           callback.current(
             JSON.stringify(editor.state.doc.toJSON()),
             editor.state.doc.textBetween(
@@ -317,15 +485,28 @@ export function NoteEditor({
       },
     });
     view.current = editor;
+    let detach: (() => void) | undefined;
+    if (binding) {
+      if (binding.pending.length) {
+        // Replay unconfirmed recovery steps as local edits so they are sent again.
+        const tr = editor.state.tr.setMeta("addToHistory", false);
+        for (const json of binding.pending)
+          tr.step(Step.fromJSON(notesSchema, JSON.parse(json)));
+        editor.dispatch(tr);
+      }
+      detach = binding.attach(editor);
+    }
     setToolbarState(editor.state);
     return () => {
+      detach?.();
       editor.destroy();
       view.current = null;
     };
-    // A new note mounts a new editor. Readiness updates without recreating selection.
-  }, [document]);
+    // A new note or binding mounts a new editor. Readiness updates keep selection.
+  }, [document, binding]);
   useEffect(() => {
     view.current?.setProps({ editable: () => editable });
+    if (view.current) setToolbarState(view.current.state);
   }, [editable]);
   const runTool = (tool: Tool) => {
     const editor = view.current;

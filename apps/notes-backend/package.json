@@ -2,6 +2,15 @@
   "name": "@palladian/notes-backend",
   "private": true,
   "type": "module",
+  "exports": {
+    "./api": {
+      "types": "./convex/_generated/api.d.ts",
+      "default": "./convex/_generated/api.js"
+    },
+    "./dataModel": {
+      "types": "./convex/_generated/dataModel.d.ts"
+    }
+  },
   "scripts": {
     "dev": "convex dev",
     "typecheck": "tsc --noEmit -p convex/tsconfig.json && tsc --noEmit -p tsconfig.json",
