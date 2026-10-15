@@ -98,8 +98,10 @@ const session = new SessionController({
   },
 });
 store.subscribe((event) => {
-  if (event.invalidated && event.accountId)
-    session.adoptInvalidation(event.accountId);
+  if (!event.invalidated || !event.accountId) return;
+  // A retirement keeps the account's work; only a clear signs it out here.
+  if (event.retired) session.adoptRetirement(event.accountId);
+  else session.adoptInvalidation(event.accountId);
 });
 window.addEventListener("storage", (event) => {
   if (event.key !== "palladian.notes.account-hint.v1") return;

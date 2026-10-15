@@ -132,17 +132,16 @@ export function settleDrafts(
     });
     const confirmExport = button("Export saved — sign out", () => {
       confirmExport.disabled = true;
-      // The export must still cover all kept work: nothing newer, nothing held.
-      void Promise.all([
-        store.unsavedWork(accountId),
-        store.exportDrafts(accountId),
-      ])
-        .then(([work, drafts]) => {
+      // The export must still cover all kept work, read at one point: nothing
+      // newer, nothing held.
+      void store
+        .settlement(accountId)
+        .then((work) => {
           if (!current() || finished) return;
           if (work.held) {
             status.textContent = `${describeHeld(work.held)} Cancel to keep it, or discard drafts to sign out.`;
             confirmExport.hidden = true;
-          } else if (fingerprint(drafts) !== exported) {
+          } else if (fingerprint(work.drafts) !== exported) {
             status.textContent =
               "Your drafts changed after the export. Export again before signing out.";
             confirmExport.hidden = true;

@@ -117,6 +117,23 @@ export class SessionController {
     this.pendingCleanup = accountId;
     this.update({ accountId: null, status: "signed-out", error: null });
   }
+  /**
+   * Another tab replaced this account with a different sign-in. Follow it: the
+   * next check retires this account, keeping its unsaved work, unless it is the
+   * account that comes back.
+   */
+  adoptRetirement(accountId: string): void {
+    if (this.snapshot.accountId !== accountId) return;
+    this.fence();
+    this.pendingRetire = accountId;
+    try {
+      this.options.hints.hideForRetire(accountId);
+    } catch {
+      /* the identity is hidden in memory regardless */
+    }
+    this.update({ accountId: null, status: "connecting", error: null });
+    this.check();
+  }
   /** Explicit retry also serves successful sign-in; passive startup honors logout. */
   retry(options: { afterSignIn?: boolean } = {}): void {
     if (!this.running || this.logoutPending) return;

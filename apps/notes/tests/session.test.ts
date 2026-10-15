@@ -383,3 +383,19 @@ test("an account signing back in before its retirement keeps its data", async ()
   assert.equal(session.getSnapshot().accountId, "a");
   session.stop();
 });
+
+test("a retirement adopted from another tab retires, never clears", async () => {
+  const { session, hints, cleared, retired } = setup(
+    { check: async () => ({ kind: "ready", accountId: "b" }) },
+    "a",
+  );
+  session.adoptRetirement("a");
+  assert.equal(session.getSnapshot().accountId, null);
+  assert.equal(hints.read().pendingRetire, "a");
+  session.start();
+  await flush();
+  assert.deepEqual(retired, ["a"]);
+  assert.deepEqual(cleared, []);
+  assert.equal(session.getSnapshot().accountId, "b");
+  session.stop();
+});
