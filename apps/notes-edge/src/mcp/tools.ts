@@ -60,7 +60,9 @@ const blockHash = z
   .max(32)
   .describe("The block's hash from the same outline; the edit fails if the block changed since.");
 
-const editSchema = z.discriminatedUnion("type", [
+// A plain union renders as JSON Schema anyOf, which more tool-calling models
+// accept than the oneOf a discriminated union produces.
+const editSchema = z.union([
   z
     .object({
       type: z.literal("replace_text"),

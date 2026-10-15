@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --port 8787",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p contract/tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.tools.json && tsc --noEmit -p contract/tsconfig.json",
     "test": "vitest run",
     "e2e": "node scripts/e2e.mjs",
     "keygen": "node scripts/keygen.mjs",
