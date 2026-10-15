@@ -1487,3 +1487,35 @@ describe("review round 3 regressions", () => {
     ).toBe(0);
   });
 });
+
+describe("review round 4 regressions", () => {
+  test("wrapping in a quote or list is accepted", async () => {
+    const t = setup();
+    const owner = await human(t, "Ada");
+    const { noteId } = await owner.as.mutation(api.notes.create, {
+      clientKey: "k",
+      doc: docJson("One\n\nTwo"),
+    });
+    const content = (await owner.as.query(api.notes.content, { noteId }))!;
+    const steps = await stepsFor(content.doc, (tr) => {
+      const range = tr.doc.resolve(1).blockRange(tr.doc.resolve(1))!;
+      tr.wrap(range, [{ type: notesSchema.nodes.blockquote! }]);
+      const $two = tr.doc.resolve(tr.doc.content.size - 2);
+      tr.wrap($two.blockRange()!, [
+        { type: notesSchema.nodes.bullet_list! },
+        { type: notesSchema.nodes.list_item! },
+      ]);
+    });
+    const pushed = await owner.as.mutation(api.notes.push, {
+      noteId,
+      revision: 0,
+      steps,
+      clientId: "c",
+    });
+    expect(pushed.status).toBe("accepted");
+    const after = (await owner.as.query(api.notes.content, { noteId }))!;
+    const doc = notesSchema.nodeFromJSON(JSON.parse(after.doc));
+    expect(doc.child(0).type.name).toBe("blockquote");
+    expect(doc.child(1).type.name).toBe("bullet_list");
+  });
+});

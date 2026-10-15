@@ -67,6 +67,29 @@ export function diffStep(
 }
 
 /**
+ * Structural check of the part of `doc` between `from` and `to`: every node
+ * overlapping the range, recursively, and the content of its ancestors.
+ */
+function checkChangedRange(doc: ProseMirrorNode, from: number, to: number) {
+  try {
+    const $from = doc.resolve(from);
+    const depth = $from.sharedDepth(to);
+    for (let d = 0; d <= depth; d++) {
+      const node = $from.node(d);
+      if (!node.type.validContent(node.content)) throw new Error();
+    }
+    const parent = $from.node(depth);
+    const start = $from.start(depth);
+    parent.forEach((child, offset) => {
+      const pos = start + offset;
+      if (pos <= to && pos + child.nodeSize >= from) child.check();
+    });
+  } catch {
+    throw new UnsafeDocumentError("The edit would produce malformed content.");
+  }
+}
+
+/**
  * Apply one step and validate only what it introduced, so every intermediate
  * revision of a batch is as safe as a validated document (given a safe start).
  */
@@ -76,22 +99,20 @@ export function applySafeStep(
 ): ProseMirrorNode {
   if (step instanceof DocAttrStep)
     throw new UnsafeDocumentError("Notes have no document attributes.");
-  if (step instanceof ReplaceStep || step instanceof ReplaceAroundStep) {
-    // Structure of every inserted node, recursively, not just its attributes.
-    step.slice.content.forEach((node) => {
-      try {
-        node.check();
-      } catch {
-        throw new UnsafeDocumentError("The edit inserts malformed content.");
-      }
-    });
-    assertSafeFragment(step.slice.content);
-  }
+  const replaces =
+    step instanceof ReplaceStep || step instanceof ReplaceAroundStep;
+  if (replaces) assertSafeFragment(step.slice.content);
   if (step instanceof AddMarkStep || step instanceof AddNodeMarkStep)
     assertSafeMark(step.mark);
   const result = step.apply(doc);
   if (!result.doc)
     throw new Error(result.failed ?? "A step could not be applied.");
+  if (replaces) {
+    // Check the structure of what changed in the result. A slice alone can't
+    // be checked: open slices and wrapping gaps are completed by the step.
+    const map = step.getMap();
+    checkChangedRange(result.doc, map.map(step.from, -1), map.map(step.to, 1));
+  }
   if (step instanceof AttrStep) {
     const node = result.doc.nodeAt(step.pos);
     if (node) assertSafeNode(node);

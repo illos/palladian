@@ -8,14 +8,22 @@ import { createRequire } from "node:module";
 
 const require = createRequire(new URL("../package.json", import.meta.url));
 const { chromium, expect } = require("@playwright/test");
-const backend = fileURLToPath(new URL("../../notes-backend", import.meta.url));
+const backend =
+  process.env.NOTES_BACKEND_DIR ??
+  fileURLToPath(new URL("../../notes-backend", import.meta.url));
 const app = process.env.NOTES_APP_URL ?? "http://localhost:5178";
 const step = (message) => console.log("✓ " + message);
 
 function setupLink(email) {
   const result = spawnSync(
     "npx",
-    ["convex", "run", "provision:setupOwner", JSON.stringify({ email })],
+    [
+      "convex",
+      "run",
+      ...(process.env.CONVEX_PROD ? ["--prod"] : []),
+      "provision:setupOwner",
+      JSON.stringify({ email }),
+    ],
     { cwd: backend, encoding: "utf8" },
   );
   assert.equal(result.status, 0, "setup link created");
@@ -144,6 +152,24 @@ try {
   const textB = await editorB.innerText();
   assert.equal(textA, textB, "both editors converge");
   step("concurrent edits from two browsers converged");
+
+  // Structural formatting is saved and reaches the other device.
+  await typeAtEnd(a, editorA, "");
+  await a.getByRole("button", { name: "Quote", exact: true }).click();
+  await expect(editorB.locator("blockquote")).toHaveCount(1, {
+    timeout: 10_000,
+  });
+  await typeAtEnd(a, editorA, "\nList item");
+  await a.getByRole("button", { name: "Bulleted list", exact: true }).click();
+  await a.keyboard.press("End");
+  await a.keyboard.press("Enter");
+  await a.keyboard.type("Second item");
+  await expect(editorB.locator("ul li")).toHaveCount(2, { timeout: 10_000 });
+  await expect(a.getByText("Saved", { exact: true })).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(a.getByText(/invalid or unsafe/)).toHaveCount(0);
+  step("quote and list formatting saved and reached the second device");
 
   // Reload restores from cache, then reconnects.
   await a.reload();
