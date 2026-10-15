@@ -268,9 +268,12 @@ export class SessionController {
           const generation = this.snapshot.generation;
           this.update({ accountId: null, status: "connecting" });
           try {
-            this.options.hints.hideForCleanup(cleanup);
-            if (this.cleanupOwned) await this.options.clearAccount(cleanup);
-            else await this.options.finishCleanup(cleanup);
+            // Only this page's own cleanup records intent for other tabs; a
+            // carried-over one may be obsolete and must not sign them out.
+            if (this.cleanupOwned) {
+              this.options.hints.hideForCleanup(cleanup);
+              await this.options.clearAccount(cleanup);
+            } else await this.options.finishCleanup(cleanup);
           } catch {
             if (this.snapshot.generation === generation)
               this.update({ error: "Account cleanup failed. Please retry." });

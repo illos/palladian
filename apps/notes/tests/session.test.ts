@@ -475,3 +475,28 @@ test("this page's own failed cleanup is retried as a clear", async () => {
   assert.equal(session.getSnapshot().accountId, "a");
   session.stop();
 });
+
+test("a carried-over cleanup records no sign-out for other tabs", async () => {
+  const hidden: string[] = [];
+  const session = new SessionController({
+    service: { check: async () => ({ kind: "ready", accountId: "a" }) },
+    hints: {
+      read: () => ({ accountId: "a", signedOut: false }),
+      remember: () => {},
+      signedOut: () => {},
+      hideForCleanup: (account) => {
+        hidden.push(account);
+      },
+    },
+    settleAccount: async () => true,
+    finishCleanup: async () => {},
+    clearAccount: async () => {},
+  });
+  session.start();
+  await flush();
+  session.adoptInvalidation("a");
+  session.retry({ afterSignIn: true });
+  await flush();
+  assert.deepEqual(hidden, []);
+  session.stop();
+});

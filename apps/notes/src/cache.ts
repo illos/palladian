@@ -82,7 +82,8 @@ class NotesDatabase extends Dexie {
   bodies!: Table<NoteBody, [string, string]>;
   drafts!: Table<Draft, [string, string]>;
   accounts!: Table<
-    // `lifecycle` counts sign-ins: a clear is meant for one of them.
+    // `lifecycle` advances when a cleared account is signed in again: a clear
+    // is meant for one lifecycle.
     { accountId: string; epoch: number; blocked: boolean; lifecycle?: number },
     string
   >;
@@ -160,13 +161,28 @@ export class NotesStore {
   private readonly recoveryDrafts = new SnapshotMap();
   private readonly recoveryFences = new Map<string, Promise<CacheFence>>();
   /**
-   * Accounts whose clear by this tab failed before it was recorded, with the
-   * lifecycle it was meant for (undefined if unread): a retry must not erase a
-   * lifecycle begun since.
+   * The lifecycle of each account this tab knows: as stored when it opened, or
+   * as it signed in. A clear is meant for that lifecycle.
    */
-  private readonly unfinishedClears = new Map<string, number | undefined>();
+  private readonly lifecycles = new Map<string, number>();
+  private readonly lifecyclesLoaded: Promise<void>;
+  /** Account lifecycle locks this tab holds while its clears are unresolved. */
+  private readonly accountHolds = new Map<string, () => void>();
+  private readonly clearRetries = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
+  private readonly clearAttempts = new Map<string, number>();
   constructor(name = "palladian-notes-foundation") {
     this.db = new NotesDatabase(name);
+    this.lifecyclesLoaded = this.db.accounts
+      .toArray()
+      .then((rows) => {
+        for (const row of rows)
+          if (!this.lifecycles.has(row.accountId))
+            this.lifecycles.set(row.accountId, row.lifecycle ?? 0);
+      })
+      .catch(() => undefined);
     this.channel =
       typeof BroadcastChannel === "undefined"
         ? null
@@ -208,7 +224,12 @@ export class NotesStore {
           "accountId" in value &&
           typeof value.accountId === "string"
         ) {
-          void this.receiveClear(value.accountId);
+          void this.receiveClear(
+            value.accountId,
+            "lifecycle" in value && typeof value.lifecycle === "number"
+              ? value.lifecycle
+              : null,
+          );
         }
       };
   }
@@ -553,29 +574,32 @@ export class NotesStore {
   /** Fence writes immediately, then clear transactionally. Re-enable only on a new authorized login. */
   /**
    * End this account's local lifecycle: block it, then delete its data. The
-   * block commits first on its own, so a failed deletion still leaves it, and
-   * any later completion or activation deletes the data before unblocking.
-   * While an account is blocked nothing new can be written for it, so its data
-   * is always an ended lifecycle's. A retry after a failed block clears only
-   * the lifecycle it was meant for; one signed in again since is left alone.
-   * Resolves whether the account was cleared.
+   * clear holds the account's lifecycle lock from its start until it succeeds,
+   * across retries (made in the background too), so no tab can sign the
+   * account in meanwhile. The block commits first on its own, so a failed
+   * deletion still leaves it, and any later activation deletes the data before
+   * unblocking; nothing can be written for a blocked account, so its data is
+   * always an ended lifecycle's. A clear decided for a lifecycle that another
+   * tab has since replaced by signing in again does nothing. Resolves whether
+   * the account was cleared.
    */
   async clearAccount(accountId: string): Promise<boolean> {
-    const retry = this.unfinishedClears.has(accountId);
-    const meant = this.unfinishedClears.get(accountId);
+    await this.lifecyclesLoaded;
+    const meant = this.lifecycles.get(accountId);
     this.hideAccount(accountId);
-    let observed: number | undefined;
-    let blocked: boolean;
+    this.cancelClearRetry(accountId);
+    await this.holdAccount(accountId);
+    let ended: number | null;
     try {
-      blocked = await this.db.transaction(
+      ended = await this.db.transaction(
         "rw",
         [this.db.accounts, this.db.privacy],
         async () => {
           const account = await this.db.accounts.get(accountId);
-          observed = account?.lifecycle ?? 0;
-          if (account?.blocked) return false;
-          if (retry && meant !== undefined && observed !== meant)
+          const lifecycle = account?.lifecycle ?? 0;
+          if (meant !== undefined && lifecycle !== meant)
             throw new SupersededClear();
+          if (account?.blocked) return null;
           const privacy = await this.db.privacy.get("activation");
           await this.db.privacy.put({
             key: "activation",
@@ -587,29 +611,38 @@ export class NotesStore {
             epoch: (account?.epoch ?? 0) + 1,
             blocked: true,
           });
-          return true;
+          return lifecycle;
         },
       );
+      // Other tabs learn once, when the block is first recorded, which
+      // lifecycle ended.
+      if (ended !== null)
+        this.channel?.postMessage({ accountId, lifecycle: ended });
+      await this.deleteIfBlocked(accountId);
     } catch (error) {
       if (error instanceof SupersededClear) {
-        this.unfinishedClears.delete(accountId);
+        this.releaseAccount(accountId);
         return false;
       }
-      if (!retry) this.unfinishedClears.set(accountId, observed);
+      this.scheduleClearRetry(accountId);
       throw error;
     }
-    this.unfinishedClears.delete(accountId);
-    // Other tabs learn of the block once, when it is first recorded.
-    if (blocked) this.channel?.postMessage({ accountId });
-    await this.finishClear(accountId);
+    this.releaseAccount(accountId);
     return true;
   }
   /**
-   * Delete a blocked account's data, unless it was signed in again since. One
-   * transaction, so a concurrent activation is either before (and wins) or
-   * after. Resolves whether the account was still blocked.
+   * Finish a clear recorded by an earlier page or another tab: delete the
+   * account's data if it is still blocked. A tab holding the account's lock
+   * finishes it itself. Resolves whether anything was deleted.
    */
   async finishClear(accountId: string): Promise<boolean> {
+    const result = await this.ifAccountFree(accountId, () =>
+      this.deleteIfBlocked(accountId),
+    );
+    return result.ran && result.value;
+  }
+  /** Delete a blocked account's data in one transaction; resolves whether it was blocked. */
+  private async deleteIfBlocked(accountId: string): Promise<boolean> {
     const cleared = await this.db.transaction(
       "rw",
       [
@@ -650,10 +683,77 @@ export class NotesStore {
     this.epochs.set(accountId, this.epoch(accountId) + 1);
     this.notify({ accountId, invalidated: true });
   }
-  /** Another tab blocked this account. A late message after a new sign-in is ignored. */
-  private async receiveClear(accountId: string) {
-    const account = await this.db.accounts.get(accountId).catch(() => null);
-    if (account?.blocked) this.hideAccount(accountId);
+  /**
+   * Another tab ended one of this account's lifecycles. A message about a
+   * lifecycle older than the one this tab signed in to is late and ignored;
+   * otherwise this tab stops showing the account at once.
+   */
+  private async receiveClear(accountId: string, lifecycle: number | null) {
+    await this.lifecyclesLoaded;
+    const mine = this.lifecycles.get(accountId);
+    if (lifecycle !== null && mine !== undefined && mine > lifecycle) return;
+    this.hideAccount(accountId);
+  }
+  private accountLock(accountId: string) {
+    return JSON.stringify([this.db.name, "account", accountId]);
+  }
+  /** Acquire the account's lifecycle lock and keep it until `releaseAccount`. */
+  private async holdAccount(accountId: string) {
+    const locks =
+      typeof navigator === "undefined" ? undefined : navigator.locks;
+    if (!locks || this.accountHolds.has(accountId)) return;
+    await new Promise<void>((acquired, failed) => {
+      locks
+        .request(
+          this.accountLock(accountId),
+          () =>
+            new Promise<void>((release) => {
+              this.accountHolds.set(accountId, release);
+              acquired();
+            }),
+        )
+        .catch(failed);
+    });
+  }
+  private releaseAccount(accountId: string) {
+    this.accountHolds.get(accountId)?.();
+    this.accountHolds.delete(accountId);
+  }
+  /**
+   * Run `work` sharing the account's lifecycle lock (activations and finishing
+   * may overlap; the database orders them), unless a clear holds it.
+   */
+  private async ifAccountFree<T>(
+    accountId: string,
+    work: () => Promise<T>,
+  ): Promise<{ ran: true; value: T } | { ran: false }> {
+    const locks =
+      typeof navigator === "undefined" ? undefined : navigator.locks;
+    if (!locks || this.accountHolds.has(accountId))
+      return { ran: true, value: await work() };
+    return locks.request(
+      this.accountLock(accountId),
+      { mode: "shared", ifAvailable: true },
+      async (lock): Promise<{ ran: true; value: T } | { ran: false }> =>
+        lock ? { ran: true, value: await work() } : { ran: false },
+    );
+  }
+  private scheduleClearRetry(accountId: string) {
+    this.cancelClearRetry(accountId);
+    const attempt = (this.clearAttempts.get(accountId) ?? 0) + 1;
+    this.clearAttempts.set(accountId, attempt);
+    const delay = Math.min(30_000, 1_000 * 2 ** Math.min(attempt, 5));
+    this.clearRetries.set(
+      accountId,
+      setTimeout(() => {
+        this.clearRetries.delete(accountId);
+        void this.clearAccount(accountId).catch(() => undefined);
+      }, delay),
+    );
+  }
+  private cancelClearRetry(accountId: string) {
+    clearTimeout(this.clearRetries.get(accountId));
+    this.clearRetries.delete(accountId);
   }
   /** Whether unsaved work is kept for this account; see `unsavedWork`. */
   async hasDrafts(accountId: string) {
@@ -827,37 +927,46 @@ export class NotesStore {
         throw new Error("Session activation was superseded.");
     };
     assertCurrent();
-    await this.db.transaction(
-      "rw",
-      [
-        this.db.accounts,
-        this.db.privacy,
-        this.db.summaries,
-        this.db.bodies,
-        this.db.drafts,
-        this.db.notebooks,
-        this.db.cursors,
-        this.db.revoked,
-      ],
-      async () => {
-        const privacy = await this.db.privacy.get("activation");
-        const account = await this.db.accounts.get(accountId);
-        assertCurrent();
-        if ((privacy?.epoch ?? 0) !== fence.epoch)
-          throw new Error("Session activation was invalidated.");
-        // A blocked account's data belongs to an ended lifecycle: never revived.
-        if (account?.blocked) await this.deleteAccountData(accountId);
-        await this.db.accounts.put({
-          accountId,
-          epoch: (account?.epoch ?? 0) + (account?.blocked ? 1 : 0),
-          blocked: false,
-          lifecycle: (account?.lifecycle ?? 0) + 1,
-        });
-      },
+    let lifecycle = 0;
+    const activated = await this.ifAccountFree(accountId, () =>
+      this.db.transaction(
+        "rw",
+        [
+          this.db.accounts,
+          this.db.privacy,
+          this.db.summaries,
+          this.db.bodies,
+          this.db.drafts,
+          this.db.notebooks,
+          this.db.cursors,
+          this.db.revoked,
+        ],
+        async () => {
+          const privacy = await this.db.privacy.get("activation");
+          const account = await this.db.accounts.get(accountId);
+          assertCurrent();
+          if ((privacy?.epoch ?? 0) !== fence.epoch)
+            throw new Error("Session activation was invalidated.");
+          // A blocked account's data belongs to an ended lifecycle: never revived.
+          if (account?.blocked) await this.deleteAccountData(accountId);
+          await this.db.accounts.put({
+            accountId,
+            epoch: (account?.epoch ?? 0) + (account?.blocked ? 1 : 0),
+            blocked: false,
+            // Tabs signing in to the same lifecycle share it; signing in after a
+            // clear begins the next one.
+            lifecycle: (lifecycle =
+              (account?.lifecycle ?? 0) + (account?.blocked ? 1 : 0)),
+          });
+        },
+      ),
     );
+    if (!activated.ran)
+      throw new Error("Another tab is still clearing this account.");
     assertCurrent();
     this.blocked.delete(accountId);
-    this.unfinishedClears.delete(accountId);
+    this.lifecycles.set(accountId, lifecycle);
+    this.clearAttempts.delete(accountId);
     this.notify();
   }
   private async assertPersistent(accountId: string, epoch: number) {
@@ -1497,6 +1606,10 @@ export class NotesStore {
     this.notify();
   }
   close() {
+    for (const accountId of [...this.clearRetries.keys()])
+      this.cancelClearRetry(accountId);
+    for (const accountId of [...this.accountHolds.keys()])
+      this.releaseAccount(accountId);
     this.channel?.close();
     this.db.close();
   }

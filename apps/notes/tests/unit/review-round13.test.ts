@@ -46,13 +46,17 @@ describe("a recorded clear decides atomically against a newer sign-in", () => {
     const name = "r13-" + crypto.randomUUID();
     const store = new NotesStore(name);
     try {
+      // Signed out (ending lifecycle 0), then signed in again: lifecycle 1.
+      await activate(store);
+      await store.clearAccount("account");
       await activate(store);
       const events: unknown[] = [];
       store.subscribe((event) => {
         if (event.invalidated) events.push(event);
       });
+      // A clear message about the lifecycle before this sign-in arrives late.
       const late = new BroadcastChannel(name + ":invalidation");
-      late.postMessage({ accountId: "account" });
+      late.postMessage({ accountId: "account", lifecycle: 0 });
       late.close();
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(events).toEqual([]);
@@ -102,24 +106,24 @@ describe("a clear that failed still completes", () => {
     }
   });
 
-  test("a retry after the account signed in again elsewhere leaves the new lifecycle", async () => {
+  test("no tab can sign the account in while its clear is unresolved", async () => {
     const name = "r13-" + crypto.randomUUID();
     const first = new NotesStore(name);
     const second = new NotesStore(name);
     try {
       await activate(first);
+      await first.writeDraft(draftOf(markdownToDoc("Old work")));
       const put = dbOf(first).accounts.put;
       dbOf(first).accounts.put = async () => {
         throw new DOMException("quota", "QuotaExceededError");
       };
       await expect(first.clearAccount("account")).rejects.toThrow("quota");
+      // Another tab's sign-in waits for the clear rather than reviving its data.
+      await expect(activate(second)).rejects.toThrow(/still clearing/);
       dbOf(first).accounts.put = put;
-      // Another tab signs the account in again and saves new work.
+      expect(await first.clearAccount("account")).toBe(true);
       await activate(second);
-      await activate(second);
-      await second.writeDraft(draftOf(markdownToDoc("New work")));
-      expect(await first.clearAccount("account")).toBe(false);
-      expect(await draftCount(second)).toBe(1);
+      expect(await draftCount(second)).toBe(0);
     } finally {
       first.close();
       second.close();
