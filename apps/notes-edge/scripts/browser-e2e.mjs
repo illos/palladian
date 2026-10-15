@@ -30,7 +30,13 @@ const step = (message) =>
 async function setupLink(email) {
   const { stdout } = await promisify(execFile)(
     "npx",
-    ["convex", "run", "provision:setupOwner", JSON.stringify({ email })],
+    [
+      "convex",
+      "run",
+      ...(process.env.CONVEX_PROD ? ["--prod"] : []),
+      "provision:setupOwner",
+      JSON.stringify({ email }),
+    ],
     { cwd: BACKEND_DIR, maxBuffer: 1 << 20 },
   );
   const { token } = JSON.parse(
