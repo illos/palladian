@@ -279,3 +279,31 @@ Verification:
 - Browser: 40 Playwright cases (desktop and mobile Chromium) and 2 production-offline cases.
 - Local real-service proofs were not rerun; the production proofs cover them.
 - The 20 mobile-WebKit cases still cannot launch on this host.
+
+## Response to Astra review round 13
+
+[Round 13](notes-v1-round13-astra-review.md) kept the edge accepted and did **not accept** the core. Its three blockers share one cause: the round-12 guard inferred cleanup authority from separately read records (the shared hint and a blocked flag). Authority now lives in the account record and is decided inside the transaction that deletes.
+
+**How clearing works now:**
+
+1. `clearAccount` first commits a small transaction that blocks the account, bumping its epoch and the activation fence. Only then does it notify other tabs, and only on the first block.
+2. `finishClear` then deletes the data in one transaction, and only if the account is still blocked.
+3. While an account is blocked nothing can be written for it, so blocked data always belongs to an ended lifecycle.
+4. `allowAccount` deletes such data in the same transaction before it unblocks. Old data is therefore never revived, even after a failed deletion.
+
+| Finding                                            | Fix                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Evidence                                                                                                                                                                                                                                                                  |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R13-1 — a blocked-state read raced a fresh sign-in | A carried-over cleanup (from a reload's hint or another tab's invalidation) now calls `finishCleanup`, which is `finishClear`: check and delete happen in one transaction. An activation is ordered entirely before it, so the account is unblocked and nothing is deleted, or entirely after it. The round-12 `accountBlocked` read and the hint check are removed                                                                                                                          | `review-round13.test.ts`: an old clear finished after the account signed in again deletes nothing. `review-round12.test.ts` (two real tabs and sessions) still keeps new accessible and held work                                                                         |
+| R13-2 — a stale hint authorized deletion           | Hints no longer authorize deletion at all; only a blocked account record does                                                                                                                                                                                                                                                                                                                                                                                                                | As above. The session test shows an adopted cleanup only calls `finishCleanup`                                                                                                                                                                                            |
+| R13-3 — a genuine failed cleanup was forgotten     | The session marks a cleanup it decided itself (sign-out, revocation, a settled switch) as its own, and retries it as a full `clearAccount` until it succeeds. If the blocking write itself failed, the store remembers which lifecycle the clear was for (a new `lifecycle` count that every sign-in increments). A retry clears that lifecycle, or does nothing if the account was signed in again since. If the block committed but the deletion failed, the next activation deletes first | A block that could not be written is retried and clears. An activation after a committed block with a failed deletion shows no old drafts. A retry after another tab signed the account in again leaves its new work. A late clear message after a new sign-in is ignored |
+
+Two of the five new store tests fail on the previous code for the behavior under test: the late message, and activation finishing a clear. The others call `finishClear` or check `clearAccount`'s new result.
+
+A residual gap: if a tab stops after recording a sign-out in the hint, but before committing the block, the account is not cleared; the hint keeps it signed out. That window is one small transaction.
+
+Verification:
+
+- Unit tests: core 28, backend 42, edge 64, app 72 + 18. All typechecks pass.
+- Browser: 40 Playwright cases (desktop and mobile Chromium) and 2 production-offline cases.
+- Local real-service proofs were not rerun; the production proofs cover them.
+- The 20 mobile-WebKit cases still cannot launch on this host.
