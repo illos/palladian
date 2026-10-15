@@ -339,3 +339,32 @@ Verification:
 - Browser: 40 Playwright cases (desktop and mobile Chromium) and 2 production-offline cases.
 - Local real-service proofs were not rerun; the production proofs cover them.
 - The 20 mobile-WebKit cases still cannot launch on this host.
+
+## Response to Astra review round 15
+
+[Round 15](notes-v1-round15-astra-review.md) verified R13-3, R14-2, R14-3, R14-4 and R14-5 as fixed and kept the edge accepted. It did **not accept** the core. Its remaining blockers came from clears without a fixed identity: a tab that never knew the lifecycle, overlapping attempts in one tab, and messages from an older version.
+
+Each clear is now an operation with an identity.
+
+- The session names each decision (a sign-out, revocation or switch) with a fresh operation id and passes it on every retry.
+- The store keeps the operation's lifecycle, fixed at decision time or at its first read under the lock, and its result. A finished operation is never run again.
+- A second attempt while one is running joins it.
+- Success settles every unfinished operation in the tab with the same account and lifecycle, cancels their retries, and only then releases the lock.
+
+| Finding                                                   | Fix                                                                                                                                                                                                                                                                                          | Evidence                                                                                                                                                                                                         |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R15-1 — an unknown lifecycle stayed unrestricted          | An operation's lifecycle is fixed at its first read under the lock, while no tab can begin another. Every later attempt compares against it. A finished operation returns its result without touching storage, so a session retry after a background success cannot clear the next lifecycle | `review-round15.test.ts`: a tab that opened before the account existed fails to block, then succeeds. Another tab signs in again and saves new work. The first tab's retry of the same decision leaves that work |
+| R15-2 — overlapping attempts retargeted a later lifecycle | Attempts of one operation are serialized: a retry joins the running attempt. Retries are timers owned by the operation, which settlement cancels. The lock is released only when no unfinished operation for the account remains                                                             | Overlapping retries both finish one clear. After the first retry delay has passed, the next lifecycle's work is intact. This test passes on both versions and stays as a regression guard                        |
+| R15-3 — legacy messages destroyed newer typing            | A message without a lifecycle, from an older version, hides the account but keeps this tab's unsaved snapshots. They stay unreadable unless this lifecycle is signed in to again, because snapshot fences must match the stored account epoch, which a genuine clear changes                 | An unnumbered message hides the account; signing in to the same lifecycle again shows the unsaved typing                                                                                                         |
+| R15-4 — queued acquisition survived close (non-blocking)  | `close()` latches closed, aborts queued lock requests, cancels retries and releases holds. A lock granted after close is given straight back                                                                                                                                                 | A clear queued behind another tab's lock, then closed, never takes the lock; a third tab can sign in once the first finishes                                                                                     |
+
+Three of the four new tests fail on the previous code for the behavior under test.
+
+The reviewer's process listing printed the instance secret of the local, anonymous Convex development backend into the reviewer's session log. That backend listens only on 127.0.0.1 of the development host and holds test data. No production credential was involved, and nothing was committed. Resetting the local development deployment rotates the secret.
+
+Verification:
+
+- Unit tests: core 28, backend 42, edge 64, app 81 + 19. All typechecks pass.
+- Browser: 40 Playwright cases (desktop and mobile Chromium) and 2 production-offline cases.
+- Local real-service proofs were not rerun; the production proofs cover them.
+- The 20 mobile-WebKit cases still cannot launch on this host.
