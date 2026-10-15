@@ -37,8 +37,11 @@ export interface SessionOptions {
    * Resolves false to keep the account instead.
    */
   settleAccount(accountId: string): Promise<boolean>;
-  /** Whether the account's local data is blocked: cleared or being cleared. */
-  accountBlocked(accountId: string): Promise<boolean>;
+  /**
+   * Finish a clear that an earlier page or another tab recorded, unless the
+   * account was signed in again since.
+   */
+  finishCleanup(accountId: string): Promise<unknown>;
   prepareLogout?: () => Promise<boolean>;
   onAccountReady?: (
     accountId: string,
@@ -67,6 +70,12 @@ export class SessionController {
   private failures = 0;
   private logoutPending = false;
   private pendingCleanup: string | null = null;
+  /**
+   * Whether the pending cleanup is this page's own decision (sign-out,
+   * revocation or a settled switch), retried as a clear. One carried over from
+   * a reload or another tab can only finish a clear already recorded.
+   */
+  private cleanupOwned = false;
 
   constructor(options: SessionOptions) {
     this.options = options;
@@ -113,6 +122,7 @@ export class SessionController {
     if (this.snapshot.accountId !== accountId) return;
     this.fence();
     this.pendingCleanup = accountId;
+    this.cleanupOwned = false;
     this.update({ accountId: null, status: "signed-out", error: null });
   }
   /** Explicit retry also serves successful sign-in; passive startup honors logout. */
@@ -203,6 +213,7 @@ export class SessionController {
           }
           this.update({ status: "revoked", accountId: null, error: null });
           this.pendingCleanup = result.accountId;
+          this.cleanupOwned = true;
           try {
             await this.options.clearAccount(result.accountId);
             if (
@@ -229,26 +240,6 @@ export class SessionController {
           return;
         }
         this.failures = 0;
-        if (this.pendingCleanup) {
-          // A cleanup carried over from an earlier attempt, a reload or another
-          // tab stands only while the hints still record it or the account's
-          // data is still blocked. An account signed in again since has begun a
-          // new lifecycle, which that old intent must not erase.
-          const intent = this.pendingCleanup;
-          const generation = this.snapshot.generation;
-          let stands = false;
-          try {
-            stands = this.options.hints.read().pendingCleanup === intent;
-          } catch {
-            /* unreadable hints: decide by the account's data */
-          }
-          if (!stands)
-            stands = await this.options
-              .accountBlocked(intent)
-              .catch(() => true);
-          if (!this.running || this.snapshot.generation !== generation) return;
-          if (!stands) this.pendingCleanup = null;
-        }
         const previous = this.snapshot.accountId;
         if (previous && previous !== result.accountId) {
           const generation = this.snapshot.generation;
@@ -269,6 +260,7 @@ export class SessionController {
             return;
           }
           this.pendingCleanup = previous;
+          this.cleanupOwned = true;
         }
         if (this.pendingCleanup) {
           const cleanup = this.pendingCleanup;
@@ -277,7 +269,8 @@ export class SessionController {
           this.update({ accountId: null, status: "connecting" });
           try {
             this.options.hints.hideForCleanup(cleanup);
-            await this.options.clearAccount(cleanup);
+            if (this.cleanupOwned) await this.options.clearAccount(cleanup);
+            else await this.options.finishCleanup(cleanup);
           } catch {
             if (this.snapshot.generation === generation)
               this.update({ error: "Account cleanup failed. Please retry." });
@@ -345,6 +338,7 @@ export class SessionController {
       }
       this.update({ status: "signed-out", accountId: null, error: null });
       this.pendingCleanup = accountId;
+      this.cleanupOwned = true;
       try {
         if (accountId) await this.options.clearAccount(accountId);
         this.pendingCleanup = null;

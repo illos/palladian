@@ -34,7 +34,7 @@ function tab(name: string, storage: Map<string, string>) {
       activated = null;
       await store.clearAccount(accountId);
     },
-    accountBlocked: (accountId) => store.accountBlocked(accountId),
+    finishCleanup: (accountId) => store.finishClear(accountId),
     settleAccount: async () => true,
     prepareLogout: async () => true,
     async onAccountReady(accountId, isCurrent) {

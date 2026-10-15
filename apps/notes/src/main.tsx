@@ -66,7 +66,7 @@ const session = new SessionController({
     activated = null;
     await store.clearAccount(accountId);
   },
-  accountBlocked: (accountId) => store.accountBlocked(accountId),
+  finishCleanup: (accountId) => store.finishClear(accountId),
   async settleAccount(accountId) {
     if (!(await store.hasDrafts(accountId))) return true;
     const { settleDrafts } = await import("./logout");

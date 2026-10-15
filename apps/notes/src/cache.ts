@@ -82,7 +82,8 @@ class NotesDatabase extends Dexie {
   bodies!: Table<NoteBody, [string, string]>;
   drafts!: Table<Draft, [string, string]>;
   accounts!: Table<
-    { accountId: string; epoch: number; blocked: boolean },
+    // `lifecycle` counts sign-ins: a clear is meant for one of them.
+    { accountId: string; epoch: number; blocked: boolean; lifecycle?: number },
     string
   >;
   privacy!: Table<{ key: string; epoch: number }, string>;
@@ -131,6 +132,9 @@ class NotesDatabase extends Dexie {
   }
 }
 
+/** A clear retried after the account was signed in again. */
+class SupersededClear extends Error {}
+
 /** Unsaved snapshots by note key; `version` changes with every change. */
 class SnapshotMap extends Map<string, Draft> {
   version = 0;
@@ -155,6 +159,12 @@ export class NotesStore {
   private readonly draftQueues = new Map<string, Promise<void>>();
   private readonly recoveryDrafts = new SnapshotMap();
   private readonly recoveryFences = new Map<string, Promise<CacheFence>>();
+  /**
+   * Accounts whose clear by this tab failed before it was recorded, with the
+   * lifecycle it was meant for (undefined if unread): a retry must not erase a
+   * lifecycle begun since.
+   */
+  private readonly unfinishedClears = new Map<string, number | undefined>();
   constructor(name = "palladian-notes-foundation") {
     this.db = new NotesDatabase(name);
     this.channel =
@@ -198,12 +208,7 @@ export class NotesStore {
           "accountId" in value &&
           typeof value.accountId === "string"
         ) {
-          const accountId = value.accountId;
-          this.activationEpoch++;
-          this.blocked.add(accountId);
-          this.forgetRecovery(accountId);
-          this.epochs.set(accountId, this.epoch(accountId) + 1);
-          this.notify({ accountId, invalidated: true });
+          void this.receiveClear(value.accountId);
         }
       };
   }
@@ -546,46 +551,109 @@ export class NotesStore {
     this.notify();
   }
   /** Fence writes immediately, then clear transactionally. Re-enable only on a new authorized login. */
-  async clearAccount(accountId: string): Promise<void> {
-    this.activationEpoch++;
-    this.blocked.add(accountId);
-    this.forgetRecovery(accountId);
-    this.epochs.set(accountId, this.epoch(accountId) + 1);
-    this.notify({ accountId, invalidated: true });
-    this.channel?.postMessage({ accountId });
-    await this.db.transaction(
+  /**
+   * End this account's local lifecycle: block it, then delete its data. The
+   * block commits first on its own, so a failed deletion still leaves it, and
+   * any later completion or activation deletes the data before unblocking.
+   * While an account is blocked nothing new can be written for it, so its data
+   * is always an ended lifecycle's. A retry after a failed block clears only
+   * the lifecycle it was meant for; one signed in again since is left alone.
+   * Resolves whether the account was cleared.
+   */
+  async clearAccount(accountId: string): Promise<boolean> {
+    const retry = this.unfinishedClears.has(accountId);
+    const meant = this.unfinishedClears.get(accountId);
+    this.hideAccount(accountId);
+    let observed: number | undefined;
+    let blocked: boolean;
+    try {
+      blocked = await this.db.transaction(
+        "rw",
+        [this.db.accounts, this.db.privacy],
+        async () => {
+          const account = await this.db.accounts.get(accountId);
+          observed = account?.lifecycle ?? 0;
+          if (account?.blocked) return false;
+          if (retry && meant !== undefined && observed !== meant)
+            throw new SupersededClear();
+          const privacy = await this.db.privacy.get("activation");
+          await this.db.privacy.put({
+            key: "activation",
+            epoch: (privacy?.epoch ?? 0) + 1,
+          });
+          await this.db.accounts.put({
+            ...account,
+            accountId,
+            epoch: (account?.epoch ?? 0) + 1,
+            blocked: true,
+          });
+          return true;
+        },
+      );
+    } catch (error) {
+      if (error instanceof SupersededClear) {
+        this.unfinishedClears.delete(accountId);
+        return false;
+      }
+      if (!retry) this.unfinishedClears.set(accountId, observed);
+      throw error;
+    }
+    this.unfinishedClears.delete(accountId);
+    // Other tabs learn of the block once, when it is first recorded.
+    if (blocked) this.channel?.postMessage({ accountId });
+    await this.finishClear(accountId);
+    return true;
+  }
+  /**
+   * Delete a blocked account's data, unless it was signed in again since. One
+   * transaction, so a concurrent activation is either before (and wins) or
+   * after. Resolves whether the account was still blocked.
+   */
+  async finishClear(accountId: string): Promise<boolean> {
+    const cleared = await this.db.transaction(
       "rw",
       [
         this.db.summaries,
         this.db.bodies,
         this.db.drafts,
         this.db.accounts,
-        this.db.privacy,
         this.db.notebooks,
         this.db.cursors,
         this.db.revoked,
       ],
       async () => {
-        const privacy = await this.db.privacy.get("activation");
-        await this.db.privacy.put({
-          key: "activation",
-          epoch: (privacy?.epoch ?? 0) + 1,
-        });
-        await this.db.notebooks.where("accountId").equals(accountId).delete();
-        await this.db.cursors.where("accountId").equals(accountId).delete();
-        await this.db.revoked.where("accountId").equals(accountId).delete();
-        const account = await this.db.accounts.get(accountId);
-        await this.db.accounts.put({
-          accountId,
-          epoch: (account?.epoch ?? 0) + 1,
-          blocked: true,
-        });
-        await this.db.summaries.where("accountId").equals(accountId).delete();
-        await this.db.bodies.where("accountId").equals(accountId).delete();
-        await this.db.drafts.where("accountId").equals(accountId).delete();
+        if (!(await this.db.accounts.get(accountId))?.blocked) return false;
+        await this.deleteAccountData(accountId);
+        return true;
       },
     );
-    this.notify();
+    if (cleared) this.notify();
+    return cleared;
+  }
+  /** Inside a transaction over every account-scoped table. */
+  private async deleteAccountData(accountId: string) {
+    for (const table of [
+      this.db.notebooks,
+      this.db.cursors,
+      this.db.revoked,
+      this.db.summaries,
+      this.db.bodies,
+      this.db.drafts,
+    ])
+      await table.where("accountId").equals(accountId).delete();
+  }
+  /** Stop showing or keeping this account's content in this tab. */
+  private hideAccount(accountId: string) {
+    this.activationEpoch++;
+    this.blocked.add(accountId);
+    this.forgetRecovery(accountId);
+    this.epochs.set(accountId, this.epoch(accountId) + 1);
+    this.notify({ accountId, invalidated: true });
+  }
+  /** Another tab blocked this account. A late message after a new sign-in is ignored. */
+  private async receiveClear(accountId: string) {
+    const account = await this.db.accounts.get(accountId).catch(() => null);
+    if (account?.blocked) this.hideAccount(accountId);
   }
   /** Whether unsaved work is kept for this account; see `unsavedWork`. */
   async hasDrafts(accountId: string) {
@@ -749,10 +817,6 @@ export class NotesStore {
     const privacy = await this.db.privacy.get("activation");
     return { epoch: privacy?.epoch ?? 0, localEpoch };
   }
-  /** Whether the account's local data is blocked: cleared or being cleared. */
-  async accountBlocked(accountId: string): Promise<boolean> {
-    return (await this.db.accounts.get(accountId))?.blocked === true;
-  }
   async allowAccount(
     accountId: string,
     fence: ActivationFence,
@@ -765,23 +829,35 @@ export class NotesStore {
     assertCurrent();
     await this.db.transaction(
       "rw",
-      this.db.accounts,
-      this.db.privacy,
+      [
+        this.db.accounts,
+        this.db.privacy,
+        this.db.summaries,
+        this.db.bodies,
+        this.db.drafts,
+        this.db.notebooks,
+        this.db.cursors,
+        this.db.revoked,
+      ],
       async () => {
         const privacy = await this.db.privacy.get("activation");
         const account = await this.db.accounts.get(accountId);
         assertCurrent();
         if ((privacy?.epoch ?? 0) !== fence.epoch)
           throw new Error("Session activation was invalidated.");
+        // A blocked account's data belongs to an ended lifecycle: never revived.
+        if (account?.blocked) await this.deleteAccountData(accountId);
         await this.db.accounts.put({
           accountId,
           epoch: (account?.epoch ?? 0) + (account?.blocked ? 1 : 0),
           blocked: false,
+          lifecycle: (account?.lifecycle ?? 0) + 1,
         });
       },
     );
     assertCurrent();
     this.blocked.delete(accountId);
+    this.unfinishedClears.delete(accountId);
     this.notify();
   }
   private async assertPersistent(accountId: string, epoch: number) {
