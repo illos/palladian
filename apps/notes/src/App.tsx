@@ -19,7 +19,7 @@ import { emptyDocument, validateCachedDocument } from "./document";
 import { EditorSurface } from "./EditorSurface";
 import { Icon } from "./Icons";
 import { Appearance } from "./Appearance";
-import { NoteChannel, type ChannelStatus } from "./channel";
+import type { ChannelStatus, NoteChannel } from "./channel";
 import { liveStateSource, type LiveBox } from "./liveBox";
 import type { SearchHit } from "./live";
 import "./theme.css";
@@ -182,6 +182,14 @@ export function App({
     };
   }, [accountId, permitted, store]);
 
+  // Warm the editing modules once the server is reachable.
+  useEffect(() => {
+    if (liveReady) {
+      void import("./channel");
+      void import("@palladian/notes-core/document");
+    }
+  }, [liveReady]);
+
   // Open channels follow live availability without remounting the editor.
   const transport = liveReady ? live!.transport : null;
   useEffect(() => {
@@ -258,7 +266,7 @@ export function App({
     else if (location.pathname !== "/") history.replaceState(null, "", "/");
   }
 
-  function makeChannel(
+  async function makeChannel(
     note: {
       id: string;
       created: boolean;
@@ -270,6 +278,7 @@ export function App({
     },
     key: string,
   ) {
+    const { NoteChannel } = await import("./channel");
     const channel: NoteChannel = new NoteChannel({
       store,
       accountId: accountId!,
@@ -299,8 +308,10 @@ export function App({
         setError("This note is not available to you.");
         return;
       }
-      const { parseStoredDoc, plainText } =
-        await import("@palladian/notes-core");
+      const [{ parseStoredDoc }, { plainText }] = await Promise.all([
+        import("@palladian/notes-core/document"),
+        import("@palladian/notes-core/projection"),
+      ]);
       const fence = await store.captureFence(accountId);
       await store.cacheAccepted(
         {
@@ -360,7 +371,7 @@ export function App({
         (row.role === "owner" || row.role === "edit") &&
         baseRevision !== undefined
       ) {
-        const channel = makeChannel(
+        const channel = await makeChannel(
           {
             id: row.id,
             created: draft?.created ?? true,
@@ -372,6 +383,7 @@ export function App({
           },
           row.id,
         );
+        if (request !== openRequest.current) return channel.close();
         show({ ...base, kind: "live", channel });
       } else {
         show({ ...base, kind: "cached", channel: null });
@@ -386,14 +398,15 @@ export function App({
     openRequest.current++;
     setView("notes");
     if (liveReady) {
-      const { emptyDoc } = await import("@palladian/notes-core");
+      const { emptyDoc } = await import("@palladian/notes-core/document");
       const id = "local-" + randomId();
       const doc = JSON.stringify(emptyDoc().toJSON());
       const notebookId =
         section.kind === "notebook"
           ? section.id
           : (liveState.profile?.defaultNotebookId ?? undefined);
-      const channel = makeChannel(
+      const request = openRequest.current;
+      const channel = await makeChannel(
         {
           id,
           created: false,
@@ -405,6 +418,7 @@ export function App({
         },
         id,
       );
+      if (request !== openRequest.current) return channel.close();
       show({
         accountId,
         id,

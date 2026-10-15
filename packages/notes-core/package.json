@@ -4,7 +4,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./document": "./src/document.ts",
     "./ids": "./src/ids.ts",
+    "./projection": "./src/projection.ts",
     "./schema": "./src/schema.ts"
   },
   "scripts": {

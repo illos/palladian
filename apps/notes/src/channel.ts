@@ -1,4 +1,5 @@
-import { notesSchema, parseStoredDoc } from "@palladian/notes-core";
+import { parseStoredDoc } from "@palladian/notes-core/document";
+import { notesSchema } from "@palladian/notes-core/schema";
 import type { Node as ProseMirrorNode } from "prosemirror-model";
 import {
   getVersion,

@@ -1,4 +1,5 @@
-import { parseStoredDoc, plainText } from "@palladian/notes-core";
+import { parseStoredDoc } from "@palladian/notes-core/document";
+import { plainText } from "@palladian/notes-core/projection";
 import { api } from "@palladian/notes-backend/api";
 import { ConvexReactClient } from "convex/react";
 import { ConvexError } from "convex/values";

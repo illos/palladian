@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import {
-  blockIdPlugin,
-  notesSchema,
-  parseStoredDoc,
-} from "@palladian/notes-core";
+import { parseStoredDoc } from "@palladian/notes-core/document";
+import { blockIdPlugin } from "@palladian/notes-core/ids";
+import { notesSchema } from "@palladian/notes-core/schema";
 import {
   liftListItem,
   sinkListItem,
