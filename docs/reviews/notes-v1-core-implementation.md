@@ -402,3 +402,19 @@ Verification:
 - Browser: 40 Playwright cases (desktop and mobile Chromium) and 2 production-offline cases.
 - Local real-service proofs were not rerun; the production proofs cover them.
 - The 20 mobile-WebKit cases still cannot launch on this host.
+
+## Round 18: core and edge accepted
+
+[Round 18](notes-v1-round18-astra-review.md) verified R16-2 and R17-1 as fixed, with no new findings, and **accepted the core and the edge** at `67e9e08`.
+
+That acceptance covers the reviewed core and edge scope only. It is not acceptance of complete v1, and these gates remain open:
+
+- **Documented residual gaps:**
+  - If a tab closes after recording a sign-out in the hint but before its block commits, the account is not cleared, although it stays signed out.
+  - Without Web Locks, the browser falls back to database-only rules.
+  - The pre-alpha legacy-journal transition.
+- **Real-service browser coverage still to do:** account switch, consent transfer, permission reduction and invitation failure.
+- **Physical-device and scale checks:** a physical iPhone and Safari, mobile WebKit on a capable host, representative library performance, large history, device recovery, and backup and restore.
+- **Named MCP clients:** claude.ai, ChatGPT, Claude Code and Codex.
+- **Remaining v1 features:** agent claims with human cancellation, collections, files on R2, location, and the history UI.
+- **Owner decisions:** the email sender domain (needs DNS approval), and rotating the local development backend's instance secret.
