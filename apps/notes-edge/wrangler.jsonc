@@ -1,0 +1,45 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  // One Worker on workers.dev: the notes SPA (static assets), the OAuth 2.1
+  // authorization server for agent connections, and the MCP endpoint.
+  "name": "palladian",
+  "main": "src/index.ts",
+  // The newest date the pinned wrangler/workerd (1.20260908.1) supports.
+  "compatibility_date": "2026-09-08",
+  // global_fetch_strictly_public: required by the OAuth provider for Client ID
+  // Metadata Documents (SSRF protection on outbound metadata fetches).
+  "compatibility_flags": ["global_fetch_strictly_public"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "directory": "../notes/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // Only the paths the Worker owns; everything else is served straight from assets.
+    "run_worker_first": [
+      "/mcp",
+      "/authorize",
+      "/oauth/*",
+      "/.well-known/*",
+      "/connect",
+    ],
+  },
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      // PLACEHOLDER: replace with the id printed by
+      // `wrangler kv namespace create palladian-oauth` before deploying.
+      "id": "00000000000000000000000000000000",
+    },
+  ],
+  "vars": {
+    // PLACEHOLDERS for production; set at deploy time. Local development
+    // overrides them from .dev.vars (see README).
+    "PUBLIC_ORIGIN": "https://palladian.example.workers.dev",
+    "AGENT_JWT_ISSUER": "https://palladian.example.workers.dev",
+    "CONVEX_URL": "https://example-deployment-123.convex.cloud",
+  },
+  // Secret (not in this file): AGENT_JWT_PRIVATE_KEY, the private ES256 JWK
+  // as a JSON string. Set with `wrangler secret put AGENT_JWT_PRIVATE_KEY`.
+  "observability": { "enabled": true },
+}

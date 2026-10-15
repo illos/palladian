@@ -1,0 +1,6 @@
+# Copy to .dev.vars (gitignored) for `wrangler dev`. Never commit real keys.
+PUBLIC_ORIGIN=http://localhost:8787
+AGENT_JWT_ISSUER=http://localhost:8787
+CONVEX_URL=http://127.0.0.1:3228
+# The private ES256 JWK as one line of JSON (see scripts/keygen.mjs).
+AGENT_JWT_PRIVATE_KEY={"kty":"EC","crv":"P-256","x":"...","y":"...","d":"...","kid":"...","alg":"ES256"}
