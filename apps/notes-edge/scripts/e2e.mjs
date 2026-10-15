@@ -179,7 +179,13 @@ async function connectAgent(
   const connectUrl = new URL(redirect.headers.get("location"));
   assert(connectUrl.pathname === "/connect", "consent page is /connect");
   const key = connectUrl.searchParams.get("request");
-  const page = await fetch(connectUrl);
+  // The browser-binding cookie the consent page's requests must carry.
+  const browser = (redirect.headers.get("set-cookie") ?? "").split(";")[0];
+  assert(
+    browser.startsWith("__Host-"),
+    "authorize binds the request to this browser",
+  );
+  const page = await fetch(connectUrl, { headers: { Cookie: browser } });
   assert(
     page.status === 200 &&
       page.headers.get("x-frame-options") === "DENY" &&
@@ -188,7 +194,13 @@ async function connectAgent(
       ),
     "consent page served unframeable",
   );
-  const info = await (await fetch(`${WORKER}/oauth/request/${key}`)).json();
+  const elsewhere = await fetch(`${WORKER}/oauth/request/${key}`);
+  assert(elsewhere.status === 403, "another browser cannot open the request");
+  const info = await (
+    await fetch(`${WORKER}/oauth/request/${key}`, {
+      headers: { Cookie: browser },
+    })
+  ).json();
   assert(
     info.clientId === clientId && info.clientName === clientName,
     "request info names the client",
@@ -215,21 +227,35 @@ async function connectAgent(
   const crossSite = await postJson(
     "/oauth/approve",
     { request: key, code: approval.code },
-    { Origin: "https://evil.example", "Sec-Fetch-Site": "cross-site" },
+    {
+      Origin: "https://evil.example",
+      "Sec-Fetch-Site": "cross-site",
+      Cookie: browser,
+    },
   );
   assert(crossSite.status === 403, "cross-site approve is refused");
-  const approved = await postJson("/oauth/approve", {
+  const otherBrowser = await postJson("/oauth/approve", {
     request: key,
     code: approval.code,
   });
   assert(
+    otherBrowser.status === 403,
+    "approve from another browser is refused",
+  );
+  const approved = await postJson(
+    "/oauth/approve",
+    { request: key, code: approval.code },
+    { Cookie: browser },
+  );
+  assert(
     approved.status === 200 && approved.body.redirectTo,
     "approve returns redirectTo",
   );
-  const reused = await postJson("/oauth/approve", {
-    request: key,
-    code: approval.code,
-  });
+  const reused = await postJson(
+    "/oauth/approve",
+    { request: key, code: approval.code },
+    { Cookie: browser },
+  );
   assert(reused.status === 404, "a request key works once");
   const callback = new URL(approved.body.redirectTo);
   assert(
@@ -240,7 +266,7 @@ async function connectAgent(
   assert(callback.searchParams.get("iss") === issuer, "RFC 9207 iss present");
   const code = callback.searchParams.get("code");
   log(
-    "approve: cross-site refused (403), redirect captured, key reuse refused (404)",
+    "approve: cross-site and other-browser attempts refused (403), redirect captured, key reuse refused (404)",
   );
 
   const exchanged = await form(as.token_endpoint, {

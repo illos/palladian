@@ -47,6 +47,8 @@ export class ConvexCallError extends Error {
   }
 }
 
+const CALL_TIMEOUT_MS = 25_000;
+
 /** Convex's status for "the function ran and failed" responses. */
 const UDF_FAILED = 560;
 
@@ -111,7 +113,11 @@ export function convexCaller(
   let lastStatus: number | null = null;
   const trackingFetch: typeof fetch = async (input, init) => {
     lastStatus = null;
-    const response = await baseFetch(input, init);
+    // A stalled call becomes an "uncertain" failure the agent can retry.
+    const response = await baseFetch(input, {
+      ...init,
+      signal: init?.signal ?? AbortSignal.timeout(CALL_TIMEOUT_MS),
+    });
     lastStatus = response.status;
     return response;
   };

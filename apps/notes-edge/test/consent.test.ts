@@ -4,6 +4,7 @@ import {
 } from "@cloudflare/workers-oauth-provider";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  bindingCookieName,
   handleApprove,
   handleAuthorize,
   handleConnect,
@@ -36,12 +37,15 @@ let redeemResult: () => Promise<{
   clientId: string;
 }>;
 let deps: ConsentDeps;
+/** Cookies the browser holds: set by /authorize, sent on later requests. */
+let jar: string[];
 
 beforeEach(() => {
   kv = new FakeKV();
   provider = fakeProvider();
   env = fakeEnv(kv, provider);
   redeemed = [];
+  jar = [];
   redeemResult = async () => ({
     connectionId: "conn1",
     agentId: "agent1",
@@ -58,12 +62,19 @@ beforeEach(() => {
   };
 });
 
-function authorize() {
-  return handleAuthorize(
+async function authorize() {
+  const response = await handleAuthorize(
     new Request(`${ORIGIN}/authorize?client_id=client-abc`),
     env,
     deps,
   );
+  const cookie = response.headers.get("Set-Cookie");
+  if (cookie) jar.push(cookie.split(";")[0]!);
+  return response;
+}
+
+function get(path: string) {
+  return new Request(ORIGIN + path, { headers: { Cookie: jar.join("; ") } });
 }
 
 function post(
@@ -77,6 +88,7 @@ function post(
       "Content-Type": "application/json",
       Origin: ORIGIN,
       "Sec-Fetch-Site": "same-origin",
+      Cookie: jar.join("; "),
       ...headers,
     },
     body: JSON.stringify(body),
@@ -101,6 +113,15 @@ describe("GET /authorize", () => {
       kv.store.get(`connect:${KEY}`)!,
     ) as PendingRequest;
     expect(stored.oauthReqInfo).toEqual(AUTH_REQUEST);
+    // Bound to this browser: the cookie holds a secret, KV only its hash.
+    const cookie = response.headers.get("Set-Cookie")!;
+    expect(cookie).toMatch(
+      new RegExp(
+        `^${bindingCookieName(KEY)}=[A-Za-z0-9_-]{43}; Max-Age=600; Path=/; Secure; HttpOnly; SameSite=Lax$`,
+      ),
+    );
+    expect(stored.binding).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(cookie).not.toContain(stored.binding);
     expect(stored.client).toMatchObject({
       clientId: "client-abc",
       clientName: "Example Agent",
@@ -183,7 +204,7 @@ describe("GET /oauth/request/<key>", () => {
   it("describes the pending request for the consent page", async () => {
     await authorize();
     const response = await handleRequestInfo(
-      new Request(`${ORIGIN}/oauth/request/${KEY}`),
+      get(`/oauth/request/${KEY}`),
       env,
       KEY,
     );
@@ -208,6 +229,20 @@ describe("GET /oauth/request/<key>", () => {
       );
       expect(response.status).toBe(404);
       expect(await response.json()).toHaveProperty("error");
+    }
+  });
+
+  it("refuses a browser that did not start the request", async () => {
+    await authorize();
+    for (const cookie of ["", `${bindingCookieName(KEY)}=${"x".repeat(43)}`]) {
+      const response = await handleRequestInfo(
+        new Request(`${ORIGIN}/oauth/request/${KEY}`, {
+          headers: { Cookie: cookie },
+        }),
+        env,
+        KEY,
+      );
+      expect(response.status).toBe(403);
     }
   });
 });
@@ -235,6 +270,9 @@ describe("POST /oauth/approve", () => {
       },
     ]);
     expect(kv.store.has(`connect:${KEY}`)).toBe(false);
+    expect(response.headers.get("Set-Cookie")).toMatch(
+      new RegExp(`^${bindingCookieName(KEY)}=; Max-Age=0;`),
+    );
 
     const reused = await handleApprove(
       post("/oauth/approve", { request: KEY, code: "approval-code" }),
@@ -259,6 +297,22 @@ describe("POST /oauth/approve", () => {
     );
     if (headers["Origin"] === "") request.headers.delete("Origin");
     const response = await handleApprove(request, env, deps);
+    expect(response.status).toBe(403);
+    expect(redeemed).toEqual([]);
+    expect(kv.store.has(`connect:${KEY}`)).toBe(true);
+  });
+
+  it("refuses an approval from a browser that did not start the request", async () => {
+    await authorize();
+    const response = await handleApprove(
+      post(
+        "/oauth/approve",
+        { request: KEY, code: "approval-code" },
+        { Cookie: `${bindingCookieName(KEY)}=${"x".repeat(43)}` },
+      ),
+      env,
+      deps,
+    );
     expect(response.status).toBe(403);
     expect(redeemed).toEqual([]);
     expect(kv.store.has(`connect:${KEY}`)).toBe(true);
@@ -356,13 +410,18 @@ describe("POST /oauth/deny", () => {
     ).toBe(404);
   });
 
-  it("refuses cross-site requests", async () => {
+  it("refuses cross-site requests and other browsers", async () => {
     await authorize();
-    const response = await handleDeny(
-      post("/oauth/deny", { request: KEY }, { Origin: "https://evil.example" }),
-      env,
-    );
-    expect(response.status).toBe(403);
+    for (const headers of [
+      { Origin: "https://evil.example" },
+      { Cookie: "" },
+    ]) {
+      const response = await handleDeny(
+        post("/oauth/deny", { request: KEY }, headers),
+        env,
+      );
+      expect(response.status).toBe(403);
+    }
     expect(kv.store.has(`connect:${KEY}`)).toBe(true);
   });
 });

@@ -15,6 +15,10 @@ import { grantedScopes } from "./scopes.ts";
  * person choose notebooks and calls Convex `connections.approve`; then it posts
  * the one-time code to `/oauth/approve`, which redeems it and completes the
  * OAuth authorization. See README "Consent contract".
+ *
+ * A pending request is bound to the browser that opened `/authorize` by a
+ * `__Host-` cookie, so a `/connect` link someone else started cannot be
+ * approved by a signed-in victim it was sent to.
  */
 
 export const REQUEST_TTL_SECONDS = 600;
@@ -38,6 +42,8 @@ export interface PendingRequest {
   oauthReqInfo: AuthRequest;
   client: ClientSummary;
   createdAt: number;
+  /** SHA-256 (base64url) of the browser-binding cookie's value. */
+  binding: string;
 }
 
 export interface ConsentDeps {
@@ -60,6 +66,35 @@ export function newRequestKey(): string {
 }
 
 const NO_STORE = { "Cache-Control": "no-store" };
+const EXPIRED =
+  "This sign-in request expired or was already used. Start again from your app.";
+const OTHER_BROWSER =
+  "This sign-in request was started in another browser. Start again from your app in this browser.";
+
+export function bindingCookieName(key: string): string {
+  return `__Host-palladian-connect-${key}`;
+}
+
+function bindingCookie(key: string, value: string, maxAge: number): string {
+  return `${bindingCookieName(key)}=${value}; Max-Age=${maxAge}; Path=/; Secure; HttpOnly; SameSite=Lax`;
+}
+
+async function sha256(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return base64url(new Uint8Array(digest));
+}
+
+function readCookie(request: Request, name: string): string | null {
+  for (const part of (request.headers.get("Cookie") ?? "").split(";")) {
+    const at = part.indexOf("=");
+    if (at > 0 && part.slice(0, at).trim() === name)
+      return part.slice(at + 1).trim();
+  }
+  return null;
+}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -135,10 +170,12 @@ export async function handleAuthorize(
     throw error;
   }
   const key = (deps.newKey ?? newRequestKey)();
+  const browserSecret = newRequestKey();
   const pending: PendingRequest = {
     oauthReqInfo,
     client,
     createdAt: Date.now(),
+    binding: await sha256(browserSecret),
   };
   await env.OAUTH_KV.put(KEY_PREFIX + key, JSON.stringify(pending), {
     expirationTtl: REQUEST_TTL_SECONDS,
@@ -147,13 +184,44 @@ export async function handleAuthorize(
   target.searchParams.set("request", key);
   return new Response(null, {
     status: 302,
-    headers: { Location: target.toString(), ...NO_STORE },
+    headers: {
+      Location: target.toString(),
+      "Set-Cookie": bindingCookie(key, browserSecret, REQUEST_TTL_SECONDS),
+      ...NO_STORE,
+    },
   });
 }
 
-async function loadPending(env: Env, key: string) {
-  if (!KEY_PATTERN.test(key)) return null;
-  return env.OAUTH_KV.get<PendingRequest>(KEY_PREFIX + key, { type: "json" });
+/** The pending request for `key`, if this browser started it. */
+async function loadBound(
+  request: Request,
+  env: Env,
+  key: string,
+): Promise<{ pending: PendingRequest } | { error: Response }> {
+  const pending = KEY_PATTERN.test(key)
+    ? await env.OAUTH_KV.get<PendingRequest>(KEY_PREFIX + key, {
+        type: "json",
+      })
+    : null;
+  if (!pending) return { error: jsonError(EXPIRED, 404) };
+  const presented = readCookie(request, bindingCookieName(key));
+  if (!presented || (await sha256(presented)) !== pending.binding)
+    return { error: jsonError(OTHER_BROWSER, 403) };
+  return { pending };
+}
+
+/** Load and delete a pending request: each key works once. */
+async function takeBound(request: Request, env: Env, key: string) {
+  const loaded = await loadBound(request, env, key);
+  if ("pending" in loaded) await env.OAUTH_KV.delete(KEY_PREFIX + key);
+  return loaded;
+}
+
+/** A consent response that also clears the binding cookie. */
+function finished(key: string, body: unknown): Response {
+  const response = json(body);
+  response.headers.set("Set-Cookie", bindingCookie(key, "", 0));
+  return response;
 }
 
 /** GET /oauth/request/<key> */
@@ -163,12 +231,9 @@ export async function handleRequestInfo(
   key: string,
 ): Promise<Response> {
   if (request.method !== "GET") return jsonError("Method not allowed.", 405);
-  const pending = await loadPending(env, key);
-  if (!pending)
-    return jsonError(
-      "This sign-in request expired or was already used. Start again from your app.",
-      404,
-    );
+  const loaded = await loadBound(request, env, key);
+  if ("error" in loaded) return loaded.error;
+  const { pending } = loaded;
   const { client } = pending;
   return json({
     clientId: client.clientId,
@@ -217,13 +282,6 @@ async function readBody(
   }
 }
 
-/** Load and delete a pending request: each key works once. */
-async function takePending(env: Env, key: string) {
-  const pending = await loadPending(env, key);
-  if (pending) await env.OAUTH_KV.delete(KEY_PREFIX + key);
-  return pending;
-}
-
 /** POST /oauth/approve { request, code } */
 export async function handleApprove(
   request: Request,
@@ -237,12 +295,9 @@ export async function handleApprove(
   const code = body?.code;
   if (typeof key !== "string" || typeof code !== "string" || code.length > 200)
     return jsonError("Expected { request, code }.", 400);
-  const pending = await takePending(env, key);
-  if (!pending)
-    return jsonError(
-      "This sign-in request expired or was already used. Start again from your app.",
-      404,
-    );
+  const loaded = await takeBound(request, env, key);
+  if ("error" in loaded) return loaded.error;
+  const { pending } = loaded;
   const convex = (deps.convex ?? ((e: Env) => convexCaller(e.CONVEX_URL)))(env);
   let redeemed;
   try {
@@ -270,7 +325,7 @@ export async function handleApprove(
     metadata: { connectionId: redeemed.connectionId },
     props: { agentId: redeemed.agentId, connectionId: redeemed.connectionId },
   });
-  return json({ redirectTo });
+  return finished(key, { redirectTo });
 }
 
 /** POST /oauth/deny { request } */
@@ -283,14 +338,10 @@ export async function handleDeny(
   const body = await readBody(request);
   const key = body?.request;
   if (typeof key !== "string") return jsonError("Expected { request }.", 400);
-  const pending = await takePending(env, key);
-  if (!pending)
-    return jsonError(
-      "This sign-in request expired or was already used. Start again from your app.",
-      404,
-    );
-  const { oauthReqInfo } = pending;
-  return json({
+  const loaded = await takeBound(request, env, key);
+  if ("error" in loaded) return loaded.error;
+  const { oauthReqInfo } = loaded.pending;
+  return finished(key, {
     redirectTo: authorizationErrorRedirect(
       {
         redirectUri: oauthReqInfo.redirectUri,
