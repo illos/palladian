@@ -211,9 +211,28 @@ async function loadBound(
 }
 
 /** Load and delete a pending request: each key works once. */
+interface TakingStore {
+  take(key: string): Promise<string | null>;
+}
+function canTake(store: unknown): store is TakingStore {
+  return (
+    typeof store === "object" &&
+    store !== null &&
+    typeof (store as { take?: unknown }).take === "function"
+  );
+}
+
+/** Load and consume a pending request: each key completes at most once. */
 async function takeBound(request: Request, env: Env, key: string) {
   const loaded = await loadBound(request, env, key);
-  if ("pending" in loaded) await env.OAUTH_KV.delete(KEY_PREFIX + key);
+  if (!("pending" in loaded)) return loaded;
+  if (canTake(env.OAUTH_KV)) {
+    // Atomic on D1: of concurrent approvals, only one gets the request.
+    const taken = await env.OAUTH_KV.take(KEY_PREFIX + key);
+    if (!taken) return { error: jsonError(EXPIRED, 404) };
+    return { pending: JSON.parse(taken) as PendingRequest };
+  }
+  await env.OAUTH_KV.delete(KEY_PREFIX + key);
   return loaded;
 }
 

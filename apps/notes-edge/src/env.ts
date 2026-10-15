@@ -21,6 +21,8 @@ export interface Env {
 export type DeployedEnv = Omit<Env, "OAUTH_KV" | "OAUTH_PROVIDER"> & {
   OAUTH_KV?: KVNamespace;
   OAUTH_DB?: D1Database;
+  /** Per-address limit on anonymous client registration. */
+  REGISTRATION_LIMIT?: RateLimit;
 };
 
 /** What `completeAuthorization()` stores and every MCP request receives. */

@@ -94,8 +94,8 @@ describe("discovery", () => {
     const bad = fakeEnv(new FakeKV(), fakeProvider(), {
       PUBLIC_ORIGIN: "http://palladian.example/",
     });
-    expect(() =>
+    await expect(
       worker.fetch(new Request(`${ORIGIN}/mcp`) as never, bad, ctx),
-    ).toThrow(/PUBLIC_ORIGIN/);
+    ).rejects.toThrow(/PUBLIC_ORIGIN/);
   });
 });

@@ -108,6 +108,18 @@ export class D1KV {
         .run();
   }
 
+  /** Atomically remove a live entry and return its value: exactly one caller wins. */
+  async take(key: string): Promise<string | null> {
+    await this.ensure();
+    const row = await this.db
+      .prepare(
+        "DELETE FROM oauth_kv WHERE key = ? AND (expiration IS NULL OR expiration > ?) RETURNING value",
+      )
+      .bind(key, now())
+      .first<Pick<Row, "value">>();
+    return row?.value ?? null;
+  }
+
   async delete(key: string) {
     await this.ensure();
     await this.db.prepare("DELETE FROM oauth_kv WHERE key = ?").bind(key).run();
@@ -141,4 +153,25 @@ export class D1KV {
       cacheStatus: null,
     };
   }
+}
+
+/**
+ * Remove dynamically registered clients that never completed an authorization
+ * within a day. Clients with any grant are kept, so connected agents last
+ * until the person disconnects them.
+ */
+export async function purgeAbandonedClients(
+  db: D1Like,
+  olderThanSeconds = 86_400,
+) {
+  await db.exec(SCHEMA);
+  await db
+    .prepare(
+      "DELETE FROM oauth_kv WHERE key LIKE 'client:%' " +
+        "AND json_extract(value, '$.registrationDate') < ? " +
+        "AND NOT EXISTS (SELECT 1 FROM oauth_kv AS g WHERE g.key LIKE 'grant:%' " +
+        "AND json_extract(g.value, '$.clientId') = substr(oauth_kv.key, 8))",
+    )
+    .bind(now() - olderThanSeconds)
+    .run();
 }

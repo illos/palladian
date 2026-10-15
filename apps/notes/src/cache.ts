@@ -64,6 +64,8 @@ export interface CacheFence {
 interface CacheEvent {
   accountId?: string;
   invalidated?: boolean;
+  /** Notes this account lost access to; their content and pending work are gone. */
+  revokedNotes?: string[];
 }
 
 class NotesDatabase extends Dexie {
@@ -80,6 +82,10 @@ class NotesDatabase extends Dexie {
     { accountId: string; key: string; value: number },
     [string, string]
   >;
+  revoked!: Table<
+    { accountId: string; id: string; at: number },
+    [string, string]
+  >;
   constructor(name: string) {
     super(name);
     this.version(1).stores({
@@ -93,6 +99,9 @@ class NotesDatabase extends Dexie {
       notebooks: "[accountId+id], accountId",
       cursors: "[accountId+key], accountId",
     });
+    // Persistent note-level access fences: late responses and other tabs cannot
+    // restore content for a note this account lost.
+    this.version(3).stores({ revoked: "[accountId+id], accountId" });
   }
 }
 
@@ -116,6 +125,21 @@ export class NotesStore {
     if (this.channel)
       this.channel.onmessage = (event: MessageEvent<unknown>) => {
         const value = event.data;
+        if (
+          typeof value === "object" &&
+          value !== null &&
+          "revokedNotes" in value &&
+          Array.isArray(value.revokedNotes) &&
+          "accountId" in value &&
+          typeof value.accountId === "string"
+        ) {
+          const ids = value.revokedNotes.filter(
+            (id): id is string => typeof id === "string",
+          );
+          this.forgetNotes(value.accountId, ids);
+          this.notify({ accountId: value.accountId, revokedNotes: ids });
+          return;
+        }
         if (
           typeof value === "object" &&
           value !== null &&
@@ -210,12 +234,16 @@ export class NotesStore {
         this.assertWritable(draft.accountId, epoch);
         await this.db.transaction(
           "rw",
-          this.db.drafts,
-          this.db.summaries,
-          this.db.accounts,
+          [
+            this.db.drafts,
+            this.db.summaries,
+            this.db.accounts,
+            this.db.revoked,
+          ],
           async () => {
             await this.assertPersistent(draft.accountId, captured.epoch);
             this.assertWritable(draft.accountId, epoch);
+            await this.assertNotRevoked(draft.accountId, draft.id);
             await this.db.drafts.put(draft);
             const previous = await this.db.summaries.get([
               draft.accountId,
@@ -260,13 +288,17 @@ export class NotesStore {
 
     await this.db.transaction(
       "rw",
-      this.db.bodies,
-      this.db.summaries,
-      this.db.drafts,
-      this.db.accounts,
+      [
+        this.db.bodies,
+        this.db.summaries,
+        this.db.drafts,
+        this.db.accounts,
+        this.db.revoked,
+      ],
       async () => {
         await this.assertPersistent(body.accountId, fence.epoch);
         this.assertWritable(body.accountId, epoch);
+        await this.assertNotRevoked(body.accountId, body.id);
         await this.db.bodies.put(body);
         // Accepted refresh must not overwrite unsaved local recovery content.
         if (!(await this.db.drafts.get([body.accountId, body.id]))) {
@@ -302,6 +334,7 @@ export class NotesStore {
         this.db.privacy,
         this.db.notebooks,
         this.db.cursors,
+        this.db.revoked,
       ],
       async () => {
         const privacy = await this.db.privacy.get("activation");
@@ -311,6 +344,7 @@ export class NotesStore {
         });
         await this.db.notebooks.where("accountId").equals(accountId).delete();
         await this.db.cursors.where("accountId").equals(accountId).delete();
+        await this.db.revoked.where("accountId").equals(accountId).delete();
         const account = await this.db.accounts.get(accountId);
         await this.db.accounts.put({
           accountId,
@@ -345,7 +379,13 @@ export class NotesStore {
       .toArray();
     await this.assertPersistent(accountId, fence.epoch);
     this.assertWritable(accountId, epoch);
-    const latest = new Map(drafts.map((draft) => [draft.id, draft]));
+    const revoked = await this.revokedIds(accountId);
+    // Work on notes this account lost access to is never exportable.
+    const latest = new Map(
+      drafts
+        .filter((draft) => !revoked.has(draft.id))
+        .map((draft) => [draft.id, draft]),
+    );
     for (const draft of await this.accessibleRecovery(accountId, fence.epoch))
       latest.set(draft.id, { ...draft });
     await this.assertPersistent(accountId, fence.epoch);
@@ -364,8 +404,9 @@ export class NotesStore {
     epoch: number,
   ): Promise<Draft[]> {
     const drafts: Draft[] = [];
+    const revoked = await this.revokedIds(accountId);
     for (const [key, draft] of this.recoveryDrafts) {
-      if (draft.accountId !== accountId) continue;
+      if (draft.accountId !== accountId || revoked.has(draft.id)) continue;
       const fence = await this.recoveryFences.get(key)?.catch(() => null);
       if (
         fence?.epoch === epoch &&
@@ -375,6 +416,13 @@ export class NotesStore {
         drafts.push({ ...draft });
     }
     return drafts;
+  }
+  private async revokedIds(accountId: string) {
+    const rows = await this.db.revoked
+      .where("accountId")
+      .equals(accountId)
+      .toArray();
+    return new Set(rows.map((row) => row.id));
   }
   invalidateAccount(accountId: string) {
     return this.clearAccount(accountId);
@@ -439,11 +487,14 @@ export class NotesStore {
         this.db.drafts,
         this.db.accounts,
         this.db.cursors,
+        this.db.revoked,
       ],
       async () => {
         await this.assertPersistent(accountId, fence.epoch);
         this.assertWritable(accountId, epoch);
         for (const row of rows) {
+          // The server just confirmed access: lift any earlier fence.
+          await this.db.revoked.delete([accountId, row.id]);
           const draft = await this.db.drafts.get([accountId, row.id]);
           const previous = await this.db.summaries.get([accountId, row.id]);
           await this.db.summaries.put({
@@ -462,12 +513,7 @@ export class NotesStore {
           });
         }
         // Lost access removes cached content and any pending work for it.
-        for (const id of removed) {
-          await this.db.summaries.delete([accountId, id]);
-          await this.db.bodies.delete([accountId, id]);
-          await this.db.drafts.delete([accountId, id]);
-          this.recoveryDrafts.delete(JSON.stringify([accountId, id]));
-        }
+        await this.fenceNotes(accountId, removed);
         if (cursor)
           await this.db.cursors.put({
             accountId,
@@ -476,7 +522,116 @@ export class NotesStore {
           });
       },
     );
+    this.announceRevoked(accountId, removed);
     this.notify();
+  }
+  /** Delete a note's local copies and record a persistent fence. Inside a transaction. */
+  private async fenceNotes(accountId: string, ids: string[]) {
+    const at = Date.now();
+    for (const id of ids) {
+      await this.db.summaries.delete([accountId, id]);
+      await this.db.bodies.delete([accountId, id]);
+      await this.db.drafts.delete([accountId, id]);
+      await this.db.revoked.put({ accountId, id, at });
+    }
+  }
+  private announceRevoked(accountId: string, ids: string[]) {
+    if (!ids.length) return;
+    this.forgetNotes(accountId, ids);
+    this.channel?.postMessage({ accountId, revokedNotes: ids });
+    this.notify({ accountId, revokedNotes: ids });
+  }
+  private forgetNotes(accountId: string, ids: string[]) {
+    for (const id of ids) {
+      const key = JSON.stringify([accountId, id]);
+      this.recoveryDrafts.delete(key);
+      this.recoveryFences.delete(key);
+    }
+  }
+  private async assertNotRevoked(accountId: string, id: string) {
+    if (await this.db.revoked.get([accountId, id]))
+      throw new Error("Access to this note was removed.");
+  }
+  /** This account lost access to these notes: remove every local copy, in every tab. */
+  async revokeNotes(accountId: string, ids: string[]): Promise<void> {
+    if (!ids.length) return;
+    const fence = await this.captureFence(accountId);
+    const epoch = this.epoch(accountId);
+    this.assertWritable(accountId, epoch);
+    this.forgetNotes(accountId, ids);
+    await this.db.transaction(
+      "rw",
+      [
+        this.db.summaries,
+        this.db.bodies,
+        this.db.drafts,
+        this.db.accounts,
+        this.db.revoked,
+      ],
+      async () => {
+        await this.assertPersistent(accountId, fence.epoch);
+        await this.fenceNotes(accountId, ids);
+      },
+    );
+    this.announceRevoked(accountId, ids);
+    this.notify();
+  }
+  /**
+   * Reconcile cached server notes against one complete authorization snapshot:
+   * a note survives if its notebook is visible or it is shared individually.
+   * Local notes never sent to the server carry no role and are kept.
+   */
+  async reconcileAccess(
+    accountId: string,
+    visibleNotebooks: Set<string>,
+    sharedNotes: Set<string>,
+    fence: CacheFence,
+  ): Promise<string[]> {
+    const epoch = this.epoch(accountId);
+    this.assertWritable(accountId, epoch);
+    let revoked: string[] = [];
+    await this.db.transaction(
+      "rw",
+      [
+        this.db.summaries,
+        this.db.bodies,
+        this.db.drafts,
+        this.db.accounts,
+        this.db.revoked,
+        this.db.cursors,
+      ],
+      async () => {
+        await this.assertPersistent(accountId, fence.epoch);
+        this.assertWritable(accountId, epoch);
+        const rows = await this.db.summaries
+          .where("accountId")
+          .equals(accountId)
+          .toArray();
+        revoked = rows
+          .filter(
+            (row) =>
+              row.role !== undefined &&
+              !sharedNotes.has(row.id) &&
+              !(row.notebookId && visibleNotebooks.has(row.notebookId)),
+          )
+          .map((row) => row.id);
+        await this.fenceNotes(accountId, revoked);
+        // Feeds for notebooks no longer visible restart from scratch if re-shared.
+        const cursors = await this.db.cursors
+          .where("accountId")
+          .equals(accountId)
+          .toArray();
+        for (const cursor of cursors)
+          if (
+            cursor.key.startsWith("notebook:") &&
+            !visibleNotebooks.has(cursor.key.slice("notebook:".length))
+          )
+            await this.db.cursors.delete([accountId, cursor.key]);
+      },
+    );
+    this.announceRevoked(accountId, revoked);
+    if (revoked.length) this.notify();
+    return revoked;
   }
   async cursor(accountId: string, key: string): Promise<number> {
     return (await this.db.cursors.get([accountId, key]))?.value ?? 0;
@@ -489,11 +644,10 @@ export class NotesStore {
       .toArray();
     return rows.sort((a, b) => a.name.localeCompare(b.name));
   }
-  /** Replace the notebook list; cached notes of notebooks no longer visible are removed. */
+  /** Replace the notebook list. Note access is reconciled separately. */
   async setNotebooks(
     accountId: string,
     notebooks: Omit<CachedNotebook, "accountId">[],
-    keepNoteIds: Set<string>,
     fence: CacheFence,
   ): Promise<void> {
     if (fence.accountId !== accountId)
@@ -502,41 +656,14 @@ export class NotesStore {
     this.assertWritable(accountId, epoch);
     await this.db.transaction(
       "rw",
-      [
-        this.db.notebooks,
-        this.db.summaries,
-        this.db.bodies,
-        this.db.drafts,
-        this.db.accounts,
-        this.db.cursors,
-      ],
+      [this.db.notebooks, this.db.accounts],
       async () => {
         await this.assertPersistent(accountId, fence.epoch);
         this.assertWritable(accountId, epoch);
-        const visible = new Set(notebooks.map((n) => n.id));
-        const previous = await this.db.notebooks
-          .where("accountId")
-          .equals(accountId)
-          .toArray();
         await this.db.notebooks.where("accountId").equals(accountId).delete();
         await this.db.notebooks.bulkPut(
           notebooks.map((n) => ({ ...n, accountId })),
         );
-        for (const old of previous) {
-          if (visible.has(old.id)) continue;
-          await this.db.cursors.delete([accountId, "notebook:" + old.id]);
-          const rows = await this.db.summaries
-            .where("accountId")
-            .equals(accountId)
-            .toArray();
-          for (const row of rows) {
-            if (row.notebookId !== old.id || keepNoteIds.has(row.id)) continue;
-            await this.db.summaries.delete([accountId, row.id]);
-            await this.db.bodies.delete([accountId, row.id]);
-            await this.db.drafts.delete([accountId, row.id]);
-            this.recoveryDrafts.delete(JSON.stringify([accountId, row.id]));
-          }
-        }
       },
     );
     this.notify();
@@ -583,10 +710,17 @@ export class NotesStore {
     await Promise.allSettled([this.draftQueues.get(key)]);
     await this.db.transaction(
       "rw",
-      [this.db.drafts, this.db.summaries, this.db.bodies, this.db.accounts],
+      [
+        this.db.drafts,
+        this.db.summaries,
+        this.db.bodies,
+        this.db.accounts,
+        this.db.revoked,
+      ],
       async () => {
         await this.assertPersistent(accountId, fence.epoch);
         this.assertWritable(accountId, epoch);
+        await this.assertNotRevoked(accountId, id);
         const current = await this.db.drafts.get([accountId, id]);
         if (expected && current && current.updatedAt !== expected.updatedAt)
           return;
@@ -620,10 +754,17 @@ export class NotesStore {
     await Promise.allSettled([this.draftQueues.get(oldKey)]);
     await this.db.transaction(
       "rw",
-      [this.db.drafts, this.db.summaries, this.db.bodies, this.db.accounts],
+      [
+        this.db.drafts,
+        this.db.summaries,
+        this.db.bodies,
+        this.db.accounts,
+        this.db.revoked,
+      ],
       async () => {
         await this.assertPersistent(accountId, fence.epoch);
         this.assertWritable(accountId, epoch);
+        await this.assertNotRevoked(accountId, noteId);
         const draft = await this.db.drafts.get([accountId, localId]);
         const row = await this.db.summaries.get([accountId, localId]);
         const body = await this.db.bodies.get([accountId, localId]);

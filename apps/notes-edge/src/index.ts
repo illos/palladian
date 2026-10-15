@@ -9,7 +9,7 @@ import {
   handleDeny,
   handleRequestInfo,
 } from "./consent.ts";
-import { D1KV } from "./d1-kv.ts";
+import { D1KV, purgeAbandonedClients } from "./d1-kv.ts";
 import {
   MCP_PATH,
   publicOrigin,
@@ -125,8 +125,31 @@ export function withOAuthStorage(deployed: DeployedEnv): Env {
   return { ...deployed, OAUTH_KV: store } as Env;
 }
 
+/** Bound anonymous registrations per address; connected clients are unaffected. */
+async function registrationAllowed(request: Request, deployed: DeployedEnv) {
+  if (!deployed.REGISTRATION_LIMIT || request.method !== "POST") return true;
+  const key = request.headers.get("CF-Connecting-IP") ?? "unknown";
+  const { success } = await deployed.REGISTRATION_LIMIT.limit({ key });
+  return success;
+}
+
 export default {
-  fetch(request, deployed, ctx) {
+  async fetch(request, deployed, ctx) {
+    if (
+      new URL(request.url).pathname === "/oauth/register" &&
+      !(await registrationAllowed(request, deployed))
+    )
+      return new Response(
+        JSON.stringify({
+          error: "slow_down",
+          error_description:
+            "Too many client registrations. Try again shortly.",
+        }),
+        {
+          status: 429,
+          headers: { "Content-Type": "application/json", "Retry-After": "60" },
+        },
+      );
     const env = withOAuthStorage(deployed);
     const origin = publicOrigin(env);
     if (cached?.origin !== origin)
@@ -138,5 +161,9 @@ export default {
       return cached.provider.fetch(new Request(url, request), env, ctx);
     }
     return cached.provider.fetch(request, env, ctx);
+  },
+  async scheduled(_controller, deployed, ctx) {
+    if (deployed.OAUTH_DB)
+      ctx.waitUntil(purgeAbandonedClients(deployed.OAUTH_DB));
   },
 } satisfies ExportedHandler<DeployedEnv>;

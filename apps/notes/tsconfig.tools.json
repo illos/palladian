@@ -1,10 +1,14 @@
 {
   "extends": "../../tsconfig.json",
-  "compilerOptions": { "types": ["node"] },
+  "compilerOptions": {
+    "types": ["node", "bun"]
+  },
   "include": [
     "vite.config.ts",
     "offline-plugin.ts",
     "playwright*.config.ts",
-    "../../tests/browser/notes-*.spec.ts"
+    "../../tests/browser/notes-*.spec.ts",
+    "vitest.config.ts",
+    "tests/unit/**/*.ts"
   ]
 }

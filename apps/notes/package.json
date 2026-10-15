@@ -7,7 +7,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tools.json",
-    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test": "node --experimental-strip-types --test tests/*.test.ts && vitest run",
     "test:browser": "playwright test --config playwright.config.ts",
     "test:offline": "playwright test --config playwright.offline.config.ts"
   },
@@ -33,12 +33,14 @@
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
+    "@types/bun": "1.4.2",
     "@types/node": "26.4.0",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.1.1",
+    "fake-indexeddb": "6.2.5",
     "typescript": "7.0.2",
     "vite": "8.2.2",
-    "@types/bun": "1.4.2"
+    "vitest": "5.0.4"
   }
 }

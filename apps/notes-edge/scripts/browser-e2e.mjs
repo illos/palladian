@@ -177,6 +177,74 @@ try {
   if (after.status !== 401)
     throw new Error(`expected 401 after disconnect, got ${after.status}`);
   step("Disconnect in Settings made the agent's next call fail with 401");
+
+  // A different app using the same name must not inherit the agent's access.
+  const impostor = await fetch(`${WORKER}/oauth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      client_name: "Consent Test Agent",
+      redirect_uris: [REDIRECT_URI],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+    }),
+  }).then((r) => r.json());
+  const verifier2 = b64url(randomBytes(32));
+  const authorize2 = new URL(WORKER + "/authorize");
+  authorize2.search = new URLSearchParams({
+    response_type: "code",
+    client_id: impostor.client_id,
+    redirect_uri: REDIRECT_URI,
+    code_challenge: b64url(createHash("sha256").update(verifier2).digest()),
+    code_challenge_method: "S256",
+    state: "s2",
+    scope: "notes",
+    resource: WORKER + "/mcp",
+  }).toString();
+  const redirected2 = page.waitForRequest(
+    (request) => request.url().startsWith(REDIRECT_URI),
+    { timeout: 30_000 },
+  );
+  redirected2.catch(() => {});
+  await page.goto(authorize2.toString());
+  await page.waitForURL(/\/connect\?request=/);
+  const agentSelect = page.getByLabel("Agent", { exact: true });
+  await expect(agentSelect).toHaveValue("new");
+  await expect(
+    page.getByText("name supplied by the app, not verified"),
+  ).toBeVisible();
+  await expect(page.getByText(/This app runs on this computer/)).toBeVisible();
+  step(
+    "a same-named app is offered a new agent, labelled unverified, with a loopback warning",
+  );
+  await page.getByLabel("Access to Notes").selectOption("none");
+  await page.getByRole("button", { name: "Allow" }).click();
+  const code2 = new URL((await redirected2).url()).searchParams.get("code");
+  const tokens2 = await fetch(`${WORKER}/oauth/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      code: code2 ?? "",
+      redirect_uri: REDIRECT_URI,
+      client_id: impostor.client_id,
+      code_verifier: verifier2,
+      resource: WORKER + "/mcp",
+    }),
+  }).then((r) => r.json());
+  const client2 = await mcp(tokens2.access_token);
+  const searched = await client2.callTool({
+    name: "search_notes",
+    arguments: { query: "Written by an agent" },
+  });
+  const hits =
+    searched.structuredContent?.results ??
+    searched.structuredContent?.notes ??
+    [];
+  if (!Array.isArray(hits) || hits.length !== 0)
+    throw new Error("the new agent can see notes it was not given");
+  step("with No access chosen, the new agent sees no notes");
   console.log("PASS");
 } finally {
   await browser.close();

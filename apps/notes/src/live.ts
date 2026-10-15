@@ -1,11 +1,12 @@
-import { parseStoredDoc } from "@palladian/notes-core/document";
+import { diffStep, parseStoredDoc } from "@palladian/notes-core/document";
+import type { Node as ProseMirrorNode } from "prosemirror-model";
 import { plainText } from "@palladian/notes-core/projection";
 import { api } from "@palladian/notes-backend/api";
 import { ConvexReactClient } from "convex/react";
 import { ConvexError } from "convex/values";
 import type { FunctionReference, FunctionReturnType } from "convex/server";
 import type { Id } from "@palladian/notes-backend/dataModel";
-import type { RemoteSummary, NotesStore } from "./cache";
+import type { Draft, RemoteSummary, NotesStore } from "./cache";
 import { TransportError, type NoteTransport, type StepBatch } from "./channel";
 import type { SessionController } from "./session";
 import type { createAuthService } from "./auth-service";
@@ -23,6 +24,23 @@ export interface LiveState {
   connected: boolean;
 }
 
+/** Equal documents, ignoring block IDs the server may have assigned. */
+function sameContent(a: ProseMirrorNode, b: ProseMirrorNode) {
+  const strip = (value: unknown): unknown =>
+    Array.isArray(value)
+      ? value.map(strip)
+      : value && typeof value === "object"
+        ? Object.fromEntries(
+            Object.entries(value).flatMap(([key, item]) =>
+              key === "id" ? [] : [[key, strip(item)]],
+            ),
+          )
+        : value;
+  return (
+    JSON.stringify(strip(a.toJSON())) === JSON.stringify(strip(b.toJSON()))
+  );
+}
+
 function toRemote(row: Summary): RemoteSummary {
   return {
     id: row.id,
@@ -33,6 +51,24 @@ function toRemote(row: Summary): RemoteSummary {
     role: row.role,
     trashed: row.trashed,
   };
+}
+
+/** The `sub` claim of a JWT, read without verification (the server verifies). */
+export function tokenSubject(token: string): string | null {
+  const part = token.split(".")[1];
+  if (!part) return null;
+  try {
+    const json = atob(part.replace(/-/g, "+").replace(/_/g, "/"));
+    const payload: unknown = JSON.parse(json);
+    return typeof payload === "object" &&
+      payload !== null &&
+      "sub" in payload &&
+      typeof payload.sub === "string"
+      ? payload.sub
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export function transportError(error: unknown): TransportError {
@@ -66,12 +102,13 @@ export class LiveController {
   private readonly listeners = new Set<() => void>();
   private stops: (() => void)[] = [];
   private feeds = new Map<string, () => void>();
-  private sharedIds = new Set<string>();
+  private accessQueue: Promise<unknown> = Promise.resolve();
   private visibleNotebooks: Set<string> | null = null;
   private fetchQueue = new Map<string, number>();
   private fetching = 0;
   private openNotes = new Set<string>();
   private syncingDrafts = false;
+  private tokenRequest = 0;
   private token: {
     accountId: string;
     generation: number;
@@ -129,19 +166,37 @@ export class LiveController {
     this.client.setAuth(
       async ({ forceRefreshToken }) => {
         const current = this.session.getSnapshot();
-        if (current.accountId !== accountId) return null;
+        if (current.accountId !== accountId || current.status === "signed-out")
+          return null;
         if (
           !forceRefreshToken &&
           this.token?.accountId === accountId &&
           this.token.generation === current.generation
         )
           return this.token.value;
+        const request = ++this.tokenRequest;
         try {
           const result = await this.auth.convex.token({
             fetchOptions: { throw: false },
           });
           const value = result.data?.token ?? null;
-          if (this.session.getSnapshot().accountId !== accountId) return null;
+          const after = this.session.getSnapshot();
+          // Only a token for this exact account and session generation, from the
+          // newest request, may authenticate this account's sync.
+          if (
+            request !== this.tokenRequest ||
+            after.accountId !== accountId ||
+            after.generation !== current.generation ||
+            this.state.accountId !== accountId
+          )
+            return null;
+          if (value && tokenSubject(value) !== accountId) {
+            this.token = null;
+            // The browser's credentials belong to someone else now; let the
+            // session controller notice and isolate the previous account.
+            this.session.retry();
+            return null;
+          }
           this.token = value
             ? { accountId, generation: current.generation, value }
             : null;
@@ -193,16 +248,16 @@ export class LiveController {
         if (current()) this.update({ profile });
       }),
     );
+    // One consistent snapshot of visible notebooks and shared notes; snapshots
+    // apply strictly in order.
     this.stops.push(
-      this.watch(api.library.notebooks, {}, (notebooks) => {
-        if (!current()) return;
-        void this.applyNotebooks(accountId, notebooks);
-      }),
-    );
-    this.stops.push(
-      this.watch(api.library.shared, {}, (rows) => {
-        if (!current()) return;
-        void this.applyShared(accountId, rows);
+      this.watch(api.library.access, {}, (snapshot) => {
+        if (!current() || !snapshot) return;
+        this.accessQueue = this.accessQueue
+          .then(() =>
+            current() ? this.applyAccess(accountId, snapshot) : undefined,
+          )
+          .catch(() => undefined);
       }),
     );
     void this.syncDrafts();
@@ -214,34 +269,39 @@ export class LiveController {
     for (const stop of this.feeds.values()) stop();
     this.feeds.clear();
     this.fetchQueue.clear();
-    this.sharedIds.clear();
     this.visibleNotebooks = null;
   }
 
-  private async applyNotebooks(
+  private async applyAccess(
     accountId: string,
-    notebooks: FunctionReturnType<typeof api.library.notebooks>,
+    snapshot: NonNullable<FunctionReturnType<typeof api.library.access>>,
   ) {
-    const ids = new Set(notebooks.map((n) => n.id as string));
+    const ids = new Set(snapshot.notebooks.map((n) => n.id as string));
+    const shared = new Set(snapshot.shared.map((n) => n.id as string));
     this.visibleNotebooks = ids;
-    try {
-      const fence = await this.store.captureFence(accountId);
-      await this.store.setNotebooks(
-        accountId,
-        notebooks.map((n) => ({
-          id: n.id,
-          name: n.name,
-          description: n.description,
-          role: n.role,
-          ownerName: n.ownerName,
-          isDefault: n.isDefault,
-        })),
-        this.sharedIds,
-        fence,
-      );
-    } catch {
-      return;
-    }
+    const fence = await this.store.captureFence(accountId);
+    await this.store.setNotebooks(
+      accountId,
+      snapshot.notebooks.map((n) => ({
+        id: n.id,
+        name: n.name,
+        description: n.description,
+        role: n.role,
+        ownerName: n.ownerName,
+        isDefault: n.isDefault,
+      })),
+      fence,
+    );
+    await this.store.cacheSummaries(
+      accountId,
+      snapshot.shared.map(toRemote),
+      [],
+      fence,
+    );
+    // Anything cached that this snapshot no longer covers is revoked.
+    await this.store.reconcileAccess(accountId, ids, shared, fence);
+    for (const row of snapshot.shared)
+      this.queueFetch(accountId, row.id, row.editedAt);
     for (const [id, stop] of this.feeds)
       if (!ids.has(id)) {
         stop();
@@ -292,30 +352,6 @@ export class LiveController {
       },
     );
     this.feeds.set(notebookId, stop);
-  }
-
-  private async applyShared(accountId: string, rows: Summary[]) {
-    const next = new Set(rows.map((r) => r.id as string));
-    const removed = [...this.sharedIds].filter((id) => !next.has(id));
-    this.sharedIds = next;
-    try {
-      const fence = await this.store.captureFence(accountId);
-      const cached = await this.store.summaryRows(accountId);
-      // Individually shared notes whose grant ended disappear unless a notebook still shows them.
-      const gone = removed.filter((id) => {
-        const row = cached.find((r) => r.id === id);
-        return !row?.notebookId || !this.visibleNotebooks?.has(row.notebookId);
-      });
-      await this.store.cacheSummaries(
-        accountId,
-        rows.map(toRemote),
-        gone,
-        fence,
-      );
-      for (const row of rows) this.queueFetch(accountId, row.id, row.editedAt);
-    } catch {
-      /* the next update retries */
-    }
   }
 
   private queueFetch(accountId: string, noteId: string, updatedAt: number) {
@@ -385,21 +421,10 @@ export class LiveController {
           created.noteId,
           fence,
         );
-        if (created.revision === 0)
-          await this.store.settleDraft(
-            accountId,
-            created.noteId,
-            {
-              accountId,
-              id: created.noteId,
-              document: draft.document,
-              text: draft.text,
-              revision: 0,
-            },
-            draft.updatedAt,
-            { ...draft, id: created.noteId },
-            fence,
-          );
+        await this.reconcileCreated(accountId, created.noteId, {
+          ...draft,
+          id: created.noteId,
+        });
         this.queueFetch(accountId, created.noteId, draft.updatedAt);
       }
     } catch {
@@ -407,6 +432,73 @@ export class LiveController {
     } finally {
       this.syncingDrafts = false;
     }
+  }
+
+  /**
+   * A creation may have been answered from an earlier attempt, so compare what
+   * the server kept with the local version and send any difference as an edit.
+   * Local work is retired only once the server holds the same content.
+   */
+  private async reconcileCreated(
+    accountId: string,
+    noteId: string,
+    draft: Draft,
+  ) {
+    const content = await this.client.query(api.notes.content, {
+      noteId: noteId as Id<"notes">,
+    });
+    if (!content || this.state.accountId !== accountId) return;
+    const server = parseStoredDoc(content.doc);
+    const local = parseStoredDoc(draft.document);
+    const settle = async (doc: string, revision: number) => {
+      const fence = await this.store.captureFence(accountId);
+      await this.store.settleDraft(
+        accountId,
+        noteId,
+        {
+          accountId,
+          id: noteId,
+          document: doc,
+          text: plainText(parseStoredDoc(doc)),
+          revision,
+        },
+        draft.updatedAt,
+        draft,
+        fence,
+      );
+    };
+    if (sameContent(server, local))
+      return settle(content.doc, content.revision);
+    const step = diffStep(server, local);
+    if (!step) return settle(content.doc, content.revision);
+    const json = JSON.stringify(step.toJSON());
+    try {
+      const pushed = await this.client.mutation(api.notes.push, {
+        noteId: noteId as Id<"notes">,
+        revision: content.revision,
+        steps: [json],
+        clientId: "sync-" + crypto.randomUUID().slice(0, 8),
+      });
+      if (pushed.status === "accepted") {
+        const after = await this.client.query(api.notes.content, {
+          noteId: noteId as Id<"notes">,
+        });
+        if (after) return settle(after.doc, after.revision);
+        return;
+      }
+    } catch {
+      /* keep the work as a journal entry below */
+    }
+    // Keep the difference as unconfirmed collaborative work on top of the
+    // server's version; opening the note sends and rebases it.
+    await this.store.writeDraft({
+      ...draft,
+      baseDocument: content.doc,
+      baseRevision: content.revision,
+      steps: [json],
+      clientId: crypto.randomUUID().replace(/-/g, ""),
+      created: true,
+    });
   }
 
   setOpen(noteId: string, open: boolean) {

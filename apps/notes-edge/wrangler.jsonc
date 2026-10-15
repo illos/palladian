@@ -34,6 +34,16 @@
       "database_id": "3710b5b5-71cc-418c-8bf9-920608fabe54",
     },
   ],
+  // Anonymous dynamic client registration: at most 10 per address per minute.
+  "ratelimits": [
+    {
+      "name": "REGISTRATION_LIMIT",
+      "namespace_id": "4101",
+      "simple": { "limit": 10, "period": 60 },
+    },
+  ],
+  // Daily removal of registrations that never completed an authorization.
+  "triggers": { "crons": ["23 4 * * *"] },
   "vars": {
     // Production values; local development overrides them from .dev.vars.
     "PUBLIC_ORIGIN": "https://palladian.rdxx.workers.dev",

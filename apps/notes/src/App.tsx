@@ -103,7 +103,11 @@ export function App({
   const [notebooks, setNotebooks] = useState<CachedNotebook[]>([]);
   const [open, setOpen] = useState<OpenNote | null>(null);
   const [query, setQuery] = useState("");
-  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [hits, setHits] = useState<{
+    accountId: string;
+    generation: number;
+    results: SearchHit[];
+  } | null>(null);
   const [rowLimit, setRowLimit] = useState(60);
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState(
@@ -118,6 +122,8 @@ export function App({
   const pendingRoute = useRef(routeNoteId());
   const openKey = useRef<string | null>(null);
   openKey.current = open?.key ?? null;
+  const openRef = useRef(open);
+  openRef.current = open;
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
   const accountId = snapshot.accountId;
@@ -174,6 +180,18 @@ export function App({
         setNotebooks([]);
         setOpen(null);
       }
+      const shown = openRef.current;
+      if (
+        event.revokedNotes &&
+        event.accountId === accountId &&
+        shown &&
+        event.revokedNotes.includes(shown.id)
+      ) {
+        shown.channel?.close();
+        openRequest.current++;
+        setOpen(null);
+        setError("You no longer have access to that note.");
+      }
       void refresh();
     });
     return () => {
@@ -208,8 +226,12 @@ export function App({
   useEffect(() => {
     if (!liveReady || currentOpen?.kind !== "reader") return;
     const key = currentOpen.key;
-    return live!.subscribeContent(currentOpen.id, (content) => {
-      if (!content) return;
+    const noteId = currentOpen.id;
+    return live!.subscribeContent(noteId, (content) => {
+      if (!content) {
+        accessLost(noteId);
+        return;
+      }
       setOpen((prev) =>
         prev && prev.key === key && prev.revision !== content.revision
           ? { ...prev, document: content.doc, revision: content.revision }
@@ -218,21 +240,32 @@ export function App({
     });
   }, [liveReady, live, currentOpen?.kind, currentOpen?.id, currentOpen?.key]);
 
-  // Server search complements instant local filtering.
+  // Server search complements instant local filtering. Results are fenced to
+  // the account and session generation that asked for them.
   useEffect(() => {
-    if (!liveReady || query.trim().length < 2) {
-      setHits([]);
-      return;
-    }
+    setHits(null);
+    if (!liveReady || !accountId || query.trim().length < 2) return;
     const term = query;
+    const generation = snapshot.generation;
+    let current = true;
     const timer = setTimeout(() => {
       void live!
         .search(term)
-        .then((result) => setHits(result))
-        .catch(() => setHits([]));
+        .then((results) => {
+          if (
+            current &&
+            snapshotRef.current.accountId === accountId &&
+            snapshotRef.current.generation === generation
+          )
+            setHits({ accountId, generation, results });
+        })
+        .catch(() => undefined);
     }, 250);
-    return () => clearTimeout(timer);
-  }, [liveReady, live, query]);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [liveReady, live, query, accountId, snapshot.generation]);
 
   // A deep link opens its note once the library knows about it. Startup session
   // fences can discard an attempt, so keep trying until a note is shown.
@@ -292,12 +325,26 @@ export function App({
       onStatus: (status) => {
         if (openKey.current === key) setChannelStatus(status);
       },
+      onAccessLost: (noteId) => accessLost(noteId),
       onCreated: (noteId) => {
         setOpen((prev) => (prev?.key === key ? { ...prev, id: noteId } : prev));
         history.replaceState(null, "", "/notes/" + noteId);
       },
     });
     return channel;
+  }
+
+  /** The server says this account can no longer open the note: drop every copy. */
+  function accessLost(noteId: string) {
+    if (accountId)
+      void store.revokeNotes(accountId, [noteId]).catch(() => undefined);
+    const shown = openRef.current;
+    if (shown?.id === noteId) {
+      shown.channel?.close();
+      openRequest.current++;
+      setOpen(null);
+    }
+    setError("You no longer have access to that note.");
   }
 
   async function openRemote(noteId: string) {
@@ -384,7 +431,13 @@ export function App({
           row.id,
         );
         if (request !== openRequest.current) return channel.close();
-        show({ ...base, kind: "live", channel });
+        // The editor starts from the accepted base and replays pending steps once.
+        show({
+          ...base,
+          document: draft?.baseDocument ?? body.document,
+          kind: "live",
+          channel,
+        });
       } else {
         show({ ...base, kind: "cached", channel: null });
       }
@@ -535,7 +588,13 @@ export function App({
     (row.title + " " + row.preview).toLocaleLowerCase().includes(needle),
   );
   const shownIds = new Set(visibleRows.map((r) => r.id));
-  const extraHits = hits.filter((hit) => !shownIds.has(hit.summary.id));
+  const extraHits =
+    permitted &&
+    hits &&
+    hits.accountId === accountId &&
+    hits.generation === snapshot.generation
+      ? hits.results.filter((hit) => !shownIds.has(hit.summary.id))
+      : [];
   const sectionTitle =
     section.kind === "trash"
       ? "Trash"

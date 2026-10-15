@@ -25,6 +25,47 @@ const notebookView = v.object({
   isDefault: v.boolean(),
 });
 
+async function notebookViews(ctx: QueryCtx, principal: Principal) {
+  const entries = await accessibleNotebooks(ctx, principal);
+  const owners = new Map<Id<"principals">, string>();
+  const views = [];
+  for (const { notebook, role } of entries) {
+    if (!owners.has(notebook.ownerId))
+      owners.set(
+        notebook.ownerId,
+        (await ctx.db.get(notebook.ownerId))?.name ?? "Unknown",
+      );
+    views.push({
+      id: notebook._id,
+      name: notebook.name,
+      description: notebook.description,
+      role,
+      ownerId: notebook.ownerId,
+      ownerName: owners.get(notebook.ownerId)!,
+      isDefault: principal.defaultNotebookId === notebook._id,
+    });
+  }
+  return views.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Notes shared individually, outside notebooks the caller belongs to. */
+async function sharedSummaries(ctx: QueryCtx, principal: Principal) {
+  const grants = await ctx.db
+    .query("noteMembers")
+    .withIndex("by_principal", (q) => q.eq("principalId", principal._id))
+    .take(500);
+  const result = [];
+  for (const grant of grants) {
+    if (grant.role === "none") continue;
+    const note = await ctx.db.get(grant.noteId);
+    if (!note) continue;
+    const notebook = await ctx.db.get(note.notebookId);
+    if (notebook && (await notebookRole(ctx, principal, notebook))) continue;
+    result.push(toSummary(note, grant.role));
+  }
+  return result;
+}
+
 /** Notebooks the caller can open. Changes only when notebooks or access change. */
 export const notebooks = query({
   args: {},
@@ -32,26 +73,31 @@ export const notebooks = query({
   handler: async (ctx) => {
     const principal = await getPrincipal(ctx);
     if (!principal) return [];
-    const entries = await accessibleNotebooks(ctx, principal);
-    const owners = new Map<Id<"principals">, string>();
-    const views = [];
-    for (const { notebook, role } of entries) {
-      if (!owners.has(notebook.ownerId))
-        owners.set(
-          notebook.ownerId,
-          (await ctx.db.get(notebook.ownerId))?.name ?? "Unknown",
-        );
-      views.push({
-        id: notebook._id,
-        name: notebook.name,
-        description: notebook.description,
-        role,
-        ownerId: notebook.ownerId,
-        ownerName: owners.get(notebook.ownerId)!,
-        isDefault: principal.defaultNotebookId === notebook._id,
-      });
-    }
-    return views.sort((a, b) => a.name.localeCompare(b.name));
+    return await notebookViews(ctx, principal);
+  },
+});
+
+/**
+ * One consistent authorization snapshot for device caches: visible notebooks
+ * and individually shared notes, read in the same transaction so a client
+ * never reconciles one against a stale copy of the other.
+ */
+export const access = query({
+  args: {},
+  returns: v.union(
+    v.null(),
+    v.object({
+      notebooks: v.array(notebookView),
+      shared: v.array(noteSummary),
+    }),
+  ),
+  handler: async (ctx) => {
+    const principal = await getPrincipal(ctx);
+    if (!principal) return null;
+    return {
+      notebooks: await notebookViews(ctx, principal),
+      shared: await sharedSummaries(ctx, principal),
+    };
   },
 });
 
@@ -134,20 +180,7 @@ export const shared = query({
   handler: async (ctx) => {
     const principal = await getPrincipal(ctx);
     if (!principal) return [];
-    const grants = await ctx.db
-      .query("noteMembers")
-      .withIndex("by_principal", (q) => q.eq("principalId", principal._id))
-      .take(500);
-    const result = [];
-    for (const grant of grants) {
-      if (grant.role === "none") continue;
-      const note = await ctx.db.get(grant.noteId);
-      if (!note) continue;
-      const notebook = await ctx.db.get(note.notebookId);
-      if (notebook && (await notebookRole(ctx, principal, notebook))) continue;
-      result.push(toSummary(note, grant.role));
-    }
-    return result;
+    return await sharedSummaries(ctx, principal);
   },
 });
 

@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { D1KV, type D1Like } from "../src/d1-kv.ts";
+import { D1KV, purgeAbandonedClients, type D1Like } from "../src/d1-kv.ts";
 
 type Value = string | number | null;
 function fakeD1(): D1Like {
@@ -79,5 +79,42 @@ describe("D1KV", () => {
     expect(second.keys.map((k) => k.name)).toEqual(["grant:user:3"]);
     expect(second.list_complete).toBe(true);
     expect((await kv.list({ prefix: "grant:" })).keys).toHaveLength(4);
+  });
+});
+
+describe("consent and registration hygiene", () => {
+  test("take hands a pending entry to exactly one caller", async () => {
+    const kv = new D1KV(fakeD1());
+    await kv.put("connect:k", "pending", { expirationTtl: 600 });
+    const results = await Promise.all([
+      kv.take("connect:k"),
+      kv.take("connect:k"),
+    ]);
+    expect(results.filter((value) => value === "pending")).toHaveLength(1);
+    expect(await kv.get("connect:k")).toBeNull();
+  });
+
+  test("purges day-old registrations that never received a grant", async () => {
+    vi.useFakeTimers({ now: 2_000_000_000_000 });
+    const db = fakeD1();
+    const kv = new D1KV(db);
+    const old = Math.floor(Date.now() / 1000) - 2 * 86_400;
+    await kv.put(
+      "client:abandoned",
+      JSON.stringify({ clientId: "abandoned", registrationDate: old }),
+    );
+    await kv.put(
+      "client:connected",
+      JSON.stringify({ clientId: "connected", registrationDate: old }),
+    );
+    await kv.put(
+      "client:fresh",
+      JSON.stringify({ clientId: "fresh", registrationDate: old + 2 * 86_400 }),
+    );
+    await kv.put("grant:agent:g1", JSON.stringify({ clientId: "connected" }));
+    await purgeAbandonedClients(db);
+    expect(await kv.get("client:abandoned")).toBeNull();
+    expect(await kv.get("client:connected")).not.toBeNull();
+    expect(await kv.get("client:fresh")).not.toBeNull();
   });
 });

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { ConvexProvider, useMutation, useQuery } from "convex/react";
 import { api } from "@palladian/notes-backend/api";
-import type { Id } from "@palladian/notes-backend/dataModel";
 import type { createAuthService } from "./auth-service";
 import { transportError } from "./live";
 import { liveStateSource, type LiveBox } from "./liveBox";
@@ -45,9 +44,20 @@ interface RequestInfo {
   clientName: string;
   clientUri: string | null;
   logoUri: string | null;
+  /** Verified domain of a Client ID Metadata Document client; null for self-registered apps. */
+  clientDomain: string | null;
   redirectHost: string;
+  redirectIsLoopback: boolean;
   scopes: string[];
 }
+
+type Choice = "none" | "read" | "edit";
+const delegationText: Record<string, string> = {
+  share: "change sharing",
+  delete: "permanently delete notes",
+  move: "move notes",
+  publish: "publish notes",
+};
 
 function ConsentForm({
   requestKey,
@@ -60,24 +70,28 @@ function ConsentForm({
   const agents = useQuery(api.connections.mine, {});
   const approve = useMutation(api.connections.approve);
   const owned = (notebooks ?? []).filter((n) => n.role === "owner");
-  const matching = (agents ?? []).filter(
-    (a) => a.clientName === info.clientName,
+  // Continuity comes only from this exact client identity, never from its name.
+  const continuing = (agents ?? []).filter((agent) =>
+    agent.connections.some((c) => c.clientId === info.clientId),
+  );
+  const others = (agents ?? []).filter(
+    (agent) => !continuing.includes(agent) && !agent.disabled,
   );
   const [agentChoice, setAgentChoice] = useState<string>("new");
+  const [confirmTransfer, setConfirmTransfer] = useState(false);
   const [agentName, setAgentName] = useState(info.clientName.slice(0, 60));
-  const [roles, setRoles] = useState<Record<string, "none" | "read" | "edit">>(
-    {},
-  );
-  const [later, setLater] = useState(false);
+  const [roles, setRoles] = useState<Record<string, Choice>>({});
+  const [later, setLater] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (matching.length && agentChoice === "new")
-      setAgentChoice(matching[0]!.agentId);
-  }, [matching.length]);
-  const existing = matching.find((a) => a.agentId === agentChoice);
-  const roleFor = (id: string, isDefault: boolean) => {
+    if (continuing.length && agentChoice === "new")
+      setAgentChoice(continuing[0]!.agentId);
+  }, [continuing.length]);
+  const existing = (agents ?? []).find((a) => a.agentId === agentChoice);
+  const transferring = !!existing && !continuing.includes(existing);
+  const roleFor = (id: string, isDefault: boolean): Choice => {
     if (roles[id]) return roles[id]!;
     if (existing)
       return (
@@ -85,6 +99,8 @@ function ConsentForm({
       );
     return isDefault ? "edit" : "none";
   };
+  const shareLater =
+    later ?? (existing ? existing.autoShareRole !== null : false);
 
   async function decide(allow: boolean) {
     setBusy(true);
@@ -100,18 +116,13 @@ function ConsentForm({
           redirectHost: info.redirectHost,
           agentName: agentName.trim() || info.clientName.slice(0, 60),
           ...(existing ? { agentId: existing.agentId } : {}),
-          notebooks: owned
-            .map((n) => ({
-              notebookId: n.id,
-              role: roleFor(n.id, n.isDefault),
-            }))
-            .filter(
-              (
-                n,
-              ): n is { notebookId: Id<"notebooks">; role: "read" | "edit" } =>
-                n.role !== "none",
-            ),
-          ...(later ? { autoShareRole: "edit" as const } : {}),
+          ...(transferring ? { transfer: true } : {}),
+          // Send every notebook, including "No access", so removals apply.
+          notebooks: owned.map((n) => ({
+            notebookId: n.id,
+            role: roleFor(n.id, n.isDefault),
+          })),
+          autoShareRole: shareLater ? "edit" : null,
         });
         body = { request: requestKey, code: result.code };
         path = "/oauth/approve";
@@ -143,36 +154,88 @@ function ConsentForm({
   const sharedCount = owned.filter(
     (n) => roleFor(n.id, n.isDefault) !== "none",
   ).length;
+  const retained = existing
+    ? [
+        ...(existing.noteGrants
+          ? [
+              `access to ${existing.noteGrants} individually shared note${existing.noteGrants === 1 ? "" : "s"}`,
+            ]
+          : []),
+        ...existing.delegations.map(
+          (d) => `permission to ${delegationText[d] ?? d}`,
+        ),
+      ]
+    : [];
   return (
     <form
       className="stacked-form consent"
       onSubmit={(event) => {
         event.preventDefault();
+        if (transferring && !confirmTransfer) {
+          setError("Confirm that this app should take over the agent.");
+          return;
+        }
         void decide(true);
       }}
     >
       <p>
-        <strong>{info.clientName}</strong> wants to use your notes. After you
-        allow it, you will return to <strong>{info.redirectHost}</strong>.
+        <strong>{info.clientName}</strong>{" "}
+        {info.clientDomain ? (
+          <span className="muted">(verified: {info.clientDomain})</span>
+        ) : (
+          <span className="muted">
+            (name supplied by the app, not verified)
+          </span>
+        )}{" "}
+        wants to use your notes. After you allow it, you will return to{" "}
+        <strong>{info.redirectHost}</strong>.
       </p>
+      {info.redirectIsLoopback && (
+        <p className="error">
+          This app runs on this computer. Only continue if you just started
+          connecting it yourself.
+        </p>
+      )}
       <p className="muted">
         The agent can only see notebooks you share with it below. You can change
         this or disconnect it at any time in Settings.
       </p>
-      {matching.length > 0 && (
+      {(continuing.length > 0 || others.length > 0) && (
         <label>
           Agent
           <select
+            aria-label="Agent"
             value={agentChoice}
-            onChange={(e) => setAgentChoice(e.target.value)}
+            onChange={(e) => {
+              setAgentChoice(e.target.value);
+              setRoles({});
+              setLater(null);
+              setConfirmTransfer(false);
+            }}
           >
-            {matching.map((agent) => (
+            {continuing.map((agent) => (
               <option key={agent.agentId} value={agent.agentId}>
-                Reconnect {agent.name} (keeps its access)
+                Reconnect {agent.name}
               </option>
             ))}
             <option value="new">A new agent</option>
+            {others.map((agent) => (
+              <option key={agent.agentId} value={agent.agentId}>
+                Transfer {agent.name} to this app
+              </option>
+            ))}
           </select>
+        </label>
+      )}
+      {transferring && (
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={confirmTransfer}
+            onChange={(e) => setConfirmTransfer(e.target.checked)}
+          />
+          This app replaces {existing!.name}, which was connected from a
+          different app. It will get everything {existing!.name} can access.
         </label>
       )}
       {!existing && (
@@ -198,7 +261,7 @@ function ConsentForm({
               onChange={(e) =>
                 setRoles((current) => ({
                   ...current,
-                  [notebook.id]: e.target.value as "none" | "read" | "edit",
+                  [notebook.id]: e.target.value as Choice,
                 }))
               }
             >
@@ -212,12 +275,18 @@ function ConsentForm({
       <label className="checkbox-row">
         <input
           type="checkbox"
-          checked={later}
+          checked={shareLater}
           onChange={(e) => setLater(e.target.checked)}
         />
         Also share notebooks I create later
       </label>
-      {sharedCount === 0 && !later && (
+      {retained.length > 0 && (
+        <p className="muted">
+          {existing!.name} also keeps {retained.join(", ")}. Change these in
+          Settings → Connected agents.
+        </p>
+      )}
+      {sharedCount === 0 && !shareLater && retained.length === 0 && (
         <p className="muted">
           With no notebooks shared, the agent will not see any notes.
         </p>

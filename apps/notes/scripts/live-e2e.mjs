@@ -79,7 +79,7 @@ try {
   const contextA = await browser.newContext();
   const owner = await createAccount(contextA, "Ada");
   step("owner account created from a setup link and signed in");
-  const a = owner.page;
+  let a = owner.page;
   await expect(
     a.getByRole("button", { name: "Notes", exact: false }).first(),
   ).toBeVisible();
@@ -88,7 +88,7 @@ try {
     .getByRole("button", { name: "New note", exact: true })
     .first()
     .click();
-  const editorA = a.getByRole("textbox", { name: "Note content" });
+  let editorA = a.getByRole("textbox", { name: "Note content" });
   await expect(editorA).toHaveAttribute("contenteditable", "true", {
     timeout: 10_000,
   });
@@ -163,6 +163,36 @@ try {
   await expect(editorB).toContainText("Written offline", { timeout: 30_000 });
   step("offline typing was kept and delivered after reconnecting");
 
+  // Pending edits survive closing the page and are applied exactly once.
+  await expect(a.getByText("Saved", { exact: true })).toBeVisible({
+    timeout: 20_000,
+  });
+  await contextA.setOffline(true);
+  await typeAtEnd(a, editorA, "\nJournal line");
+  // The Convex client queues the push while offline, so the editor reports saving.
+  await expect(
+    a.getByText(/Offline — changes kept on this device|Saving…/),
+  ).toBeVisible({ timeout: 15_000 });
+  await a.waitForTimeout(800); // journal writes are batched for 200 ms
+  await a.close();
+  await contextA.setOffline(false);
+  a = await contextA.newPage();
+  await a.goto(noteUrl);
+  editorA = a.getByRole("textbox", { name: "Note content" });
+  await expect(editorA).toContainText("Journal line", { timeout: 15_000 });
+  await expect(a.getByText("Saved", { exact: true })).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(editorB).toContainText("Journal line", { timeout: 20_000 });
+  assert.equal(
+    (await editorB.innerText()).split("Journal line").length - 1,
+    1,
+    "pending edit applied exactly once",
+  );
+  step(
+    "pending offline edits survived closing the page and arrived exactly once",
+  );
+
   // Sharing: invite a collaborator to the default notebook.
   await a
     .getByRole("button", { name: "All notes", exact: true })
@@ -199,6 +229,38 @@ try {
     "Written offline",
   );
   step("invited collaborator sees the shared notebook's notes");
+
+  // Removing the collaborator closes their open note and removes the cached copy.
+  await a.getByLabel("Access for Bo").selectOption("remove");
+  await expect(
+    c.getByText("You no longer have access to that note."),
+  ).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(c.getByRole("button", { name: /Live note/ })).toHaveCount(0, {
+    timeout: 20_000,
+  });
+  const leftovers = await c.evaluate(async () => {
+    const open = indexedDB.open("palladian-notes-foundation");
+    const db = await new Promise((resolve, reject) => {
+      open.onsuccess = () => resolve(open.result);
+      open.onerror = () => reject(open.error);
+    });
+    const read = (table) =>
+      new Promise((resolve) => {
+        const request = db.transaction(table).objectStore(table).getAll();
+        request.onsuccess = () =>
+          resolve(request.result.map((row) => row.text ?? row.title));
+      });
+    return { bodies: await read("bodies"), summaries: await read("summaries") };
+  });
+  assert.ok(
+    ![...leftovers.bodies, ...leftovers.summaries].some((value) =>
+      String(value).includes("Live note"),
+    ),
+    "revoked note left no cached copy",
+  );
+  step("removing the collaborator closed the note and cleared its cached copy");
 
   console.log("All live checks passed.");
 } finally {

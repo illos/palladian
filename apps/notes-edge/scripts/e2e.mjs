@@ -215,8 +215,10 @@ async function connectAgent(
     clientName: info.clientName,
     redirectHost: info.redirectHost,
     agentName: "E2E Agent",
-    ...(agentId ? { agentId } : {}),
+    // A different app reusing an agent must be an explicit transfer.
+    ...(agentId ? { agentId, transfer: true } : {}),
     notebooks: [{ notebookId, role: "edit" }],
+    autoShareRole: null,
   });
   log(
     agentId
