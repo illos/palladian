@@ -6,6 +6,7 @@ export function settleDrafts(
   store: NotesStore,
   session: SessionController,
   accountId: string,
+  flush?: () => Promise<boolean>,
 ): Promise<boolean> {
   if (session.getSnapshot().accountId !== accountId)
     return Promise.resolve(false);
@@ -45,9 +46,25 @@ export function settleDrafts(
       dialog.append(element);
       return element;
     };
-    button("Wait for save", () => {
-      status.textContent =
-        "Server saving is not connected in this foundation. Stay signed in to keep your drafts, or export a copy.";
+    const wait = button("Wait for save", () => {
+      if (!flush) {
+        status.textContent =
+          "Your drafts cannot reach the server right now. Stay signed in to keep your drafts, or export a copy.";
+        return;
+      }
+      wait.disabled = true;
+      status.textContent = "Saving your drafts to the server…";
+      void flush()
+        .then((saved) => {
+          if (!current() || finished) return;
+          if (saved) finish(true);
+          else
+            status.textContent =
+              "Some drafts have not reached the server yet. Stay signed in to keep your drafts, or export a copy.";
+        })
+        .finally(() => {
+          wait.disabled = false;
+        });
     });
     const exportButton = button("Export drafts", () => {
       exportButton.disabled = true;

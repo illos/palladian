@@ -141,14 +141,17 @@ export class NoteChannel implements EditorBinding {
     if (!tr.docChanged || tr.getMeta("rebased") !== undefined) return;
     this.view = view;
     this.scheduleJournal();
-    this.trySend();
+    if (!this.created) this.start();
+    else this.trySend();
     this.report();
   }
 
   private start() {
     if (!this.view || !this.transport || this.closed || this.blocked) return;
     if (!this.created) {
-      void this.createRemote();
+      // An untouched new note is not created on the server.
+      if (this.view && sendableSteps(this.view.state)) void this.createRemote();
+      else this.report();
       return;
     }
     this.subscribe();
@@ -348,7 +351,8 @@ export class NoteChannel implements EditorBinding {
     const doc = view.state.doc;
     const text = doc.textBetween(0, doc.content.size, "\n");
     try {
-      if (sendable || !this.created) {
+      if (!sendable && !this.created) return;
+      if (sendable) {
         const draft: Draft = {
           accountId,
           id: this.noteId,
@@ -409,6 +413,10 @@ export class NoteChannel implements EditorBinding {
         kind: "offline",
         pending: pending || !this.created,
       });
+      return;
+    }
+    if (!this.created && !pending) {
+      this.options.onStatus({ kind: "saved" });
       return;
     }
     if (!this.created || !this.caughtUp) {

@@ -77,7 +77,20 @@ const session = new SessionController({
     const accountId = session.getSnapshot().accountId;
     if (!accountId || !(await store.hasDrafts(accountId))) return true;
     const { settleDrafts } = await import("./logout");
-    return settleDrafts(store, session, accountId);
+    const live = liveBox.get();
+    const flush =
+      live && live.getState().ready
+        ? async () => {
+            const deadline = Date.now() + 20_000;
+            while (Date.now() < deadline) {
+              await live.syncDrafts();
+              if (!(await store.hasDrafts(accountId))) return true;
+              await new Promise((resolve) => setTimeout(resolve, 500));
+            }
+            return false;
+          }
+        : undefined;
+    return settleDrafts(store, session, accountId, flush);
   },
 });
 store.subscribe((event) => {

@@ -3,6 +3,7 @@ import { api } from "@palladian/notes-backend/api";
 import { ConvexReactClient } from "convex/react";
 import { ConvexError } from "convex/values";
 import type { FunctionReference, FunctionReturnType } from "convex/server";
+import type { Id } from "@palladian/notes-backend/dataModel";
 import type { RemoteSummary, NotesStore } from "./cache";
 import { TransportError, type NoteTransport, type StepBatch } from "./channel";
 import type { SessionController } from "./session";
@@ -246,10 +247,10 @@ export class LiveController {
         this.feeds.delete(id);
       }
     for (const id of ids)
-      if (!this.feeds.has(id)) void this.follow_feed(accountId, id);
+      if (!this.feeds.has(id)) void this.followFeed(accountId, id);
   }
 
-  private async follow_feed(accountId: string, notebookId: string) {
+  private async followFeed(accountId: string, notebookId: string) {
     const key = "notebook:" + notebookId;
     const after = await this.store.cursor(accountId, key);
     if (
@@ -261,7 +262,7 @@ export class LiveController {
     let handled = false;
     const stop = this.watch(
       api.library.changes,
-      { notebookId: notebookId as never, after },
+      { notebookId: notebookId as Id<"notebooks">, after },
       (page) => {
         if (handled || !page.access || this.state.accountId !== accountId)
           return;
@@ -284,7 +285,7 @@ export class LiveController {
             return;
           }
           if (this.feeds.get(notebookId) === stop)
-            void this.follow_feed(accountId, notebookId);
+            void this.followFeed(accountId, notebookId);
         })();
       },
     );
@@ -327,7 +328,7 @@ export class LiveController {
       const noteId = this.fetchQueue.shift()!;
       this.fetching++;
       void this.client
-        .query(api.notes.content, { noteId: noteId as never })
+        .query(api.notes.content, { noteId: noteId as Id<"notes"> })
         .then(async (content) => {
           if (!content || this.state.accountId !== accountId) return;
           if (
@@ -373,7 +374,7 @@ export class LiveController {
           clientKey: draft.id.slice(0, 64),
           doc: draft.document,
           ...(draft.notebookId
-            ? { notebookId: draft.notebookId as never }
+            ? { notebookId: draft.notebookId as Id<"notebooks"> }
             : {}),
           deviceTime: draft.updatedAt,
         });
@@ -422,7 +423,9 @@ export class LiveController {
         return await this.client.mutation(api.notes.create, {
           clientKey: args.clientKey.slice(0, 64),
           doc: args.doc,
-          ...(args.notebookId ? { notebookId: args.notebookId as never } : {}),
+          ...(args.notebookId
+            ? { notebookId: args.notebookId as Id<"notebooks"> }
+            : {}),
         });
       } catch (error) {
         throw transportError(error);
@@ -431,7 +434,7 @@ export class LiveController {
     push: async (args) => {
       try {
         return await this.client.mutation(api.notes.push, {
-          noteId: args.noteId as never,
+          noteId: args.noteId as Id<"notes">,
           revision: args.revision,
           steps: args.steps,
           clientId: args.clientId,
@@ -443,7 +446,7 @@ export class LiveController {
     subscribeSteps: (noteId, after, onBatch, onError) =>
       this.watch(
         api.notes.steps,
-        { noteId: noteId as never, after },
+        { noteId: noteId as Id<"notes">, after },
         (batch) => onBatch(batch as StepBatch),
         (error) => onError(transportError(error)),
       ),
@@ -455,13 +458,15 @@ export class LiveController {
   ) {
     return this.watch(
       api.notes.content,
-      { noteId: noteId as never },
+      { noteId: noteId as Id<"notes"> },
       onContent,
     );
   }
 
   async fetchContent(noteId: string) {
-    return this.client.query(api.notes.content, { noteId: noteId as never });
+    return this.client.query(api.notes.content, {
+      noteId: noteId as Id<"notes">,
+    });
   }
 
   async search(query: string): Promise<SearchHit[]> {
@@ -473,7 +478,7 @@ export class LiveController {
       await this.client.mutation(
         trashed ? api.notes.trash : api.notes.restore,
         {
-          noteId: noteId as never,
+          noteId: noteId as Id<"notes">,
         },
       );
     } catch (error) {
