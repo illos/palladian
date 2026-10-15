@@ -66,9 +66,10 @@ const session = new SessionController({
     activated = null;
     await store.clearAccount(accountId);
   },
-  async retireAccount(accountId) {
-    activated = null;
-    await store.retireAccount(accountId);
+  async settleAccount(accountId) {
+    if (!(await store.hasDrafts(accountId))) return true;
+    const { settleDrafts } = await import("./logout");
+    return settleDrafts(store, session, accountId, undefined, "switch");
   },
   async onAccountReady(accountId, isCurrent) {
     if (activated === accountId) return;
@@ -99,9 +100,9 @@ const session = new SessionController({
 });
 store.subscribe((event) => {
   if (!event.invalidated || !event.accountId) return;
-  // A retirement keeps the account's work; only a clear signs it out here.
-  if (event.retired) session.adoptRetirement(event.accountId);
-  else session.adoptInvalidation(event.accountId);
+  // The cache blocked this account; signing in again must activate it anew.
+  if (activated === event.accountId) activated = null;
+  session.adoptInvalidation(event.accountId);
 });
 window.addEventListener("storage", (event) => {
   if (event.key !== "palladian.notes.account-hint.v1") return;

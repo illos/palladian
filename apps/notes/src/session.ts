@@ -22,23 +22,21 @@ export interface AccountHintStore {
     accountId: string | null;
     signedOut: boolean;
     pendingCleanup?: string | null;
-    pendingRetire?: string | null;
   };
   remember(accountId: string): void;
   signedOut(accountId?: string): void;
   hideForCleanup(accountId: string): void;
-  /** Hide an account another sign-in replaced, until it is retired. */
-  hideForRetire(accountId: string): void;
 }
 export interface SessionOptions {
   service: SessionService;
   hints: AccountHintStore;
   clearAccount(accountId: string): Promise<void>;
   /**
-   * Another account signed in: hide this one without deleting its unsaved
-   * work, which a different identity gives no authority to erase.
+   * Another account signed in. Settle this account's unsaved work as at
+   * sign-out (saved, exported or explicitly discarded) before it is cleared.
+   * Resolves false to keep the account instead.
    */
-  retireAccount(accountId: string): Promise<void>;
+  settleAccount(accountId: string): Promise<boolean>;
   prepareLogout?: () => Promise<boolean>;
   onAccountReady?: (
     accountId: string,
@@ -67,7 +65,6 @@ export class SessionController {
   private failures = 0;
   private logoutPending = false;
   private pendingCleanup: string | null = null;
-  private pendingRetire: string | null = null;
 
   constructor(options: SessionOptions) {
     this.options = options;
@@ -78,7 +75,6 @@ export class SessionController {
       hint = { accountId: null, signedOut: false };
     }
     this.pendingCleanup = hint.pendingCleanup ?? null;
-    this.pendingRetire = hint.pendingRetire ?? null;
     this.snapshot = {
       status: hint.signedOut ? "signed-out" : "connecting",
       accountId: hint.signedOut ? null : hint.accountId,
@@ -116,23 +112,6 @@ export class SessionController {
     this.fence();
     this.pendingCleanup = accountId;
     this.update({ accountId: null, status: "signed-out", error: null });
-  }
-  /**
-   * Another tab replaced this account with a different sign-in. Follow it: the
-   * next check retires this account, keeping its unsaved work, unless it is the
-   * account that comes back.
-   */
-  adoptRetirement(accountId: string): void {
-    if (this.snapshot.accountId !== accountId) return;
-    this.fence();
-    this.pendingRetire = accountId;
-    try {
-      this.options.hints.hideForRetire(accountId);
-    } catch {
-      /* the identity is hidden in memory regardless */
-    }
-    this.update({ accountId: null, status: "connecting", error: null });
-    this.check();
   }
   /** Explicit retry also serves successful sign-in; passive startup honors logout. */
   retry(options: { afterSignIn?: boolean } = {}): void {
@@ -249,28 +228,34 @@ export class SessionController {
         }
         this.failures = 0;
         const previous = this.snapshot.accountId;
-        if (previous && previous !== result.accountId)
-          this.pendingRetire = previous;
-        // An account that signs back in before its retirement keeps its data.
-        if (this.pendingRetire === result.accountId) this.pendingRetire = null;
-        if (this.pendingCleanup || this.pendingRetire) {
+        if (previous && previous !== result.accountId) {
+          const generation = this.snapshot.generation;
+          let settled = false;
+          try {
+            settled = await this.options.settleAccount(previous);
+          } catch {
+            settled = false;
+          }
+          if (!this.running || this.snapshot.generation !== generation) return;
+          if (!settled) {
+            // The account and its work stay; switching waits for another sign-in.
+            this.update({
+              status: "expired",
+              error:
+                "Another account is signed in on this device. Keep this account's drafts, then sign in again to switch.",
+            });
+            return;
+          }
+          this.pendingCleanup = previous;
+        }
+        if (this.pendingCleanup) {
           const cleanup = this.pendingCleanup;
-          const retire = this.pendingRetire;
           this.fence();
           const generation = this.snapshot.generation;
           this.update({ accountId: null, status: "connecting" });
           try {
-            // A signed-out or revoked account is cleared. An account replaced
-            // by another sign-in is hidden, keeping its unsaved work for when
-            // it signs in again.
-            if (cleanup) {
-              this.options.hints.hideForCleanup(cleanup);
-              await this.options.clearAccount(cleanup);
-            }
-            if (retire && retire !== cleanup) {
-              this.options.hints.hideForRetire(retire);
-              await this.options.retireAccount(retire);
-            }
+            this.options.hints.hideForCleanup(cleanup);
+            await this.options.clearAccount(cleanup);
           } catch {
             if (this.snapshot.generation === generation)
               this.update({ error: "Account cleanup failed. Please retry." });
@@ -278,7 +263,6 @@ export class SessionController {
           }
           if (!this.running || this.snapshot.generation !== generation) return;
           this.pendingCleanup = null;
-          this.pendingRetire = null;
         }
         const generation = this.snapshot.generation;
         try {
@@ -396,10 +380,6 @@ export function browserAccountHints(
           typeof record.pendingCleanup === "string"
             ? record.pendingCleanup
             : null,
-        pendingRetire:
-          typeof record.pendingRetire === "string"
-            ? record.pendingRetire
-            : null,
       };
     },
     remember(accountId) {
@@ -422,16 +402,6 @@ export function browserAccountHints(
           accountId: null,
           signedOut: false,
           pendingCleanup: accountId,
-        }),
-      );
-    },
-    hideForRetire(accountId) {
-      storage.setItem(
-        key,
-        JSON.stringify({
-          accountId: null,
-          signedOut: false,
-          pendingRetire: accountId,
         }),
       );
     },

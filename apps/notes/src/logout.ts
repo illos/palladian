@@ -7,7 +7,10 @@ export function settleDrafts(
   session: SessionController,
   accountId: string,
   flush?: () => Promise<boolean>,
+  purpose: "sign-out" | "switch" = "sign-out",
 ): Promise<boolean> {
+  const leaving = purpose === "switch" ? "switching accounts" : "signing out";
+  const leave = purpose === "switch" ? "switch accounts" : "sign out";
   if (session.getSnapshot().accountId !== accountId)
     return Promise.resolve(false);
   return new Promise((resolve) => {
@@ -19,7 +22,10 @@ export function settleDrafts(
     const status = document.createElement("p");
     status.setAttribute("role", "status");
     status.textContent =
-      "These drafts have not reached the server. Choose how to keep them before signing out.";
+      (purpose === "switch"
+        ? "Another account signed in on this device. "
+        : "") +
+      `These drafts have not reached the server. Choose how to keep them before ${leaving}.`;
     // Work held while the server confirms access is kept but not exportable.
     // Holds can begin or end while the dialog is open, so this stays current.
     const held = document.createElement("p");
@@ -27,8 +33,8 @@ export function settleDrafts(
     dialog.append(heading, status, held);
     const describeHeld = (count: number) =>
       count === 1
-        ? "One draft is waiting for the server to confirm your access to its note. It cannot be exported until then, and signing out discards it."
-        : `${count} drafts are waiting for the server to confirm your access to their notes. They cannot be exported until then, and signing out discards them.`;
+        ? `One draft is waiting for the server to confirm your access to its note. It cannot be exported until then, and ${leaving} discards it.`
+        : `${count} drafts are waiting for the server to confirm your access to their notes. They cannot be exported until then, and ${leaving} discards them.`;
     const refreshHeld = () =>
       void store
         .unsavedWork(accountId)
@@ -118,19 +124,18 @@ export function settleDrafts(
           link.href = download;
           link.download = "palladian-unsaved-drafts.json";
           link.click();
-          status.textContent =
-            "Confirm that you saved the recovery file before signing out. A cancelled download does not keep your drafts.";
+          status.textContent = `Confirm that you saved the recovery file before ${leaving}. A cancelled download does not keep your drafts.`;
           confirmExport.hidden = false;
         })
         .catch(() => {
           status.textContent =
-            "Export failed. Your drafts remain here. Try again or cancel sign-out.";
+            "Export failed. Your drafts remain here. Try again or cancel.";
         })
         .finally(() => {
           exportButton.disabled = false;
         });
     });
-    const confirmExport = button("Export saved — sign out", () => {
+    const confirmExport = button(`Export saved — ${leave}`, () => {
       confirmExport.disabled = true;
       // The export must still cover all kept work, read at one point: nothing
       // newer, nothing held.
@@ -139,24 +144,23 @@ export function settleDrafts(
         .then((work) => {
           if (!current() || finished) return;
           if (work.held) {
-            status.textContent = `${describeHeld(work.held)} Cancel to keep it, or discard drafts to sign out.`;
+            status.textContent = `${describeHeld(work.held)} Cancel to keep it, or discard drafts to ${leave}.`;
             confirmExport.hidden = true;
           } else if (fingerprint(work.drafts) !== exported) {
-            status.textContent =
-              "Your drafts changed after the export. Export again before signing out.";
+            status.textContent = `Your drafts changed after the export. Export again before ${leaving}.`;
             confirmExport.hidden = true;
           } else finish(true);
         })
         .catch(() => {
           status.textContent =
-            "Your drafts could not be checked. Try again or cancel sign-out.";
+            "Your drafts could not be checked. Try again or cancel.";
         })
         .finally(() => {
           confirmExport.disabled = false;
         });
     });
     confirmExport.hidden = true;
-    button("Discard drafts and sign out", () => {
+    button(`Discard drafts and ${leave}`, () => {
       if (current()) finish(true);
     });
     button("Cancel", () => finish(false));

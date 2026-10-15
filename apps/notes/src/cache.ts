@@ -71,8 +71,6 @@ export interface CacheFence {
 interface CacheEvent {
   accountId?: string;
   invalidated?: boolean;
-  /** With `invalidated`: another account signed in; this one's work is kept. */
-  retired?: boolean;
   /** Notes this account lost access to; their content and pending work are gone. */
   revokedNotes?: string[];
   /** Notes hidden while the server confirms access; their pending work is kept. */
@@ -84,8 +82,7 @@ class NotesDatabase extends Dexie {
   bodies!: Table<NoteBody, [string, string]>;
   drafts!: Table<Draft, [string, string]>;
   accounts!: Table<
-    // `retired`: hidden because another account signed in; its work is kept.
-    { accountId: string; epoch: number; blocked: boolean; retired?: boolean },
+    { accountId: string; epoch: number; blocked: boolean },
     string
   >;
   privacy!: Table<{ key: string; epoch: number }, string>;
@@ -134,6 +131,19 @@ class NotesDatabase extends Dexie {
   }
 }
 
+/** Unsaved snapshots by note key; `version` changes with every change. */
+class SnapshotMap extends Map<string, Draft> {
+  version = 0;
+  override set(key: string, value: Draft) {
+    this.version++;
+    return super.set(key, value);
+  }
+  override delete(key: string) {
+    this.version++;
+    return super.delete(key);
+  }
+}
+
 /** Display cache and recovery journal only; neither is server authority. */
 export class NotesStore {
   private readonly db: NotesDatabase;
@@ -143,13 +153,8 @@ export class NotesStore {
   private readonly listeners = new Set<(event: CacheEvent) => void>();
   private readonly channel: BroadcastChannel | null;
   private readonly draftQueues = new Map<string, Promise<void>>();
-  private readonly recoveryDrafts = new Map<string, Draft>();
+  private readonly recoveryDrafts = new SnapshotMap();
   private readonly recoveryFences = new Map<string, Promise<CacheFence>>();
-  /**
-   * Unsaved snapshots of retired accounts, by account. They stay until saved
-   * durably or the account is cleared, and return when it signs in again.
-   */
-  private readonly retiredSnapshots = new Map<string, Draft[]>();
   constructor(name = "palladian-notes-foundation") {
     this.db = new NotesDatabase(name);
     this.channel =
@@ -194,16 +199,11 @@ export class NotesStore {
           typeof value.accountId === "string"
         ) {
           const accountId = value.accountId;
-          const retired = "retired" in value && value.retired === true;
-          // A replaced account keeps its unsaved work; this tab saves its share.
-          if (retired) this.retireSnapshots(accountId);
-          else this.retiredSnapshots.delete(accountId);
           this.activationEpoch++;
           this.blocked.add(accountId);
           this.forgetRecovery(accountId);
           this.epochs.set(accountId, this.epoch(accountId) + 1);
-          this.notify({ accountId, invalidated: true, retired });
-          if (retired) void this.saveRetired(accountId);
+          this.notify({ accountId, invalidated: true });
         }
       };
   }
@@ -550,7 +550,6 @@ export class NotesStore {
     this.activationEpoch++;
     this.blocked.add(accountId);
     this.forgetRecovery(accountId);
-    this.retiredSnapshots.delete(accountId);
     this.epochs.set(accountId, this.epoch(accountId) + 1);
     this.notify({ accountId, invalidated: true });
     this.channel?.postMessage({ accountId });
@@ -613,6 +612,18 @@ export class NotesStore {
    * yet to confirm, is never exportable.
    */
   async settlement(
+    accountId: string,
+  ): Promise<{ drafts: Draft[]; total: number; held: number }> {
+    // Unsaved snapshots live outside the database transaction, so a read that
+    // overlapped a change to them is repeated rather than trusted.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const version = this.recoveryDrafts.version;
+      const result = await this.readSettlement(accountId);
+      if (this.recoveryDrafts.version === version) return result;
+    }
+    throw new Error("Unsaved work kept changing; try again.");
+  }
+  private async readSettlement(
     accountId: string,
   ): Promise<{ drafts: Draft[]; total: number; held: number }> {
     const epoch = this.epoch(accountId);
@@ -738,186 +749,6 @@ export class NotesStore {
     const privacy = await this.db.privacy.get("activation");
     return { epoch: privacy?.epoch ?? 0, localEpoch };
   }
-  /**
-   * Another account signed in on this device. Hide this account and drop its
-   * cached server content, but keep its unsaved work, isolated under it, for
-   * when it signs in again: a different identity gives no authority to erase
-   * it. Fences stay. Unsaved in-memory snapshots, in this tab and others, are
-   * kept until saved durably, which is tried once the cache that may have
-   * crowded them out is gone, and again when the account signs in.
-   */
-  async retireAccount(accountId: string): Promise<void> {
-    this.retireSnapshots(accountId);
-    this.activationEpoch++;
-    this.blocked.add(accountId);
-    this.epochs.set(accountId, this.epoch(accountId) + 1);
-    this.notify({ accountId, invalidated: true, retired: true });
-    const kept = new Set(
-      (this.retiredSnapshots.get(accountId) ?? []).map((draft) => draft.id),
-    );
-    await this.db.transaction(
-      "rw",
-      [
-        this.db.summaries,
-        this.db.bodies,
-        this.db.drafts,
-        this.db.accounts,
-        this.db.privacy,
-        this.db.notebooks,
-        this.db.cursors,
-      ],
-      async () => {
-        const privacy = await this.db.privacy.get("activation");
-        await this.db.privacy.put({
-          key: "activation",
-          epoch: (privacy?.epoch ?? 0) + 1,
-        });
-        await this.db.notebooks.where("accountId").equals(accountId).delete();
-        await this.db.cursors.where("accountId").equals(accountId).delete();
-        const account = await this.db.accounts.get(accountId);
-        await this.db.accounts.put({
-          accountId,
-          epoch: (account?.epoch ?? 0) + 1,
-          blocked: true,
-          retired: true,
-        });
-        for (const draft of await this.db.drafts
-          .where("accountId")
-          .equals(accountId)
-          .toArray())
-          kept.add(draft.id);
-        await this.db.summaries
-          .where("accountId")
-          .equals(accountId)
-          .filter((row) => !kept.has(row.id))
-          .delete();
-        await this.db.bodies.where("accountId").equals(accountId).delete();
-      },
-    );
-    // Other tabs learn only once the retirement is recorded, so their saves see it.
-    this.channel?.postMessage({ accountId, retired: true });
-    await this.saveRetired(accountId);
-    this.notify();
-  }
-  /** Move this tab's unsaved snapshots of an account to the retired store. */
-  private retireSnapshots(accountId: string) {
-    const kept = new Map(
-      (this.retiredSnapshots.get(accountId) ?? []).map((draft) => [
-        draft.id,
-        draft,
-      ]),
-    );
-    for (const draft of [...this.recoveryDrafts.values()])
-      if (draft.accountId === accountId) {
-        const previous = kept.get(draft.id);
-        if (!previous || draft.updatedAt >= previous.updatedAt)
-          kept.set(draft.id, draft);
-      }
-    this.forgetRecovery(accountId);
-    if (kept.size) this.retiredSnapshots.set(accountId, [...kept.values()]);
-  }
-  /**
-   * Save a retired account's unsaved snapshots, only while it is still retired
-   * (never after it was cleared). A snapshot of a denied note is dropped; a
-   * stored draft that is newer wins; a different stored draft of the same time
-   * is kept, and the snapshot saved beside it as a separate local note. Kept in
-   * memory if storage is still full.
-   */
-  private async saveRetired(accountId: string) {
-    const snapshots = this.retiredSnapshots.get(accountId);
-    if (!snapshots?.length) return;
-    try {
-      const done = await this.db.transaction(
-        "rw",
-        [this.db.drafts, this.db.summaries, this.db.revoked, this.db.accounts],
-        async () => {
-          const account = await this.db.accounts.get(accountId);
-          if (!account?.blocked || !account.retired) return false;
-          await this.saveSnapshots(snapshots);
-          return true;
-        },
-      );
-      if (done && this.retiredSnapshots.get(accountId) === snapshots)
-        this.retiredSnapshots.delete(accountId);
-    } catch {
-      /* storage still full: kept for the next attempt */
-    }
-  }
-  /**
-   * The account signed in again: save its retired snapshots, or if storage is
-   * still full, keep them as this tab's unsaved snapshots, as visible and
-   * exportable as any other.
-   */
-  private async restoreRetired(accountId: string) {
-    const snapshots = this.retiredSnapshots.get(accountId);
-    if (!snapshots?.length) return;
-    this.retiredSnapshots.delete(accountId);
-    try {
-      await this.db.transaction(
-        "rw",
-        [this.db.drafts, this.db.summaries, this.db.revoked, this.db.accounts],
-        async () => {
-          const account = await this.db.accounts.get(accountId);
-          if (account?.blocked) throw new Error("Account access changed.");
-          await this.saveSnapshots(snapshots);
-        },
-      );
-    } catch {
-      const fence = this.captureFence(accountId);
-      void fence.catch(() => undefined);
-      for (const draft of snapshots) {
-        const key = JSON.stringify([accountId, draft.id]);
-        if (!this.recoveryDrafts.has(key)) {
-          this.recoveryDrafts.set(key, draft);
-          this.recoveryFences.set(key, fence);
-        }
-      }
-    }
-  }
-  /** Write snapshots durably as described for `saveRetired`. Inside a transaction. */
-  private async saveSnapshots(snapshots: Draft[]) {
-    for (const snapshot of snapshots) {
-      const { accountId } = snapshot;
-      const denied = async (id: string | undefined) => {
-        if (id === undefined) return false;
-        const marker = await this.db.revoked.get([accountId, id]);
-        return marker !== undefined && !marker.held;
-      };
-      if ((await denied(snapshot.id)) || (await denied(snapshot.source)))
-        continue;
-      const stored = await this.db.drafts.get([accountId, snapshot.id]);
-      if (stored && stored.updatedAt > snapshot.updatedAt) continue;
-      if (stored && sameSnapshot(stored, snapshot)) continue;
-      const draft: Draft =
-        stored && stored.updatedAt === snapshot.updatedAt
-          ? {
-              accountId,
-              id: "local-" + crypto.randomUUID().replace(/-/g, ""),
-              document: snapshot.document,
-              text: snapshot.text,
-              updatedAt: snapshot.updatedAt,
-              ...(snapshot.notebookId
-                ? { notebookId: snapshot.notebookId }
-                : {}),
-              // A copy of a server note is authorized as that note.
-              ...(isLocalId(snapshot.id)
-                ? snapshot.source
-                  ? { source: snapshot.source }
-                  : {}
-                : { source: snapshot.id }),
-            }
-          : snapshot;
-      await this.db.drafts.put(draft);
-      const previous = await this.db.summaries.get([accountId, draft.id]);
-      await this.db.summaries.put({
-        ...previous,
-        ...(draft.notebookId ? { notebookId: draft.notebookId } : {}),
-        ...(draft.source ? { source: draft.source } : {}),
-        ...summary(draft),
-        kind: "draft",
-      });
-    }
-  }
   async allowAccount(
     accountId: string,
     fence: ActivationFence,
@@ -947,7 +778,7 @@ export class NotesStore {
     );
     assertCurrent();
     this.blocked.delete(accountId);
-    await this.restoreRetired(accountId);
+    this.notify();
   }
   private async assertPersistent(accountId: string, epoch: number) {
     const account = await this.db.accounts.get(accountId);

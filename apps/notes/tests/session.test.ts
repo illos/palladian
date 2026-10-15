@@ -27,15 +27,12 @@ function setup(service: SessionService, accountId: string | null = "owner") {
   if (accountId) hints.remember(accountId);
   const jobs: { fn: () => void; delay: number; cancelled: boolean }[] = [];
   const cleared: string[] = [];
-  const retired: string[] = [];
   const session = new SessionController({
     service,
     hints,
+    settleAccount: async () => true,
     clearAccount: async (account) => {
       cleared.push(account);
-    },
-    retireAccount: async (account) => {
-      retired.push(account);
     },
     schedule: (fn, delay) => {
       const job = { fn, delay, cancelled: false };
@@ -45,7 +42,7 @@ function setup(service: SessionService, accountId: string | null = "owner") {
       };
     },
   });
-  return { session, hints, cleared, retired, jobs, memory };
+  return { session, hints, cleared, jobs, memory };
 }
 test("cached account is immediately readable before a stalled token request", async () => {
   const pending = deferred<SessionCheck>();
@@ -159,6 +156,7 @@ test("explicit logout intent survives a failed remote sign-out and passive reloa
         memory.set(key, value);
       },
     }),
+    settleAccount: async () => true,
     clearAccount: async () => {},
   });
   again.start();
@@ -168,37 +166,31 @@ test("explicit logout intent survives a failed remote sign-out and passive reloa
   again.stop();
   session.stop();
 });
-test("an account replaced by another sign-in is hidden before readiness, keeping its work", async () => {
-  const retirement = deferred<void>();
-  const retired: string[] = [];
-  const cleared: string[] = [];
+test("an account switch with nothing to settle clears previous data before readiness", async () => {
+  const cleanup = deferred<void>();
+  let cleaned = false;
   const hints = {
     read: () => ({ accountId: "a", signedOut: false }),
     remember: () => {},
     signedOut: () => {},
     hideForCleanup: () => {},
-    hideForRetire: () => {},
   };
   const session = new SessionController({
     service: { check: async () => ({ kind: "ready", accountId: "b" }) },
     hints,
-    clearAccount: async (account) => {
-      cleared.push(account);
-    },
-    retireAccount: async (account) => {
-      await retirement.promise;
-      retired.push(account);
+    settleAccount: async () => true,
+    clearAccount: async () => {
+      await cleanup.promise;
+      cleaned = true;
     },
   });
   session.start();
   await flush();
   assert.equal(session.getSnapshot().accountId, null);
   assert.equal(session.getSnapshot().status, "connecting");
-  retirement.resolve();
+  cleanup.resolve();
   await flush();
-  assert.deepEqual(retired, ["a"]);
-  // A different identity is no authority to erase the replaced account's work.
-  assert.deepEqual(cleared, []);
+  assert.equal(cleaned, true);
   assert.equal(session.getSnapshot().accountId, "b");
   session.stop();
 });
@@ -214,6 +206,7 @@ test("logout fences inflight account changes before preparing unsaved work", asy
       signedOut: () => {},
       hideForCleanup: () => {},
     },
+    settleAccount: async () => true,
     clearAccount: async (a) => {
       cleared.push(a);
     },
@@ -230,7 +223,7 @@ test("logout fences inflight account changes before preparing unsaved work", asy
   assert.deepEqual(cleared, ["a"]);
   session.stop();
 });
-test("failed retirement of a replaced account cannot be bypassed by retry", async () => {
+test("failed old-account cleanup cannot be bypassed by retry", async () => {
   let fail = true;
   let calls = 0;
   const session = new SessionController({
@@ -240,12 +233,9 @@ test("failed retirement of a replaced account cannot be bypassed by retry", asyn
       remember: () => {},
       signedOut: () => {},
       hideForCleanup: () => {},
-      hideForRetire: () => {},
     },
+    settleAccount: async () => true,
     clearAccount: async () => {
-      throw new Error("a replaced account is not cleared");
-    },
-    retireAccount: async () => {
       calls++;
       if (fail) throw new Error("quota");
     },
@@ -275,6 +265,7 @@ test("async account cache activation cannot publish readiness after stop", async
       signedOut: () => {},
       hideForCleanup: () => {},
     },
+    settleAccount: async () => true,
     clearAccount: async () => {},
     onAccountReady: async () => activate.promise,
   });
@@ -319,7 +310,7 @@ test("cross-tab invalidation fences late ready and passive retry", async () => {
   assert.equal(hints.read().signedOut, true);
   session.stop();
 });
-test("failed retirement survives reload without exposing prior account hint", async () => {
+test("failed cleanup survives reload without exposing prior account hint", async () => {
   const { session: unused, hints } = setup(
     { check: async () => ({ kind: "ready", accountId: "b" }) },
     "a",
@@ -328,74 +319,83 @@ test("failed retirement survives reload without exposing prior account hint", as
   const first = new SessionController({
     service: { check: async () => ({ kind: "ready", accountId: "b" }) },
     hints,
-    clearAccount: async () => {},
-    retireAccount: async () => {
+    settleAccount: async () => true,
+    clearAccount: async () => {
       throw new Error("storage");
     },
   });
   first.start();
   await flush();
   assert.equal(hints.read().accountId, null);
-  assert.equal(hints.read().pendingRetire, "a");
+  assert.equal(hints.read().pendingCleanup, "a");
   first.stop();
   const cleaned: string[] = [];
-  const retired: string[] = [];
   const second = new SessionController({
     service: { check: async () => ({ kind: "ready", accountId: "b" }) },
     hints,
+    settleAccount: async () => true,
     clearAccount: async (a) => {
       cleaned.push(a);
-    },
-    retireAccount: async (a) => {
-      retired.push(a);
     },
   });
   assert.equal(second.getSnapshot().accountId, null);
   second.start();
   await flush();
-  assert.deepEqual(retired, ["a"]);
-  assert.deepEqual(cleaned, []);
+  assert.deepEqual(cleaned, ["a"]);
   assert.equal(second.getSnapshot().accountId, "b");
   second.stop();
 });
 
-test("an account signing back in before its retirement keeps its data", async () => {
-  const { session: unused, hints } = setup(
-    { check: async () => ({ kind: "ready", accountId: "a" }) },
-    "a",
-  );
-  unused.stop();
-  hints.hideForRetire("a");
-  const touched: string[] = [];
+test("an account switch settles the previous account's unsaved work first", async () => {
+  const settlement = deferred<boolean>();
+  const order: string[] = [];
   const session = new SessionController({
-    service: { check: async () => ({ kind: "ready", accountId: "a" }) },
-    hints,
-    clearAccount: async (a) => {
-      touched.push("clear " + a);
+    service: { check: async () => ({ kind: "ready", accountId: "b" }) },
+    hints: {
+      read: () => ({ accountId: "a", signedOut: false }),
+      remember: () => {},
+      signedOut: () => {},
+      hideForCleanup: () => {},
     },
-    retireAccount: async (a) => {
-      touched.push("retire " + a);
+    settleAccount: async (account) => {
+      order.push("settle " + account);
+      return settlement.promise;
+    },
+    clearAccount: async (account) => {
+      order.push("clear " + account);
     },
   });
   session.start();
   await flush();
-  assert.deepEqual(touched, []);
+  // Nothing is cleared, and the account stays, until its work is settled.
+  assert.deepEqual(order, ["settle a"]);
   assert.equal(session.getSnapshot().accountId, "a");
+  settlement.resolve(true);
+  await flush();
+  assert.deepEqual(order, ["settle a", "clear a"]);
+  assert.equal(session.getSnapshot().accountId, "b");
   session.stop();
 });
 
-test("a retirement adopted from another tab retires, never clears", async () => {
-  const { session, hints, cleared, retired } = setup(
-    { check: async () => ({ kind: "ready", accountId: "b" }) },
-    "a",
-  );
-  session.adoptRetirement("a");
-  assert.equal(session.getSnapshot().accountId, null);
-  assert.equal(hints.read().pendingRetire, "a");
+test("declining to settle keeps the previous account and its work", async () => {
+  const cleared: string[] = [];
+  const session = new SessionController({
+    service: { check: async () => ({ kind: "ready", accountId: "b" }) },
+    hints: {
+      read: () => ({ accountId: "a", signedOut: false }),
+      remember: () => {},
+      signedOut: () => {},
+      hideForCleanup: () => {},
+    },
+    settleAccount: async () => false,
+    clearAccount: async (account) => {
+      cleared.push(account);
+    },
+  });
   session.start();
   await flush();
-  assert.deepEqual(retired, ["a"]);
   assert.deepEqual(cleared, []);
-  assert.equal(session.getSnapshot().accountId, "b");
+  assert.equal(session.getSnapshot().accountId, "a");
+  assert.equal(session.getSnapshot().status, "expired");
   session.stop();
 });
