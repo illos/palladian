@@ -30,7 +30,12 @@ export interface AccountHintStore {
 export interface SessionOptions {
   service: SessionService;
   hints: AccountHintStore;
-  clearAccount(accountId: string): Promise<void>;
+  /**
+   * Clear an account's local data. `operation` names one decision (a
+   * sign-out, revocation or switch); its retries pass the same name, so a
+   * finished clear is never restarted.
+   */
+  clearAccount(accountId: string, operation: string): Promise<void>;
   /**
    * Another account signed in. Settle this account's unsaved work as at
    * sign-out (saved, exported or explicitly discarded) before it is cleared.
@@ -76,6 +81,8 @@ export class SessionController {
    * a reload or another tab can only finish a clear already recorded.
    */
   private cleanupOwned = false;
+  /** Names this page's pending cleanup decision across its retries. */
+  private cleanupOperation = "";
 
   constructor(options: SessionOptions) {
     this.options = options;
@@ -214,8 +221,12 @@ export class SessionController {
           this.update({ status: "revoked", accountId: null, error: null });
           this.pendingCleanup = result.accountId;
           this.cleanupOwned = true;
+          this.cleanupOperation = crypto.randomUUID();
           try {
-            await this.options.clearAccount(result.accountId);
+            await this.options.clearAccount(
+              result.accountId,
+              this.cleanupOperation,
+            );
             if (
               this.snapshot.generation === revocationGeneration &&
               this.snapshot.status === "revoked"
@@ -261,6 +272,7 @@ export class SessionController {
           }
           this.pendingCleanup = previous;
           this.cleanupOwned = true;
+          this.cleanupOperation = crypto.randomUUID();
         }
         if (this.pendingCleanup) {
           const cleanup = this.pendingCleanup;
@@ -272,7 +284,7 @@ export class SessionController {
             // carried-over one may be obsolete and must not sign them out.
             if (this.cleanupOwned) {
               this.options.hints.hideForCleanup(cleanup);
-              await this.options.clearAccount(cleanup);
+              await this.options.clearAccount(cleanup, this.cleanupOperation);
             } else await this.options.finishCleanup(cleanup);
           } catch {
             if (this.snapshot.generation === generation)
@@ -342,8 +354,10 @@ export class SessionController {
       this.update({ status: "signed-out", accountId: null, error: null });
       this.pendingCleanup = accountId;
       this.cleanupOwned = true;
+      this.cleanupOperation = crypto.randomUUID();
       try {
-        if (accountId) await this.options.clearAccount(accountId);
+        if (accountId)
+          await this.options.clearAccount(accountId, this.cleanupOperation);
         this.pendingCleanup = null;
         this.options.hints.signedOut();
       } catch {

@@ -135,6 +135,16 @@ class NotesDatabase extends Dexie {
 
 /** A clear retried after the account was signed in again. */
 class SupersededClear extends Error {}
+interface ClearOperation {
+  accountId: string;
+  /** The lifecycle this clear ends: known when decided, or first read. */
+  lifecycle: number | undefined;
+  /** Whether it cleared (false: superseded); null while unfinished. */
+  result: boolean | null;
+  attempts: number;
+  running?: Promise<boolean> | undefined;
+  retry?: ReturnType<typeof setTimeout>;
+}
 
 /** Unsaved snapshots by note key; `version` changes with every change. */
 class SnapshotMap extends Map<string, Draft> {
@@ -168,11 +178,14 @@ export class NotesStore {
   private readonly lifecyclesLoaded: Promise<void>;
   /** Account lifecycle locks this tab holds while its clears are unresolved. */
   private readonly accountHolds = new Map<string, () => void>();
-  private readonly clearRetries = new Map<
-    string,
-    ReturnType<typeof setTimeout>
-  >();
-  private readonly clearAttempts = new Map<string, number>();
+  /**
+   * Clear operations by id: one per decision (a sign-out, revocation or
+   * switch), reused by its retries, so a retry or a late attempt can never
+   * restart a finished clear or retarget a later lifecycle.
+   */
+  private readonly clearOps = new Map<string, ClearOperation>();
+  private closed = false;
+  private readonly lockRequests = new AbortController();
   constructor(name = "palladian-notes-foundation") {
     this.db = new NotesDatabase(name);
     this.lifecyclesLoaded = this.db.accounts
@@ -583,22 +596,45 @@ export class NotesStore {
    * tab has since replaced by signing in again does nothing. Resolves whether
    * the account was cleared.
    */
-  async clearAccount(accountId: string): Promise<boolean> {
-    await this.lifecyclesLoaded;
-    const meant = this.lifecycles.get(accountId);
-    this.hideAccount(accountId);
-    this.cancelClearRetry(accountId);
-    await this.holdAccount(accountId);
-    let ended: number | null;
+  async clearAccount(
+    accountId: string,
+    operation = "account:" + accountId,
+  ): Promise<boolean> {
+    if (!this.clearOps.has(operation)) {
+      await this.lifecyclesLoaded;
+      if (!this.clearOps.has(operation)) {
+        this.clearOps.set(operation, {
+          accountId,
+          lifecycle: this.lifecycles.get(accountId),
+          result: null,
+          attempts: 0,
+        });
+        this.hideAccount(accountId);
+      }
+    }
+    const op = this.clearOps.get(operation)!;
+    if (op.result !== null) return op.result;
+    // A retry while an attempt is running joins it rather than racing it.
+    op.running ??= this.attemptClear(op).finally(() => {
+      op.running = undefined;
+    });
+    return op.running;
+  }
+  private async attemptClear(op: ClearOperation): Promise<boolean> {
+    clearTimeout(op.retry);
+    const { accountId } = op;
     try {
-      ended = await this.db.transaction(
+      await this.holdAccount(accountId);
+      const ended = await this.db.transaction(
         "rw",
         [this.db.accounts, this.db.privacy],
         async () => {
           const account = await this.db.accounts.get(accountId);
           const lifecycle = account?.lifecycle ?? 0;
-          if (meant !== undefined && lifecycle !== meant)
-            throw new SupersededClear();
+          // Fixed at its first read under the lock: no tab can begin another
+          // lifecycle while this tab holds it.
+          op.lifecycle ??= lifecycle;
+          if (lifecycle !== op.lifecycle) throw new SupersededClear();
           if (account?.blocked) return null;
           const privacy = await this.db.privacy.get("activation");
           await this.db.privacy.put({
@@ -621,14 +657,46 @@ export class NotesStore {
       await this.deleteIfBlocked(accountId);
     } catch (error) {
       if (error instanceof SupersededClear) {
-        this.releaseAccount(accountId);
+        this.settleClear(op, false);
         return false;
       }
-      this.scheduleClearRetry(accountId);
+      if (!this.closed) {
+        const delay = Math.min(30_000, 1_000 * 2 ** Math.min(++op.attempts, 5));
+        op.retry = setTimeout(() => {
+          if (op.result === null && !op.running)
+            op.running = this.attemptClear(op)
+              .catch(() => false)
+              .finally(() => {
+                op.running = undefined;
+              });
+        }, delay);
+      }
       throw error;
     }
-    this.releaseAccount(accountId);
+    this.settleClear(op, true);
     return true;
+  }
+  /**
+   * Finish an operation, and every unfinished one in this tab for the same
+   * account and lifecycle, which had the same goal; then release the lock.
+   */
+  private settleClear(op: ClearOperation, result: boolean) {
+    for (const other of this.clearOps.values())
+      if (
+        other === op ||
+        (other.result === null &&
+          other.accountId === op.accountId &&
+          (other.lifecycle === undefined || other.lifecycle === op.lifecycle))
+      ) {
+        other.result = result;
+        clearTimeout(other.retry);
+      }
+    if (
+      ![...this.clearOps.values()].some(
+        (other) => other.accountId === op.accountId && other.result === null,
+      )
+    )
+      this.releaseAccount(op.accountId);
   }
   /**
    * Finish a clear recorded by an earlier page or another tab: delete the
@@ -675,23 +743,30 @@ export class NotesStore {
     ])
       await table.where("accountId").equals(accountId).delete();
   }
-  /** Stop showing or keeping this account's content in this tab. */
-  private hideAccount(accountId: string) {
+  /**
+   * Stop showing this account's content in this tab, and unless asked to keep
+   * them, forget its unsaved in-memory snapshots too.
+   */
+  private hideAccount(accountId: string, keepRecovery = false) {
     this.activationEpoch++;
     this.blocked.add(accountId);
-    this.forgetRecovery(accountId);
+    if (!keepRecovery) this.forgetRecovery(accountId);
     this.epochs.set(accountId, this.epoch(accountId) + 1);
     this.notify({ accountId, invalidated: true });
   }
   /**
    * Another tab ended one of this account's lifecycles. A message about a
    * lifecycle older than the one this tab signed in to is late and ignored;
-   * otherwise this tab stops showing the account at once.
+   * otherwise this tab stops showing the account at once. A message from an
+   * older version names no lifecycle and may be late: it hides the account but
+   * keeps this tab's unsaved snapshots, which stay unreadable unless this
+   * lifecycle is signed in to again.
    */
   private async receiveClear(accountId: string, lifecycle: number | null) {
     await this.lifecyclesLoaded;
     const mine = this.lifecycles.get(accountId);
-    if (lifecycle !== null && mine !== undefined && mine > lifecycle) return;
+    if (lifecycle === null) return this.hideAccount(accountId, true);
+    if (mine !== undefined && mine > lifecycle) return;
     this.hideAccount(accountId);
   }
   private accountLock(accountId: string) {
@@ -701,16 +776,24 @@ export class NotesStore {
   private async holdAccount(accountId: string) {
     const locks =
       typeof navigator === "undefined" ? undefined : navigator.locks;
+    if (this.closed) throw new Error("The notes store is closed.");
     if (!locks || this.accountHolds.has(accountId)) return;
     await new Promise<void>((acquired, failed) => {
       locks
         .request(
           this.accountLock(accountId),
-          () =>
-            new Promise<void>((release) => {
+          { signal: this.lockRequests.signal },
+          () => {
+            // Granted after close: give it straight back.
+            if (this.closed) {
+              failed(new Error("The notes store is closed."));
+              return;
+            }
+            return new Promise<void>((release) => {
               this.accountHolds.set(accountId, release);
               acquired();
-            }),
+            });
+          },
         )
         .catch(failed);
     });
@@ -737,23 +820,6 @@ export class NotesStore {
       async (lock): Promise<{ ran: true; value: T } | { ran: false }> =>
         lock ? { ran: true, value: await work() } : { ran: false },
     );
-  }
-  private scheduleClearRetry(accountId: string) {
-    this.cancelClearRetry(accountId);
-    const attempt = (this.clearAttempts.get(accountId) ?? 0) + 1;
-    this.clearAttempts.set(accountId, attempt);
-    const delay = Math.min(30_000, 1_000 * 2 ** Math.min(attempt, 5));
-    this.clearRetries.set(
-      accountId,
-      setTimeout(() => {
-        this.clearRetries.delete(accountId);
-        void this.clearAccount(accountId).catch(() => undefined);
-      }, delay),
-    );
-  }
-  private cancelClearRetry(accountId: string) {
-    clearTimeout(this.clearRetries.get(accountId));
-    this.clearRetries.delete(accountId);
   }
   /** Whether unsaved work is kept for this account; see `unsavedWork`. */
   async hasDrafts(accountId: string) {
@@ -966,7 +1032,10 @@ export class NotesStore {
     assertCurrent();
     this.blocked.delete(accountId);
     this.lifecycles.set(accountId, lifecycle);
-    this.clearAttempts.delete(accountId);
+    // A new lifecycle here: finished clears of earlier ones are history.
+    for (const [id, op] of this.clearOps)
+      if (op.accountId === accountId && op.result !== null)
+        this.clearOps.delete(id);
     this.notify();
   }
   private async assertPersistent(accountId: string, epoch: number) {
@@ -1606,8 +1675,9 @@ export class NotesStore {
     this.notify();
   }
   close() {
-    for (const accountId of [...this.clearRetries.keys()])
-      this.cancelClearRetry(accountId);
+    this.closed = true;
+    this.lockRequests.abort();
+    for (const op of this.clearOps.values()) clearTimeout(op.retry);
     for (const accountId of [...this.accountHolds.keys()])
       this.releaseAccount(accountId);
     this.channel?.close();

@@ -62,9 +62,9 @@ const service: SessionService = {
 const session = new SessionController({
   service,
   hints,
-  async clearAccount(accountId) {
+  async clearAccount(accountId, operation) {
     activated = null;
-    await store.clearAccount(accountId);
+    await store.clearAccount(accountId, operation);
   },
   finishCleanup: (accountId) => store.finishClear(accountId),
   async settleAccount(accountId) {
