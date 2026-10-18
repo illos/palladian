@@ -38,7 +38,7 @@ Proposed implementation: bind the invitation to its destination email, intended 
 
 ## Password recovery
 
-Confirmed: the user requests a password-reset email and uses its link to set a new password. Cloudflare Email Service is the delivery provider. A successful password reset automatically signs out other devices; this is not an optional choice in v1. The reset flow asks the user whether to disconnect connected AI agents. Choosing to disconnect revokes that account's agent connections and requires reauthorization; choosing to keep them preserves their existing authorization. Other devices sign out in either case.
+Confirmed: the user requests a password-reset email and uses its link to set a new password. Cloudflare Email Service is the delivery provider. A successful password reset automatically signs out other devices; this is not an optional choice in v1. The reset flow asks the user whether to disconnect connected AI agents. Choosing to disconnect revokes that account's agent connections and requires reauthorization; choosing to keep them preserves their existing authorization. Other devices sign out in either case, and each clears the account's cached notes and unsaved drafts when it next reaches the server (D98, 2026-10-18).
 
 Proposed interaction: present an explicit keep/disconnect choice before submitting the new password. Do not silently infer the choice from an unanswered prompt. Apply the selected connection policy only when the password reset succeeds; do not change notebook/note membership permissions as a side effect.
 

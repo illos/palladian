@@ -1,7 +1,7 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  // One Worker on workers.dev: the notes SPA (static assets), the OAuth 2.1
-  // authorization server for agent connections, and the MCP endpoint.
+  // One Worker at notes.parabolic.studio: the notes SPA (static assets), the
+  // OAuth 2.1 authorization server for agent connections, and the MCP endpoint.
   "name": "palladian",
   "main": "src/index.ts",
   // The newest date the pinned wrangler/workerd (1.20260908.1) supports.
@@ -9,7 +9,10 @@
   // global_fetch_strictly_public: required by the OAuth provider for Client ID
   // Metadata Documents (SSRF protection on outbound metadata fetches).
   "compatibility_flags": ["global_fetch_strictly_public"],
-  "workers_dev": true,
+  // The custom domain (D99) is the only address: passkeys, agent tokens and
+  // Better Auth's trusted origin are all bound to it.
+  "routes": [{ "pattern": "notes.parabolic.studio", "custom_domain": true }],
+  "workers_dev": false,
   "preview_urls": false,
   "assets": {
     "directory": "../notes/dist",
@@ -55,8 +58,8 @@
   "triggers": { "crons": ["23 4 * * *"] },
   "vars": {
     // Production values; local development overrides them from .dev.vars.
-    "PUBLIC_ORIGIN": "https://palladian.rdxx.workers.dev",
-    "AGENT_JWT_ISSUER": "https://palladian.rdxx.workers.dev",
+    "PUBLIC_ORIGIN": "https://notes.parabolic.studio",
+    "AGENT_JWT_ISSUER": "https://notes.parabolic.studio",
     "CONVEX_URL": "https://adamant-hound-861.convex.cloud",
     "EMAIL_FROM": "notes@parabolic.studio",
   },

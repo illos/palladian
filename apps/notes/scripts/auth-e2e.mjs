@@ -100,6 +100,34 @@ async function addAuthenticator(context, page) {
       .length;
 }
 
+/** Notes, note text and drafts this device holds for any account. */
+function cachedCopies(page) {
+  return page.evaluate(
+    () =>
+      new Promise((resolve, reject) => {
+        const open = indexedDB.open("palladian-notes-foundation");
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const db = open.result;
+          const names = ["summaries", "bodies", "drafts"];
+          const tx = db.transaction(names, "readonly");
+          let total = 0;
+          let pending = names.length;
+          for (const name of names) {
+            const count = tx.objectStore(name).count();
+            count.onsuccess = () => {
+              total += count.result;
+              if (--pending === 0) {
+                db.close();
+                resolve(total);
+              }
+            };
+          }
+        };
+      }),
+  );
+}
+
 async function signOut(page) {
   const details = page.locator("details", {
     has: page.getByText("Connection", { exact: true }),
@@ -176,7 +204,21 @@ try {
   await page.locator(".settings-back").click();
   step("settings list the passkey");
 
-  // A second device, signed in with the password.
+  await page
+    .getByRole("button", { name: "New note", exact: true })
+    .first()
+    .click();
+  const editor = page.getByRole("textbox", { name: "Note content" });
+  await expect(editor).toHaveAttribute("contenteditable", "true", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await page.keyboard.type("Private note\nOnly for my devices");
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible({
+    timeout: 15_000,
+  });
+
+  // A second device, signed in with the password, caching the note.
   const other = await browser.newContext();
   const phone = await other.newPage();
   await phone.goto(app + "/");
@@ -184,7 +226,12 @@ try {
   await phone.getByLabel("Password", { exact: true }).fill(password);
   await phone.getByRole("button", { name: "Sign in", exact: true }).click();
   await connected(phone);
-  step("a second device signs in with the password");
+  await phone.getByRole("button", { name: /Private note/ }).click();
+  await expect(
+    phone.getByRole("textbox", { name: "Note content" }),
+  ).toContainText("Only for my devices", { timeout: 15_000 });
+  assert.ok((await cachedCopies(phone)) > 0, "the second device holds copies");
+  step("a second device signs in with the password and caches the note");
 
   await signOut(page);
   const before = Date.now() - 5_000;
@@ -218,11 +265,15 @@ try {
   );
 
   await phone.reload();
-  await expect(
-    phone.getByRole("heading", { name: "Sign in to sync" }),
-  ).toBeVisible({ timeout: 30_000 });
-  await shot(phone, "reconnect");
-  step("the other device was signed out and keeps its cached notes readable");
+  await expect(phone.getByText(/its copies of notes were removed/)).toBeVisible(
+    {
+      timeout: 30_000,
+    },
+  );
+  await expect(phone.getByRole("heading", { name: "Sign in" })).toBeVisible();
+  await shot(phone, "revoked");
+  await expect.poll(() => cachedCopies(phone), { timeout: 15_000 }).toBe(0);
+  step("the other device learned of the reset and removed its copies (D98)");
 
   await page.goto(`${app}/reset#${token}`);
   await page.getByLabel(/^New password/).fill(password);

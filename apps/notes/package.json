@@ -16,6 +16,7 @@
     "@convex-dev/better-auth": "0.12.5",
     "@palladian/notes-backend": "workspace:*",
     "@palladian/notes-core": "workspace:*",
+    "@simplewebauthn/browser": "13.3.0",
     "better-auth": "1.6.30",
     "convex": "1.45.0",
     "dexie": "4.4.6",

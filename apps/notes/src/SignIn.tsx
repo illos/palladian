@@ -7,6 +7,7 @@ import {
 } from "react";
 import type { SessionController } from "./session";
 import type { createAuthService } from "./auth-service";
+import { passkeyCeremony } from "./sign-in-flow";
 import {
   deviceName,
   passkeyAutofill,
@@ -99,22 +100,24 @@ export function SignIn({
   useEffect(() => {
     if (!autofill || ready || view !== "sign-in") return;
     let active = true;
+    let ceremony: ReturnType<typeof passkeyCeremony> | null = null;
     void session
       .settled()
       .then(() => {
         if (!active) return;
-        const generation = session.getSnapshot().generation;
-        return connection.auth.signIn
-          .passkey({ autoFill: true })
-          .then((result) => {
-            if (active && !result.error) finish(generation, false);
-          });
+        const current = passkeyCeremony(connection, session, true);
+        ceremony = current;
+        return current.result.then((result) => {
+          if (active && result && !result.error)
+            finish(current.generation, false);
+        });
       })
       .catch(() => undefined);
     return () => {
       active = false;
+      ceremony?.cancel();
     };
-  }, [autofill, ready, view]);
+  }, [autofill, ready, view, snapshot.generation]);
 
   if (ready)
     return inline ? null : (
@@ -166,15 +169,17 @@ export function SignIn({
   function signInWithPasskey() {
     setBusy(true);
     setError(null);
-    let generation = session.getSnapshot().generation;
     void session
       .settled()
       .then(() => {
-        generation = session.getSnapshot().generation;
-        return connection.auth.signIn.passkey();
+        const ceremony = passkeyCeremony(connection, session, false);
+        return ceremony.result.then((result) => ({
+          result,
+          generation: ceremony.generation,
+        }));
       })
-      .then((result) => {
-        if (session.getSnapshot().generation !== generation) return;
+      .then(({ result, generation }) => {
+        if (!result || session.getSnapshot().generation !== generation) return;
         if (!result.error) finish(generation, false);
         else if (
           result.error.status === 400 &&
@@ -187,9 +192,7 @@ export function SignIn({
             "That passkey was not recognised. Sign in with your password, then add a passkey in Settings.",
           );
       })
-      .catch(() => {
-        if (session.getSnapshot().generation === generation) setError(offline);
-      })
+      .catch(() => setError(offline))
       .finally(() => setBusy(false));
   }
 
@@ -331,7 +334,10 @@ export function SignIn({
             {view === "sign-in" ? "Sign in" : "Reset your password"}
           </h1>
           {snapshot.status === "revoked" && view === "sign-in" && (
-            <p className="muted">This device was signed out.</p>
+            <p className="muted">
+              The account’s password was changed, so this device was signed out
+              and its copies of notes were removed.
+            </p>
           )}
           {body}
           <p className="auth-foot">

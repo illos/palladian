@@ -113,6 +113,8 @@ Stable IDs preserve the discussion record. Later clarifications apply throughout
 | D95 | Accounts stay invite-only (Q01 reaffirmed); the sign-in screen tells newcomers to open their invitation link                                                      | Owner direction, 2026-10-18                                       |
 | D96 | Passkeys ship in v1 beside email and password (supersedes D22's passkey deferral); magic links and two-factor stay deferred                                       | Owner direction, 2026-10-18                                       |
 | D97 | Account email is sent from notes@parabolic.studio for now; adding Cloudflare Email Sending records to parabolic.studio is approved                                | Owner direction, 2026-10-18                                       |
+| D98 | A successful password reset revokes every other device: when it next reaches the server it clears that account's copies, unsaved drafts included                  | Owner direction, 2026-10-18                                       |
+| D99 | The app moves to notes.parabolic.studio (Worker custom domain); the workers.dev address is retired; the DNS change is approved                                    | Owner direction, 2026-10-18                                       |
 | Q13 | Local privacy settled: expiry preserves viewing; device revocation clears cache; no unsaved-work export after notebook access removal; device security sufficient | Owner decisions D65–D67, D83, D85–D87                             |
 | Q06 | Public link lifecycle settled: latest content, restoration, replacement invalidation, default indexing, no automatic expiry                                       | Owner decisions D12, D38, D52–D54, D74                            |
 

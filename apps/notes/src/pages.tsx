@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { ConvexProvider, useMutation, useQuery } from "convex/react";
 import { api } from "@palladian/notes-backend/api";
-import type { createAuthService } from "./auth-service";
+import { sessionBegan, type createAuthService } from "./auth-service";
 import { transportError } from "./live";
 import { liveStateSource, type LiveBox } from "./liveBox";
-import { passkeyOffer } from "./passkeys";
 import type { SessionController } from "./session";
 import { PasswordInput, SignIn } from "./SignIn";
+import { signInAfter, started } from "./sign-in-flow";
 
 type Connection = ReturnType<typeof createAuthService>;
 interface PageProps {
@@ -384,9 +384,17 @@ function InviteBody({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [created, setCreated] = useState(false);
   useEffect(() => {
     if (done && snapshot.status === "ready") location.replace("/");
   }, [done, snapshot.status]);
+  if (created)
+    return (
+      <p role="status">
+        Your account was created. <a href="/">Sign in</a> with your email and
+        new password to continue.
+      </p>
+    );
   if (preview === undefined) return <p>Loading…</p>;
   if (preview === null) return <p>This invitation link is not valid.</p>;
   if (preview.status !== "open" || preview.expiresAt < Date.now())
@@ -456,18 +464,22 @@ function InviteBody({
         if (!live) return;
         setBusy(true);
         setError(null);
+        const since = started(session, connection);
         void live.client
           .action(api.invitations.accept, { token, name, password })
           .then(async ({ email }) => {
-            const result = await connection.auth.signIn.email({
+            const outcome = await signInAfter(
+              session,
+              connection,
+              since,
               email,
               password,
-            });
-            if (result.error)
-              throw new Error("Your account was created. Sign in to continue.");
-            passkeyOffer.ask();
+            );
+            if (outcome !== "signed-in") {
+              setCreated(true);
+              return;
+            }
             setDone(true);
-            session.retry({ afterSignIn: true });
           })
           .catch((failure: unknown) => {
             setError(
@@ -562,18 +574,28 @@ function ResetBody({
   const [agents, setAgents] = useState<AgentChoice | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState<number | null>(null);
+  const [done, setDone] = useState<{
+    disconnected: number;
+    signingIn: boolean;
+  } | null>(null);
   useEffect(() => {
-    if (done !== null && snapshot.status === "ready") location.replace("/");
+    if (done?.signingIn && snapshot.status === "ready") location.replace("/");
   }, [done, snapshot.status]);
-  if (done !== null)
+  if (done)
     return (
       <p role="status">
         Your password is changed and your other devices are signed out
-        {done > 0
-          ? `; ${done} agent connection${done === 1 ? " was" : "s were"} disconnected`
+        {done.disconnected > 0
+          ? `; ${done.disconnected} agent connection${done.disconnected === 1 ? " was" : "s were"} disconnected`
           : ""}
-        . Signing you in…
+        .{" "}
+        {done.signingIn ? (
+          "Signing you in…"
+        ) : (
+          <>
+            <a href="/">Sign in</a> with your new password.
+          </>
+        )}
       </p>
     );
   return (
@@ -592,24 +614,32 @@ function ResetBody({
         }
         setBusy(true);
         setError(null);
+        const since = started(session, connection);
         void live.client
           .action(api.passwords.reset, {
             token,
             newPassword: password,
             agents,
           })
-          .then(async ({ email, agentsDisconnected }) => {
-            const result = await connection.auth.signIn.email({
+          .then(async ({ email, accountId, resetAt, agentsDisconnected }) => {
+            // This device made the reset: its own copies are not revoked by it.
+            const prior = sessionBegan.read();
+            if (prior?.accountId === accountId)
+              sessionBegan.write({
+                accountId,
+                at: Math.max(prior.at, resetAt),
+              });
+            const outcome = await signInAfter(
+              session,
+              connection,
+              since,
               email,
               password,
+            );
+            setDone({
+              disconnected: agentsDisconnected,
+              signingIn: outcome === "signed-in",
             });
-            if (result.error)
-              throw new Error(
-                "Your password was changed. Sign in with it to continue.",
-              );
-            passkeyOffer.ask();
-            setDone(agentsDisconnected);
-            session.retry({ afterSignIn: true });
           })
           .catch((failure: unknown) => {
             setError(

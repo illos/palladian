@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-import { internalMutation, mutation, query } from "./_generated/server";
+import { mutation, query, type MutationCtx } from "./_generated/server";
 import { fail, getPrincipal, requireHuman } from "./access";
 import { hashToken, newToken } from "./invitations";
 import { delegation, role } from "./schema";
@@ -290,30 +290,26 @@ export const revoke = mutation({
 
 /**
  * Disconnect every agent connection a person approved, as chosen during a
- * password reset. Agents must be authorized again; their notebook access is
- * unchanged.
+ * password reset (inside that reset's transaction). Agents must be authorized
+ * again; their notebook access is unchanged.
  */
-export const disconnectAll = internalMutation({
-  args: { authUserId: v.string() },
-  returns: v.number(),
-  handler: async (ctx, args) => {
-    const person = await ctx.db
-      .query("principals")
-      .withIndex("by_auth_user", (q) => q.eq("authUserId", args.authUserId))
-      .unique();
-    if (!person) return 0;
-    const now = Date.now();
-    let count = 0;
-    for await (const connection of ctx.db
-      .query("connections")
-      .withIndex("by_controller", (q) => q.eq("controllerId", person._id))) {
-      if (connection.revokedAt !== undefined) continue;
-      await ctx.db.patch(connection._id, { revokedAt: now });
-      count++;
-    }
-    return count;
-  },
-});
+export async function disconnectAgents(ctx: MutationCtx, authUserId: string) {
+  const person = await ctx.db
+    .query("principals")
+    .withIndex("by_auth_user", (q) => q.eq("authUserId", authUserId))
+    .unique();
+  if (!person) return 0;
+  const now = Date.now();
+  let count = 0;
+  for await (const connection of ctx.db
+    .query("connections")
+    .withIndex("by_controller", (q) => q.eq("controllerId", person._id))) {
+    if (connection.revokedAt !== undefined) continue;
+    await ctx.db.patch(connection._id, { revokedAt: now });
+    count++;
+  }
+  return count;
+}
 
 export const updateAgent = mutation({
   args: {

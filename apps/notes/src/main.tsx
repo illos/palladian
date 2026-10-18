@@ -145,7 +145,10 @@ const convexURL: unknown = __NOTES_CONVEX_URL__;
 if (!fixture && typeof siteURL === "string" && siteURL) {
   void Promise.all([import("./auth-service"), import("./SignIn")])
     .then(async ([{ createAuthService }, { SignIn }]) => {
-      const connection = createAuthService(siteURL);
+      const connection = createAuthService(
+        siteURL,
+        typeof convexURL === "string" && convexURL ? convexURL : undefined,
+      );
       transport = connection.service;
       if (typeof convexURL === "string" && convexURL) {
         const { createLive } = await import("./live");

@@ -30,6 +30,9 @@ export default defineSchema({
     clientName: v.optional(v.string()),
     // People: Trash retention in days; 0 keeps Trash until emptied manually.
     trashRetentionDays: v.optional(v.number()),
+    // People: the last password reset; devices signed in before it are
+    // revoked and clear their copies when they learn of it (D98).
+    passwordResetAt: v.optional(v.number()),
     createdAt: v.number(),
     disabledAt: v.optional(v.number()),
   })

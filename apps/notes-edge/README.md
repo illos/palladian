@@ -33,12 +33,15 @@ scripts/e2e.mjs      end-to-end check against wrangler dev and a local Convex ba
 | `AGENT_JWT_ISSUER`      | var        | `iss` of agent JWTs. Must equal Convex's `AGENT_JWT_ISSUER`. Use `PUBLIC_ORIGIN` in production.                                                                                                                                                    |
 | `CONVEX_URL`            | var        | Convex deployment URL (`https://<name>.convex.cloud`).                                                                                                                                                                                             |
 | `AGENT_JWT_PRIVATE_KEY` | **secret** | Private ES256 JWK as one line of JSON, with a `kid`. Never put it in `wrangler.jsonc`.                                                                                                                                                             |
+| `EMAIL` / `EMAIL_FROM`  | send_email | Cloudflare Email Sending binding and the sender on the onboarded domain (`notes@parabolic.studio`). Account email only (`src/email.ts`).                                                                                                           |
+| `EMAIL_RELAY_SECRET`    | **secret** | Shared with Convex's `EMAIL_RELAY_SECRET`; Convex posts reset and invitation emails to `/internal/email` with it. Without it the relay answers 503.                                                                                                |
 | `OAUTH_DB` / `OAUTH_KV` | D1 or KV   | Grants, tokens (stored hashed), DCR clients, pending consent requests. Production binds D1 (`OAUTH_DB`), adapted to the KV interface by `src/d1-kv.ts`, because the deploy token lacks KV permission; binding `OAUTH_KV` uses KV directly.         |
 | `ASSETS`                | assets     | `../notes/dist`. Build the SPA first.                                                                                                                                                                                                              |
 
 `wrangler.jsonc` holds the production values: origin
-`https://palladian.rdxx.workers.dev`, Convex production `adamant-hound-861`,
-and the `palladian-oauth` D1 database. Compatibility flag
+`https://notes.parabolic.studio` (a Worker custom domain; `workers.dev` is
+off), Convex production `adamant-hound-861`, and the `palladian-oauth` D1
+database. Compatibility flag
 `global_fetch_strictly_public` is required for Client ID Metadata Documents
 (SSRF protection on outbound metadata fetches). `nodejs_compat` is not needed.
 
@@ -47,8 +50,10 @@ and the `palladian-oauth` D1 database. Compatibility flag
 Production secrets live in the shared Presidium secrets file under the
 `palladian-notes` set: the auth secret, the agent signing key (base64url of the
 private JWK) and its public JWKS. Convex production holds `SITE_URL`,
-`BETTER_AUTH_SECRET`, `AGENT_JWT_ISSUER` and `AGENT_JWT_JWKS`; the Worker holds
-the secret `AGENT_JWT_PRIVATE_KEY`. From a pushed commit on `main`:
+`BETTER_AUTH_SECRET`, `AGENT_JWT_ISSUER`, `AGENT_JWT_JWKS` and
+`EMAIL_RELAY_SECRET`; the Worker holds the secrets `AGENT_JWT_PRIVATE_KEY` and
+`EMAIL_RELAY_SECRET`. `SITE_URL`, `AGENT_JWT_ISSUER` and the Worker's
+`PUBLIC_ORIGIN` must all be `https://notes.parabolic.studio`. From a pushed commit on `main`:
 
 ```sh
 (cd apps/notes-backend && npx convex deploy -y)      # backend to production
