@@ -6,72 +6,72 @@ import {
 } from "@convex-dev/better-auth/client/plugins";
 import type { SessionService } from "./session";
 
-const BEGAN_KEY = "palladian.notes.session-began.v1";
+const DEVICE_KEY = "palladian.notes.device.v1";
 
-interface Began {
-  accountId: string;
-  at: number;
+/**
+ * A random secret identifying this browser to the server's device records
+ * (D98). Only its hash is stored there; only this browser can ask about it.
+ */
+export function deviceSecret(): string | null {
+  try {
+    const stored = localStorage.getItem(DEVICE_KEY);
+    if (stored && /^[A-Za-z0-9_-]{43}$/.test(stored)) return stored;
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    const secret = btoa(String.fromCharCode(...bytes))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+    localStorage.setItem(DEVICE_KEY, secret);
+    return secret;
+  } catch {
+    // Without storage the browser cannot take part; it keeps expiry behaviour.
+    return null;
+  }
 }
 
-/** When this device's session began; compared with password resets (D98). */
-export const sessionBegan = {
-  read(): Began | null {
-    try {
-      const value: unknown = JSON.parse(
-        localStorage.getItem(BEGAN_KEY) ?? "null",
-      );
-      if (
-        value &&
-        typeof value === "object" &&
-        "accountId" in value &&
-        "at" in value &&
-        typeof value.accountId === "string" &&
-        typeof value.at === "number" &&
-        Number.isFinite(value.at)
-      )
-        return { accountId: value.accountId, at: value.at };
-    } catch {
-      // Unreadable: no comparison is possible.
-    }
-    return null;
-  },
-  write(value: Began): void {
-    try {
-      localStorage.setItem(BEGAN_KEY, JSON.stringify(value));
-    } catch {
-      // Without storage the device cannot learn of resets; it keeps expiry behaviour.
-    }
-  },
-  forget(): void {
-    try {
-      localStorage.removeItem(BEGAN_KEY);
-    } catch {
-      // Nothing stored.
-    }
-  },
-};
-
-/** Whether the account's password was reset after this device signed in. */
-async function resetSince(
+/** One Convex function call over HTTP, outside the live connection. */
+async function convexCall(
   convexURL: string,
-  began: Began,
+  kind: "query" | "mutation",
+  path: string,
+  args: Record<string, unknown>,
   signal: AbortSignal,
-): Promise<boolean> {
-  const response = await fetch(`${convexURL}/api/query`, {
+  token?: string,
+): Promise<unknown> {
+  const response = await fetch(`${convexURL}/api/${kind}`, {
     method: "POST",
     signal,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      path: "account:resetSince",
-      args: { accountId: began.accountId, since: began.at },
-      format: "json",
-    }),
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ path, args, format: "json" }),
   });
-  if (!response.ok) throw new Error("Revocation check unavailable");
+  if (!response.ok) throw new Error("Device check unavailable");
   const body = (await response.json()) as { status?: unknown; value?: unknown };
-  if (body.status !== "success" || typeof body.value !== "boolean")
-    throw new Error("Revocation check unavailable");
+  if (body.status !== "success") throw new Error("Device check unavailable");
   return body.value;
+}
+
+interface DeviceEntry {
+  accountId: string;
+  revoked: boolean;
+}
+
+async function deviceStatus(
+  convexURL: string,
+  secret: string,
+  signal: AbortSignal,
+): Promise<DeviceEntry[]> {
+  const value = await convexCall(
+    convexURL,
+    "query",
+    "devices:status",
+    { secret },
+    signal,
+  );
+  if (!Array.isArray(value)) throw new Error("Device check unavailable");
+  return value as DeviceEntry[];
 }
 
 /** The official client owns credentials; the notes display never awaits this module. */
@@ -80,37 +80,68 @@ export function createAuthService(siteURL: string, convexURL?: string) {
     baseURL: siteURL,
     plugins: [convexClient(), crossDomainClient(), passkeyClient()],
   });
+  /** Record with the signed-in session that this browser is current. */
+  async function bindDevice(secret: string, signal: AbortSignal) {
+    const result = await auth.convex.token({
+      fetchOptions: { signal, throw: false },
+    });
+    const token = result.data?.token;
+    if (!token) throw new Error("Device check unavailable");
+    await convexCall(
+      convexURL!,
+      "mutation",
+      "devices:bind",
+      { secret },
+      signal,
+      token,
+    );
+  }
+  const transient = {
+    kind: "transient",
+    message: "Session service unavailable",
+  } as const;
   const service: SessionService = {
-    async check(signal) {
+    async check(signal, hinted) {
+      const before = authMoment(auth);
       try {
         const result = await auth.getSession({
           fetchOptions: { signal, throw: false },
         });
-        if (signal.aborted || result.error)
-          return { kind: "transient", message: "Session service unavailable" };
+        if (signal.aborted || result.error) return transient;
+        const secret = convexURL ? deviceSecret() : null;
         if (result.data) {
-          const at = new Date(result.data.session.createdAt).getTime();
-          if (Number.isFinite(at))
-            sessionBegan.write({ accountId: result.data.user.id, at });
-          return { kind: "ready", accountId: result.data.user.id };
+          const accountId = result.data.user.id;
+          if (!secret) return { kind: "ready", accountId };
+          const known = (await deviceStatus(convexURL!, secret, signal)).find(
+            (entry) => entry.accountId === accountId,
+          );
+          if (known && !known.revoked) return { kind: "ready", accountId };
+          // New to this browser, or holding copies from before a password
+          // reset: record that it is current before this account's copies
+          // can appear here; old copies are then cleared as revoked (D98).
+          // An interrupted clear resumes after reload (pending cleanup).
+          await bindDevice(secret, signal);
+          if (signal.aborted || superseded(auth, before)) return transient;
+          return known?.revoked
+            ? { kind: "revoked", accountId }
+            : { kind: "ready", accountId };
         }
-        // No session. A password reset since this device signed in revokes
-        // it (D98); anything else is ordinary expiry. Only an answer from
-        // the server decides: a failed check is retried, never a revocation.
-        const began = sessionBegan.read();
-        if (!began || !convexURL) return { kind: "expired" };
-        const reset = await resetSince(convexURL, began, signal);
-        if (signal.aborted)
-          return { kind: "transient", message: "Session service unavailable" };
-        return reset
-          ? { kind: "revoked", accountId: began.accountId }
+        // No session. Only a server answer that this browser's copies of the
+        // account predate a reset revokes it; otherwise it is plain expiry.
+        if (!hinted || !secret) return { kind: "expired" };
+        const entry = (await deviceStatus(convexURL!, secret, signal)).find(
+          (candidate) => candidate.accountId === hinted,
+        );
+        // A newer sign-in or sign-out meanwhile (in any tab) outranks this answer.
+        if (signal.aborted || superseded(auth, before)) return transient;
+        return entry?.revoked
+          ? { kind: "revoked", accountId: hinted }
           : { kind: "expired" };
       } catch {
-        return { kind: "transient", message: "Session service unavailable" };
+        return transient;
       }
     },
     async signOut(signal) {
-      sessionBegan.forget();
       const result = await auth.signOut({
         fetchOptions: { signal, throw: false },
       });

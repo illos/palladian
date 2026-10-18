@@ -1,26 +1,20 @@
 import { betterAuth } from "better-auth/minimal";
 import { v } from "convex/values";
 import { components, internal } from "./_generated/api";
-import { action, internalMutation } from "./_generated/server";
+import { action, internalMutation, internalQuery } from "./_generated/server";
 import { fail } from "./access";
 import { authOptions } from "./auth";
 import { disconnectAgents } from "./connections";
+import { bindDevice } from "./devices";
 
 const EXPIRED =
   "This reset link has expired or was already used. Request a new one.";
 const agentChoice = v.union(v.literal("keep"), v.literal("disconnect"));
 const resetResult = v.object({
   email: v.string(),
-  accountId: v.string(),
-  resetAt: v.number(),
   agentsDisconnected: v.number(),
 });
-type ResetResult = {
-  email: string;
-  accountId: string;
-  resetAt: number;
-  agentsDisconnected: number;
-};
+type ResetResult = { email: string; agentsDisconnected: number };
 
 /**
  * Set a new password from an emailed reset link. Better Auth issues the link
@@ -28,7 +22,13 @@ type ResetResult = {
  * commits in one transaction (finishReset), so it cannot half-apply.
  */
 export const reset = action({
-  args: { token: v.string(), newPassword: v.string(), agents: agentChoice },
+  args: {
+    token: v.string(),
+    newPassword: v.string(),
+    agents: agentChoice,
+    // The browser making the reset keeps its copies (D98 revokes the others).
+    device: v.optional(v.string()),
+  },
   returns: resetResult,
   handler: async (ctx, args): Promise<ResetResult> => {
     if (!/^[A-Za-z0-9_-]{16,100}$/.test(args.token)) fail("invalid", EXPIRED);
@@ -41,18 +41,25 @@ export const reset = action({
       token: args.token,
       hash,
       agents: args.agents,
+      ...(args.device ? { device: args.device } : {}),
     });
   },
 });
 
 /**
  * One transaction: consume the link, set the password, end every session of
- * the account (D25), record the reset so devices signed in before it clear
- * their copies (D98) and, if the person chose to, disconnect their agents
+ * the account (D25), count the reset so other browsers clear their copies and
+ * in-flight sign-ins with the old password fail (D98, auth.ts) while this
+ * browser stays current, and, if the person chose to, disconnect their agents
  * (D26). If any step fails nothing changes and the link still works.
  */
 export const finishReset = internalMutation({
-  args: { token: v.string(), hash: v.string(), agents: agentChoice },
+  args: {
+    token: v.string(),
+    hash: v.string(),
+    agents: agentChoice,
+    device: v.optional(v.string()),
+  },
   returns: resetResult,
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -126,14 +133,27 @@ export const finishReset = internalMutation({
       .query("principals")
       .withIndex("by_auth_user", (q) => q.eq("authUserId", userId))
       .unique();
-    if (person) await ctx.db.patch(person._id, { passwordResetAt: now });
+    if (person) {
+      const resetEpoch = (person.resetEpoch ?? 0) + 1;
+      await ctx.db.patch(person._id, { resetEpoch });
+      if (args.device && /^[A-Za-z0-9_-]{32,128}$/.test(args.device))
+        await bindDevice(ctx, args.device, person._id, resetEpoch);
+    }
     const agentsDisconnected =
       args.agents === "disconnect" ? await disconnectAgents(ctx, userId) : 0;
-    return {
-      email: user.email,
-      accountId: userId,
-      resetAt: now,
-      agentsDisconnected,
-    };
+    return { email: user.email, agentsDisconnected };
+  },
+});
+
+/** The account's password-reset count, read by password sign-ins (auth.ts). */
+export const resetEpoch = internalQuery({
+  args: { authUserId: v.string() },
+  returns: v.number(),
+  handler: async (ctx, args) => {
+    const person = await ctx.db
+      .query("principals")
+      .withIndex("by_auth_user", (q) => q.eq("authUserId", args.authUserId))
+      .unique();
+    return person?.resetEpoch ?? 0;
   },
 });

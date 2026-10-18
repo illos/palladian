@@ -56,12 +56,8 @@ describe("password reset atomicity", () => {
     expect(await signIn(t, "ada@example.com", NEW)).toBeNull();
     const untouched = await t.run((ctx) => ctx.db.get(connectionId));
     expect(untouched?.revokedAt).toBeUndefined();
-    expect(
-      await t.query(api.account.resetSince, {
-        accountId: person.authUserId!,
-        since: 0,
-      }),
-    ).toBe(false);
+    const counted = await t.run((ctx) => ctx.db.get(person._id));
+    expect(counted?.resetEpoch).toBeUndefined();
 
     const result = await t.action(api.passwords.reset, {
       token,

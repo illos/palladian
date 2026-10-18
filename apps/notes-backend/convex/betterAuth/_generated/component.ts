@@ -50,6 +50,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             | {
                 data: {
                   createdAt: number;
+                  credentialEpoch?: null | number;
                   expiresAt: number;
                   ipAddress?: null | string;
                   token: string;
@@ -228,6 +229,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                     | "ipAddress"
                     | "userAgent"
                     | "userId"
+                    | "credentialEpoch"
                     | "_id";
                   mode?: "sensitive" | "insensitive";
                   operator?:
@@ -630,6 +632,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                     | "ipAddress"
                     | "userAgent"
                     | "userId"
+                    | "credentialEpoch"
                     | "_id";
                   mode?: "sensitive" | "insensitive";
                   operator?:
@@ -1124,6 +1127,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                 model: "session";
                 update: {
                   createdAt?: number;
+                  credentialEpoch?: null | number;
                   expiresAt?: number;
                   ipAddress?: null | string;
                   token?: string;
@@ -1141,6 +1145,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                     | "ipAddress"
                     | "userAgent"
                     | "userId"
+                    | "credentialEpoch"
                     | "_id";
                   mode?: "sensitive" | "insensitive";
                   operator?:
@@ -1628,6 +1633,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                 model: "session";
                 update: {
                   createdAt?: number;
+                  credentialEpoch?: null | number;
                   expiresAt?: number;
                   ipAddress?: null | string;
                   token?: string;
@@ -1645,6 +1651,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                     | "ipAddress"
                     | "userAgent"
                     | "userId"
+                    | "credentialEpoch"
                     | "_id";
                   mode?: "sensitive" | "insensitive";
                   operator?:

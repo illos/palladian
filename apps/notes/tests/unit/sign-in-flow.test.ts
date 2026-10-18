@@ -59,8 +59,10 @@ const server = {
   requests: [] as string[],
   clearSessionOnOptions: false,
   session: null as null | { createdAt: string },
-  resetSince: false as boolean | "fail",
-  asked: [] as unknown[],
+  devices: [] as { accountId: string; revoked: boolean }[] | "fail",
+  binds: [] as (string | null)[],
+  statusGate: null as null | Promise<void>,
+  signInGate: null as null | Promise<void>,
 };
 function cookieResponse(body: unknown, cookies: string[]) {
   return new Response(JSON.stringify(body), {
@@ -80,13 +82,18 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       path: string;
       args: unknown;
     };
-    server.asked.push(body);
-    if (server.resetSince === "fail")
-      return new Response("busy", { status: 503 });
-    return new Response(
-      JSON.stringify({ status: "success", value: server.resetSince }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
-    );
+    const ok = (value: unknown) =>
+      new Response(JSON.stringify({ status: "success", value }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    if (body.path === "devices:bind") {
+      server.binds.push(new Headers(init?.headers).get("Authorization"));
+      return ok(null);
+    }
+    if (server.statusGate) await server.statusGate;
+    if (server.devices === "fail") return new Response("busy", { status: 503 });
+    return ok(server.devices);
   }
   const path = url.pathname.replace("/api/auth", "");
   const method =
@@ -108,6 +115,12 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
           : []),
       ],
     );
+  if (path === "/convex/token")
+    return new Response(JSON.stringify({ token: "jwt" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  if (path === "/sign-in/email" && server.signInGate) await server.signInGate;
   if (path === "/passkey/verify-authentication" || path === "/sign-in/email")
     return cookieResponse({ user, session: { id: "s" } }, [session()]);
   if (path === "/get-session" && server.session)
@@ -121,7 +134,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   });
 }) as typeof fetch;
 
-const { createAuthService, authMoment, sessionBegan } =
+const { createAuthService, authMoment, deviceSecret } =
   await import("../../src/auth-service");
 const { passkeyCeremony, signInAfter, started } =
   await import("../../src/sign-in-flow");
@@ -161,8 +174,10 @@ beforeEach(() => {
   server.requests = [];
   server.clearSessionOnOptions = false;
   server.session = null;
-  server.resetSince = false;
-  server.asked = [];
+  server.devices = [];
+  server.binds = [];
+  server.statusGate = null;
+  server.signInGate = null;
 });
 afterEach(() => {
   vi.clearAllMocks();
@@ -282,63 +297,122 @@ describe("signing in after a reset or account creation", () => {
   });
 });
 
-describe("learning of a password reset (D98)", () => {
+describe("browsers holding copies from before a password reset (D98)", () => {
   const signal = () => new AbortController().signal;
+  const live = { createdAt: "2026-10-18T10:00:00.000Z" };
 
-  test("a live session records when this device signed in", async () => {
+  test("a signed-in browser new to the account is recorded before it opens", async () => {
     const { service } = createAuthService(SITE, CONVEX);
-    server.session = { createdAt: "2026-10-18T10:00:00.000Z" };
-    expect(await service.check(signal())).toEqual({
+    server.session = live;
+    expect(await service.check(signal(), null)).toEqual({
       kind: "ready",
       accountId: "u",
     });
-    expect(sessionBegan.read()).toEqual({
-      accountId: "u",
-      at: Date.parse("2026-10-18T10:00:00.000Z"),
-    });
+    expect(server.binds).toEqual(["Bearer jwt"]);
+    expect(deviceSecret()).toMatch(/^[A-Za-z0-9_-]{43}$/);
   });
 
-  test("no session and a reset since then: revoked", async () => {
+  test("a current browser opens without recording again", async () => {
     const { service } = createAuthService(SITE, CONVEX);
-    sessionBegan.write({ accountId: "u", at: 1000 });
-    server.resetSince = true;
-    expect(await service.check(signal())).toEqual({
+    server.session = live;
+    server.devices = [{ accountId: "u", revoked: false }];
+    expect(await service.check(signal(), "u")).toEqual({
+      kind: "ready",
+      accountId: "u",
+    });
+    expect(server.binds).toEqual([]);
+  });
+
+  test("signing in again does not keep copies from before a reset", async () => {
+    const { service } = createAuthService(SITE, CONVEX);
+    server.session = live;
+    server.devices = [{ accountId: "u", revoked: true }];
+    expect(await service.check(signal(), "u")).toEqual({
       kind: "revoked",
       accountId: "u",
     });
-    expect(server.asked).toEqual([
-      {
-        path: "account:resetSince",
-        args: { accountId: "u", since: 1000 },
-        format: "json",
-      },
-    ]);
+    // Recorded as current first, so after the clear the next sign-in opens.
+    expect(server.binds).toEqual(["Bearer jwt"]);
   });
 
-  test("no session and no reset: ordinary expiry keeps the copies", async () => {
+  test("no session and copies from before a reset: revoked", async () => {
     const { service } = createAuthService(SITE, CONVEX);
-    sessionBegan.write({ accountId: "u", at: 1000 });
-    expect(await service.check(signal())).toEqual({ kind: "expired" });
+    server.devices = [{ accountId: "u", revoked: true }];
+    expect(await service.check(signal(), "u")).toEqual({
+      kind: "revoked",
+      accountId: "u",
+    });
   });
 
-  test("a failed reset check is retried, never taken as revocation", async () => {
+  test("no session and current copies: plain expiry keeps them", async () => {
     const { service } = createAuthService(SITE, CONVEX);
-    sessionBegan.write({ accountId: "u", at: 1000 });
-    server.resetSince = "fail";
-    expect((await service.check(signal())).kind).toBe("transient");
+    server.devices = [{ accountId: "u", revoked: false }];
+    expect(await service.check(signal(), "u")).toEqual({ kind: "expired" });
   });
 
-  test("a device that never recorded a session only expires", async () => {
+  test("another account's revocation is not this account's", async () => {
     const { service } = createAuthService(SITE, CONVEX);
-    server.resetSince = true;
-    expect(await service.check(signal())).toEqual({ kind: "expired" });
-    expect(server.asked).toEqual([]);
+    server.devices = [{ accountId: "other", revoked: true }];
+    expect(await service.check(signal(), "u")).toEqual({ kind: "expired" });
   });
 
-  test("signing out forgets the record", async () => {
+  test("a failed question is retried, never taken as revocation", async () => {
     const { service } = createAuthService(SITE, CONVEX);
-    sessionBegan.write({ accountId: "u", at: 1000 });
-    await service.signOut!(signal());
-    expect(sessionBegan.read()).toBeNull();
+    server.devices = "fail";
+    expect((await service.check(signal(), "u")).kind).toBe("transient");
+  });
+
+  test("with nothing shown there is nothing to revoke", async () => {
+    const { service } = createAuthService(SITE, CONVEX);
+    server.devices = [{ accountId: "u", revoked: true }];
+    server.requests = [];
+    expect(await service.check(signal(), null)).toEqual({ kind: "expired" });
+  });
+
+  test("a sign-in in another tab outranks a late revocation answer", async () => {
+    const { service } = createAuthService(SITE, CONVEX);
+    const other = createAuthService(SITE, CONVEX);
+    server.devices = [{ accountId: "u", revoked: true }];
+    let release!: () => void;
+    server.statusGate = new Promise<void>((resolve) => (release = resolve));
+    const checking = service.check(signal(), "u");
+    await vi.waitFor(() =>
+      expect(server.requests).toContain("GET /get-session"),
+    );
+    await other.auth.signIn.email({
+      email: "ada@example.com",
+      password: "x".repeat(12),
+    });
+    release();
+    expect((await checking).kind).toBe("transient");
+  });
+});
+
+describe("a completed reset or account survives a cut-off automatic sign-in", () => {
+  test("another tab's sign-in aborting ours is reported, not thrown", async () => {
+    const tab = createAuthService(SITE);
+    const other = createAuthService(SITE);
+    const session = fakeSession();
+    const since = started(session, tab);
+    let release!: () => void;
+    server.signInGate = new Promise<void>((resolve) => (release = resolve));
+    const outcome = signInAfter(
+      session,
+      tab,
+      since,
+      "ada@example.com",
+      "x".repeat(12),
+    );
+    await vi.waitFor(() =>
+      expect(server.requests).toContain("POST /sign-in/email"),
+    );
+    server.signInGate = null;
+    await other.auth.signIn.email({
+      email: "bo@example.com",
+      password: "x".repeat(12),
+    });
+    release();
+    expect(await outcome).not.toBe("signed-in");
+    expect(session.retry).not.toHaveBeenCalled();
   });
 });

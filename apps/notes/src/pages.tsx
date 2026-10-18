@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { ConvexProvider, useMutation, useQuery } from "convex/react";
 import { api } from "@palladian/notes-backend/api";
-import { sessionBegan, type createAuthService } from "./auth-service";
+import { deviceSecret, type createAuthService } from "./auth-service";
 import { transportError } from "./live";
 import { liveStateSource, type LiveBox } from "./liveBox";
 import type { SessionController } from "./session";
@@ -615,20 +615,16 @@ function ResetBody({
         setBusy(true);
         setError(null);
         const since = started(session, connection);
+        const device = deviceSecret();
         void live.client
           .action(api.passwords.reset, {
             token,
             newPassword: password,
             agents,
+            // This browser makes the reset and keeps its copies (D98).
+            ...(device ? { device } : {}),
           })
-          .then(async ({ email, accountId, resetAt, agentsDisconnected }) => {
-            // This device made the reset: its own copies are not revoked by it.
-            const prior = sessionBegan.read();
-            if (prior?.accountId === accountId)
-              sessionBegan.write({
-                accountId,
-                at: Math.max(prior.at, resetAt),
-              });
+          .then(async ({ email, agentsDisconnected }) => {
             const outcome = await signInAfter(
               session,
               connection,
@@ -642,10 +638,12 @@ function ResetBody({
             });
           })
           .catch((failure: unknown) => {
+            // A refusal (expired link, short password) says why; anything else
+            // may have lost the answer to a reset that did happen.
             setError(
-              failure instanceof Error && !("data" in failure)
-                ? failure.message
-                : transportError(failure).message,
+              failure instanceof Error && "data" in failure
+                ? transportError(failure).message
+                : "We could not confirm the change. Try signing in with your new password; if that fails, request a new link.",
             );
             setBusy(false);
           });

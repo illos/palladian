@@ -48,11 +48,11 @@ const fixtureService: SessionService = {
   },
 };
 const service: SessionService = {
-  async check(signal) {
+  async check(signal, accountId) {
     const fence = await store.captureActivationFence();
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
     const selected = fixture ? fixtureService : transport;
-    const result = await selected.check(signal);
+    const result = await selected.check(signal, accountId);
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
     activation = fence;
     return result;

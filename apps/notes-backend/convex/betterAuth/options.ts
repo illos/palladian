@@ -37,7 +37,18 @@ function unverified() {
   });
 }
 
+/** The password-reset count a password sign-in verified under (auth.ts). */
+export const sessionFields = {
+  credentialEpoch: {
+    type: "number",
+    required: false,
+    input: false,
+    returned: false,
+  },
+} as const;
+
 /** Table metadata for the component adapter; no deployment settings needed. */
 export const schemaOptions = {
+  session: { additionalFields: sessionFields },
   plugins: [passkeys("https://palladian.invalid")],
 };

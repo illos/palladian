@@ -100,7 +100,16 @@ export async function signInAfter(
     session.getSnapshot().generation === since.generation &&
     !superseded(connection.auth, since.moment);
   if (!current()) return "superseded";
-  const result = await connection.auth.signIn.email({ email, password });
+  let result: Awaited<ReturnType<typeof connection.auth.signIn.email>>;
+  try {
+    result = await connection.auth.signIn.email({ email, password });
+  } catch {
+    // Superseded mid-request (the transport aborts it) or unreachable: the
+    // completed reset or new account stands either way; the page says so.
+    return session.getSnapshot().generation !== since.generation
+      ? "superseded"
+      : "failed";
+  }
   if (session.getSnapshot().generation !== since.generation)
     return "superseded";
   if (result.error) return "failed";

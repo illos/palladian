@@ -29,26 +29,6 @@ export const me = query({
   },
 });
 
-/**
- * Whether the account's password was reset after `since`, when a device's
- * session began. Asked by a device whose session is gone, so it cannot be
- * authenticated: the answer is one bit about an opaque account id the device
- * already holds. True means the device was revoked and clears its copies (D98).
- */
-export const resetSince = query({
-  args: { accountId: v.string(), since: v.number() },
-  returns: v.boolean(),
-  handler: async (ctx, args) => {
-    if (args.accountId.length > 64 || !Number.isFinite(args.since))
-      return false;
-    const person = await ctx.db
-      .query("principals")
-      .withIndex("by_auth_user", (q) => q.eq("authUserId", args.accountId))
-      .unique();
-    return (person?.passwordResetAt ?? 0) > args.since;
-  },
-});
-
 export const rename = mutation({
   args: { name: v.string() },
   returns: v.null(),

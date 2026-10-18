@@ -30,9 +30,9 @@ export default defineSchema({
     clientName: v.optional(v.string()),
     // People: Trash retention in days; 0 keeps Trash until emptied manually.
     trashRetentionDays: v.optional(v.number()),
-    // People: the last password reset; devices signed in before it are
-    // revoked and clear their copies when they learn of it (D98).
-    passwordResetAt: v.optional(v.number()),
+    // People: how many times the password was reset. Password sign-ins and
+    // devices record the count they began under (D98, auth.ts, devices.ts).
+    resetEpoch: v.optional(v.number()),
     createdAt: v.number(),
     disabledAt: v.optional(v.number()),
   })
@@ -221,6 +221,20 @@ export default defineSchema({
   })
     .index("by_token", ["tokenHash"])
     .index("by_inviter", ["invitedBy"]),
+
+  /**
+   * Browsers that may hold an account's copies, by the hash of a secret only
+   * the browser knows, and the password-reset count they last caught up with.
+   * A browser behind the account's count clears that account's copies (D98).
+   */
+  devices: defineTable({
+    secretHash: v.string(),
+    principalId: v.id("principals"),
+    resetEpoch: v.number(),
+    boundAt: v.number(),
+  })
+    .index("by_secret_hash_and_principal", ["secretHash", "principalId"])
+    .index("by_principal", ["principalId"]),
 
   /** Recent account emails, kept briefly to limit sends per subject and overall. */
   emailSends: defineTable({

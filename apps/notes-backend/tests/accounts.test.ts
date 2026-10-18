@@ -20,6 +20,37 @@ import {
 
 useRelayStub();
 
+/** Signed in with a live session, as the app's Convex client would be. */
+async function signedIn(t: T, email: string, password = OLD, create = true) {
+  const person = create
+    ? await account(t, email, password)
+    : await principalOf(t, email);
+  await signIn(t, email, password);
+  const sessions = (await t.run((ctx) =>
+    ctx.runQuery(components.betterAuth.adapter.findMany, {
+      model: "session",
+      where: [{ field: "userId", value: person.authUserId! }],
+      paginationOpts: { numItems: 50, cursor: null },
+    }),
+  )) as { page: { _id: string; createdAt: number }[] };
+  const session = sessions.page.sort((a, b) => b.createdAt - a.createdAt)[0]!;
+  const as = t.withIdentity({
+    subject: person.authUserId!,
+    sessionId: session._id,
+    issuer: SITE,
+  });
+  return { person, as };
+}
+
+async function principalOf(t: T, email: string) {
+  return (await t.run((ctx) =>
+    ctx.db
+      .query("principals")
+      .withIndex("by_email", (q) => q.eq("email", email))
+      .unique(),
+  ))!;
+}
+
 describe("password reset", () => {
   test("emailed link resets once, signs out every device and disconnects agents on request", async () => {
     const t = setup();
@@ -76,37 +107,49 @@ describe("password reset", () => {
     expect(await signIn(t, "ada@example.com", NEW)).toBeTruthy();
   });
 
-  test("the reset is recorded so devices signed in before it learn they were revoked", async () => {
+  test("other browsers fall behind the reset; the resetting browser stays current", async () => {
     const t = setup();
-    const person = await account(t, "ada@example.com", OLD);
+    const { person, as } = await signedIn(t, "ada@example.com");
     const accountId = person.authUserId!;
-    const began = Date.now();
-    expect(await t.query(api.account.resetSince, { accountId, since: 0 })).toBe(
-      false,
-    );
+    const laptop = "l".repeat(43);
+    const phone = "p".repeat(43);
+    await as.mutation(api.devices.bind, { secret: laptop });
+    await as.mutation(api.devices.bind, { secret: phone });
+    expect(await t.query(api.devices.status, { secret: phone })).toEqual([
+      { accountId, revoked: false },
+    ]);
     await requestReset(t, "ada@example.com");
-    const result = await t.action(api.passwords.reset, {
+    await t.action(api.passwords.reset, {
       token: resetToken(relay.messages[0]!),
       newPassword: NEW,
       agents: "keep",
+      device: laptop,
     });
-    expect(result.accountId).toBe(accountId);
+    expect(await t.query(api.devices.status, { secret: laptop })).toEqual([
+      { accountId, revoked: false },
+    ]);
+    expect(await t.query(api.devices.status, { secret: phone })).toEqual([
+      { accountId, revoked: true },
+    ]);
+    // Once the phone has cleared its copies and signed in again it catches up.
+    const again = await signedIn(t, "ada@example.com", NEW, false);
+    await again.as.mutation(api.devices.bind, { secret: phone });
+    expect(await t.query(api.devices.status, { secret: phone })).toEqual([
+      { accountId, revoked: false },
+    ]);
+  });
+
+  test("only the browser holding a secret learns anything about it", async () => {
+    const t = setup();
+    const { as } = await signedIn(t, "ada@example.com");
+    await as.mutation(api.devices.bind, { secret: "l".repeat(43) });
     expect(
-      await t.query(api.account.resetSince, { accountId, since: began - 1 }),
-    ).toBe(true);
-    // A device whose session began at or after the reset is not revoked.
-    expect(
-      await t.query(api.account.resetSince, {
-        accountId,
-        since: result.resetAt,
-      }),
-    ).toBe(false);
-    expect(
-      await t.query(api.account.resetSince, {
-        accountId: "someone-else",
-        since: 0,
-      }),
-    ).toBe(false);
+      await t.query(api.devices.status, { secret: "x".repeat(43) }),
+    ).toEqual([]);
+    expect(await t.query(api.devices.status, { secret: "short" })).toEqual([]);
+    await expect(
+      t.mutation(api.devices.bind, { secret: "x".repeat(43) }),
+    ).rejects.toThrow();
   });
 
   test("keeping agents leaves their connections; other devices still sign out", async () => {
@@ -164,23 +207,6 @@ describe("password reset", () => {
 });
 
 describe("invitation email", () => {
-  /** Signed in with a live session, as the app's Convex client would be. */
-  async function signedIn(t: T, email: string) {
-    const person = await account(t, email, OLD);
-    await signIn(t, email, OLD);
-    const session = (await t.run((ctx) =>
-      ctx.runQuery(components.betterAuth.adapter.findOne, {
-        model: "session",
-        where: [{ field: "userId", value: person.authUserId! }],
-      }),
-    )) as { _id: string };
-    const as = t.withIdentity({
-      subject: person.authUserId!,
-      sessionId: session._id,
-      issuer: SITE,
-    });
-    return { person, as };
-  }
   const owner = (t: T) => signedIn(t, "ada@example.com");
 
   test("the inviter can email an open invitation's link to its address", async () => {
