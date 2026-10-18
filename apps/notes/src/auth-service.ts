@@ -18,8 +18,14 @@ export interface DeviceStore {
    * Clear the account's copies in every tab (the cache's fenced clear, which
    * also drops other tabs' memory-only drafts). Fails, changing nothing, if
    * a tab has begun a newer lifecycle of the account since `lifecycle`.
+   * `reconcile`: other tabs check their session again; `revoke`: they sign
+   * the account out, as for any revocation.
    */
-  clear(accountId: string, lifecycle: number): Promise<void>;
+  clear(
+    accountId: string,
+    lifecycle: number,
+    purpose: "reconcile" | "revoke",
+  ): Promise<void>;
 }
 
 /**
@@ -168,7 +174,7 @@ export function createAuthService(
             );
             if (stale()) return transient;
             if (!(previous.known && !previous.behind)) {
-              await devices.clear(switching, shownLifecycle);
+              await devices.clear(switching, shownLifecycle, "revoke");
               if (stale()) return transient;
             }
           }
@@ -179,7 +185,7 @@ export function createAuthService(
           // Behind a reset, or unknown here (new, or its identity was lost):
           // clear the account in every tab, then tell the server this browser
           // is current, then check again under a fresh fence (D98).
-          await devices.clear(accountId, lifecycle);
+          await devices.clear(accountId, lifecycle, "reconcile");
           if (stale()) return transient;
           await bindDevice(key, accountId, signal, stale);
           return stale() ? transient : { kind: "reconciled" };
@@ -193,7 +199,7 @@ export function createAuthService(
         const status = await deviceStatus(convexURL!, key, shown, signal);
         if (stale()) return transient;
         if (!(status.known && status.behind)) return { kind: "expired" };
-        await devices.clear(shown, lifecycle);
+        await devices.clear(shown, lifecycle, "revoke");
         return stale() ? transient : { kind: "revoked", accountId: shown };
       } catch {
         return transient;

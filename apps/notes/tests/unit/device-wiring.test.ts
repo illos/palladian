@@ -159,4 +159,81 @@ describe("device clean-up through the cache and session controller", () => {
     await vi.waitFor(() => expect(recovery.size).toBe(0));
     a.session.stop();
   });
+
+  test("a refused clear leaves a newer lifecycle's memory-only drafts and view alone", async () => {
+    const store = new NotesStore(database);
+    await store.allowAccount(
+      "u",
+      await store.captureActivationFence(),
+      () => true,
+    );
+    await store.clearAccount("u");
+    await store.allowAccount(
+      "u",
+      await store.captureActivationFence(),
+      () => true,
+    );
+    expect(await store.lifecycleOf("u")).toBe(1);
+    const drafts = (
+      store as unknown as {
+        db: { drafts: { put: (...args: unknown[]) => unknown } };
+      }
+    ).db.drafts;
+    drafts.put = () => {
+      throw new DOMException("quota", "QuotaExceededError");
+    };
+    await store
+      .writeDraft(draft("Newer, only in memory"))
+      .catch(() => undefined);
+    expect((await store.unsavedWork("u")).total).toBe(1);
+    // A check that read lifecycle 0 decides to clear: it must change nothing.
+    expect(
+      await store.clearAccount("u", crypto.randomUUID(), { lifecycle: 0 }),
+    ).toBe(false);
+    expect((await store.unsavedWork("u")).total).toBe(1);
+  });
+
+  test("after a revocation's own clear, the controller cannot clear a newer lifecycle", async () => {
+    browserAccountHints(storage).remember("u");
+    server.devices.u = { known: true, behind: true };
+    const a = tab();
+    const b = new NotesStore(database);
+    const clear = a.store.clearAccount.bind(a.store);
+    let calls = 0;
+    a.store.clearAccount = async (...args: Parameters<typeof clear>) => {
+      const result = await clear(...args);
+      // Between the device check's clear and the controller's, another tab
+      // signs in, begins a newer lifecycle and saves work.
+      if (++calls === 1) {
+        await b.allowAccount("u", await b.captureActivationFence(), () => true);
+        await b.writeDraft(draft("Saved in the newer lifecycle"));
+      }
+      return result;
+    };
+    a.session.start();
+    await vi.waitFor(() => expect(status(a)).toBe("revoked"), {
+      timeout: 5000,
+    });
+    await vi.waitFor(() => expect(calls).toBe(2));
+    expect(await b.hasDrafts("u")).toBe(true);
+    a.session.stop();
+  });
+
+  test("another tab's reconciling clear makes this tab check again, not sign out", async () => {
+    server.session = true;
+    browserAccountHints(storage).remember("u");
+    const a = tab();
+    const b = tab();
+    let release!: () => void;
+    server.holdStatus = new Promise<void>((resolve) => (release = resolve));
+    a.session.start();
+    await vi.waitFor(() => expect(server.statusRequests).toBe(1));
+    b.session.start();
+    await vi.waitFor(() => expect(status(b)).toBe("ready"), { timeout: 5000 });
+    await vi.waitFor(() => expect(status(a)).toBe("ready"), { timeout: 5000 });
+    release();
+    expect(a.session.getSnapshot().accountId).toBe("u");
+    a.session.stop();
+    b.session.stop();
+  });
 });
