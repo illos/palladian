@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { ConvexProvider, useMutation, useQuery } from "convex/react";
 import { api } from "@palladian/notes-backend/api";
-import { deviceSecret, type createAuthService } from "./auth-service";
+import type { createAuthService } from "./auth-service";
 import { transportError } from "./live";
 import { liveStateSource, type LiveBox } from "./liveBox";
 import type { SessionController } from "./session";
@@ -615,15 +615,17 @@ function ResetBody({
         setBusy(true);
         setError(null);
         const since = started(session, connection);
-        const device = deviceSecret();
-        void live.client
-          .action(api.passwords.reset, {
-            token,
-            newPassword: password,
-            agents,
-            // This browser makes the reset and keeps its copies (D98).
-            ...(device ? { device } : {}),
-          })
+        void connection
+          .deviceSecret()
+          .then((device) =>
+            live.client.action(api.passwords.reset, {
+              token,
+              newPassword: password,
+              agents,
+              // This browser makes the reset and keeps its copies (D98).
+              ...(device ? { device } : {}),
+            }),
+          )
           .then(async ({ email, agentsDisconnected }) => {
             const outcome = await signInAfter(
               session,

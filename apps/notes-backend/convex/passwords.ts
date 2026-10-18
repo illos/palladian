@@ -5,7 +5,7 @@ import { action, internalMutation, internalQuery } from "./_generated/server";
 import { fail } from "./access";
 import { authOptions } from "./auth";
 import { disconnectAgents } from "./connections";
-import { bindDevice } from "./devices";
+import { exemptResettingDevice } from "./devices";
 
 const EXPIRED =
   "This reset link has expired or was already used. Request a new one.";
@@ -134,10 +134,10 @@ export const finishReset = internalMutation({
       .withIndex("by_auth_user", (q) => q.eq("authUserId", userId))
       .unique();
     if (person) {
-      const resetEpoch = (person.resetEpoch ?? 0) + 1;
-      await ctx.db.patch(person._id, { resetEpoch });
-      if (args.device && /^[A-Za-z0-9_-]{32,128}$/.test(args.device))
-        await bindDevice(ctx, args.device, person._id, resetEpoch);
+      const previousEpoch = person.resetEpoch ?? 0;
+      await ctx.db.patch(person._id, { resetEpoch: previousEpoch + 1 });
+      if (args.device)
+        await exemptResettingDevice(ctx, args.device, person, previousEpoch);
     }
     const agentsDisconnected =
       args.agents === "disconnect" ? await disconnectAgents(ctx, userId) : 0;

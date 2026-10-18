@@ -105,6 +105,8 @@ class NotesDatabase extends Dexie {
     },
     [string, string]
   >;
+  /** This browser's device secret (D98), kept with the copies it vouches for. */
+  device!: Table<{ key: string; secret: string }, string>;
   constructor(name: string) {
     super(name);
     this.version(1).stores({
@@ -130,6 +132,9 @@ class NotesDatabase extends Dexie {
             .table("summaries")
             .update([draft.accountId, draft.id], { source: draft.source });
     });
+    // The device secret lives in the same database as the copies it vouches
+    // for, so the two are lost together or not at all (D98).
+    this.version(5).stores({ device: "key" });
   }
 }
 
@@ -824,6 +829,40 @@ export class NotesStore {
     );
   }
   /** Whether unsaved work is kept for this account; see `unsavedWork`. */
+  /**
+   * This browser's secret for the server's device records (D98), created once.
+   * One transaction reads and creates it, so every tab gets the same secret.
+   */
+  async deviceSecret(): Promise<string> {
+    return this.db.transaction("rw", this.db.device, async () => {
+      const stored = await this.db.device.get("secret");
+      if (stored) return stored.secret;
+      const bytes = crypto.getRandomValues(new Uint8Array(32));
+      const secret = btoa(String.fromCharCode(...bytes))
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+      await this.db.device.put({ key: "secret", secret });
+      return secret;
+    });
+  }
+  /** Whether this browser stores any of the account's notes, text, drafts or notebooks. */
+  async hasCopies(accountId: string): Promise<boolean> {
+    const { summaries, bodies, drafts, notebooks } = this.db;
+    return this.db.transaction(
+      "r",
+      [summaries, bodies, drafts, notebooks],
+      async () => {
+        const counts = await Promise.all([
+          summaries.where("accountId").equals(accountId).count(),
+          bodies.where("accountId").equals(accountId).count(),
+          drafts.where("accountId").equals(accountId).count(),
+          notebooks.where("accountId").equals(accountId).count(),
+        ]);
+        return counts.some((count) => count > 0);
+      },
+    );
+  }
   async hasDrafts(accountId: string) {
     return (await this.unsavedWork(accountId)).total > 0;
   }

@@ -1,3 +1,4 @@
+import "fake-indexeddb/auto";
 // The installed Better Auth client (with the repo's cross-domain patch) over a
 // fake auth server and a fake platform authenticator.
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -59,7 +60,9 @@ const server = {
   requests: [] as string[],
   clearSessionOnOptions: false,
   session: null as null | { createdAt: string },
-  devices: [] as { accountId: string; revoked: boolean }[] | "fail",
+  devices: {} as Record<string, { known: boolean; behind: boolean }>,
+  statusFails: false,
+  bindAnswer: 200,
   binds: [] as (string | null)[],
   statusGate: null as null | Promise<void>,
   signInGate: null as null | Promise<void>,
@@ -89,11 +92,17 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       });
     if (body.path === "devices:bind") {
       server.binds.push(new Headers(init?.headers).get("Authorization"));
+      // The fake token belongs to account "u"; the binding commits even if
+      // the answer is then lost.
+      server.devices.u = { known: true, behind: false };
+      if (server.bindAnswer !== 200)
+        return new Response("lost", { status: server.bindAnswer });
       return ok(null);
     }
     if (server.statusGate) await server.statusGate;
-    if (server.devices === "fail") return new Response("busy", { status: 503 });
-    return ok(server.devices);
+    if (server.statusFails) return new Response("busy", { status: 503 });
+    const { accountId } = body.args as { accountId: string };
+    return ok(server.devices[accountId] ?? { known: false, behind: false });
   }
   const path = url.pathname.replace("/api/auth", "");
   const method =
@@ -134,8 +143,9 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   });
 }) as typeof fetch;
 
-const { createAuthService, authMoment, deviceSecret } =
+const { createAuthService, authMoment } =
   await import("../../src/auth-service");
+const { NotesStore } = await import("../../src/cache");
 const { passkeyCeremony, signInAfter, started } =
   await import("../../src/sign-in-flow");
 
@@ -174,7 +184,9 @@ beforeEach(() => {
   server.requests = [];
   server.clearSessionOnOptions = false;
   server.session = null;
-  server.devices = [];
+  server.devices = {};
+  server.statusFails = false;
+  server.bindAnswer = 200;
   server.binds = [];
   server.statusGate = null;
   server.signInGate = null;
@@ -300,91 +312,177 @@ describe("signing in after a reset or account creation", () => {
 describe("browsers holding copies from before a password reset (D98)", () => {
   const signal = () => new AbortController().signal;
   const live = { createdAt: "2026-10-18T10:00:00.000Z" };
+  const copies = new Set<string>();
+  const device = {
+    secret: async () => "s".repeat(43),
+    hasCopies: async (accountId: string) => copies.has(accountId),
+  };
+  const service = () => createAuthService(SITE, CONVEX, device).service;
+  beforeEach(() => copies.clear());
 
-  test("a signed-in browser new to the account is recorded before it opens", async () => {
-    const { service } = createAuthService(SITE, CONVEX);
+  test("a new browser without copies is recorded before the account opens", async () => {
     server.session = live;
-    expect(await service.check(signal(), null)).toEqual({
+    expect(await service().check(signal(), null)).toEqual({
       kind: "ready",
       accountId: "u",
     });
     expect(server.binds).toEqual(["Bearer jwt"]);
-    expect(deviceSecret()).toMatch(/^[A-Za-z0-9_-]{43}$/);
   });
 
   test("a current browser opens without recording again", async () => {
-    const { service } = createAuthService(SITE, CONVEX);
     server.session = live;
-    server.devices = [{ accountId: "u", revoked: false }];
-    expect(await service.check(signal(), "u")).toEqual({
+    server.devices.u = { known: true, behind: false };
+    copies.add("u");
+    expect(await service().check(signal(), "u")).toEqual({
       kind: "ready",
       accountId: "u",
     });
     expect(server.binds).toEqual([]);
   });
 
-  test("signing in again does not keep copies from before a reset", async () => {
-    const { service } = createAuthService(SITE, CONVEX);
+  test("copies from before a reset are cleared first, even after signing in again", async () => {
     server.session = live;
-    server.devices = [{ accountId: "u", revoked: true }];
-    expect(await service.check(signal(), "u")).toEqual({
+    server.devices.u = { known: true, behind: true };
+    copies.add("u");
+    expect(await service().check(signal(), "u")).toEqual({
       kind: "revoked",
       accountId: "u",
     });
-    // Recorded as current first, so after the clear the next sign-in opens.
+    // Not recorded as current until the copies are gone.
+    expect(server.binds).toEqual([]);
+    copies.delete("u");
+    expect(await service().check(signal(), null)).toEqual({
+      kind: "ready",
+      accountId: "u",
+    });
     expect(server.binds).toEqual(["Bearer jwt"]);
   });
 
-  test("no session and copies from before a reset: revoked", async () => {
-    const { service } = createAuthService(SITE, CONVEX);
-    server.devices = [{ accountId: "u", revoked: true }];
-    expect(await service.check(signal(), "u")).toEqual({
+  test("behind a reset but holding no copies, it opens straight away", async () => {
+    server.session = live;
+    server.devices.u = { known: true, behind: true };
+    expect(await service().check(signal(), null)).toEqual({
+      kind: "ready",
+      accountId: "u",
+    });
+  });
+
+  test("copies in a browser unknown here (lost identity) are cleared before opening", async () => {
+    server.session = live;
+    copies.add("u");
+    expect(await service().check(signal(), "u")).toEqual({
+      kind: "revoked",
+      accountId: "u",
+    });
+    expect(server.binds).toEqual([]);
+  });
+
+  test("the account on screen is cleared before switching to another", async () => {
+    server.session = live;
+    server.devices.u = { known: true, behind: false };
+    server.devices.shown = { known: true, behind: true };
+    copies.add("shown");
+    expect(await service().check(signal(), "shown")).toEqual({
+      kind: "revoked",
+      accountId: "shown",
+    });
+  });
+
+  test("a lost answer to a committed recording is retried, and nothing is skipped", async () => {
+    server.session = live;
+    server.bindAnswer = 503;
+    expect((await service().check(signal(), null)).kind).toBe("transient");
+    server.bindAnswer = 200;
+    expect(await service().check(signal(), null)).toEqual({
+      kind: "ready",
+      accountId: "u",
+    });
+  });
+
+  test("no session, behind a reset, holding copies: revoked", async () => {
+    server.devices.u = { known: true, behind: true };
+    copies.add("u");
+    expect(await service().check(signal(), "u")).toEqual({
       kind: "revoked",
       accountId: "u",
     });
   });
 
-  test("no session and current copies: plain expiry keeps them", async () => {
-    const { service } = createAuthService(SITE, CONVEX);
-    server.devices = [{ accountId: "u", revoked: false }];
-    expect(await service.check(signal(), "u")).toEqual({ kind: "expired" });
-  });
-
-  test("another account's revocation is not this account's", async () => {
-    const { service } = createAuthService(SITE, CONVEX);
-    server.devices = [{ accountId: "other", revoked: true }];
-    expect(await service.check(signal(), "u")).toEqual({ kind: "expired" });
+  test("no session otherwise: plain expiry keeps the copies", async () => {
+    copies.add("u");
+    expect(await service().check(signal(), "u")).toEqual({ kind: "expired" });
+    server.devices.u = { known: true, behind: false };
+    expect(await service().check(signal(), "u")).toEqual({ kind: "expired" });
+    server.devices.u = { known: true, behind: true };
+    copies.clear();
+    expect(await service().check(signal(), "u")).toEqual({ kind: "expired" });
+    expect(await service().check(signal(), null)).toEqual({ kind: "expired" });
   });
 
   test("a failed question is retried, never taken as revocation", async () => {
-    const { service } = createAuthService(SITE, CONVEX);
-    server.devices = "fail";
-    expect((await service.check(signal(), "u")).kind).toBe("transient");
+    server.statusFails = true;
+    copies.add("u");
+    expect((await service().check(signal(), "u")).kind).toBe("transient");
+    server.session = live;
+    expect((await service().check(signal(), "u")).kind).toBe("transient");
   });
 
-  test("with nothing shown there is nothing to revoke", async () => {
-    const { service } = createAuthService(SITE, CONVEX);
-    server.devices = [{ accountId: "u", revoked: true }];
-    server.requests = [];
-    expect(await service.check(signal(), null)).toEqual({ kind: "expired" });
-  });
-
-  test("a sign-in in another tab outranks a late revocation answer", async () => {
-    const { service } = createAuthService(SITE, CONVEX);
-    const other = createAuthService(SITE, CONVEX);
-    server.devices = [{ accountId: "u", revoked: true }];
-    let release!: () => void;
-    server.statusGate = new Promise<void>((resolve) => (release = resolve));
-    const checking = service.check(signal(), "u");
-    await vi.waitFor(() =>
-      expect(server.requests).toContain("GET /get-session"),
-    );
-    await other.auth.signIn.email({
-      email: "ada@example.com",
-      password: "x".repeat(12),
+  test("without a device store nothing is asked", async () => {
+    server.session = live;
+    const { service: plain } = createAuthService(SITE, CONVEX);
+    expect(await plain.check(signal(), "u")).toEqual({
+      kind: "ready",
+      accountId: "u",
     });
-    release();
-    expect((await checking).kind).toBe("transient");
+    expect(server.binds).toEqual([]);
+  });
+
+  for (const withSession of [false, true])
+    test(`a sign-in in another tab outranks a late answer (${withSession ? "live session" : "no session"})`, async () => {
+      server.session = withSession ? live : null;
+      server.devices.u = { known: true, behind: !withSession };
+      copies.add("u");
+      const other = createAuthService(SITE, CONVEX);
+      let release!: () => void;
+      server.statusGate = new Promise<void>((resolve) => (release = resolve));
+      const checking = service().check(signal(), "u");
+      await vi.waitFor(() =>
+        expect(server.requests).toContain("GET /get-session"),
+      );
+      await other.auth.signIn.email({
+        email: "bo@example.com",
+        password: "x".repeat(12),
+      });
+      release();
+      expect((await checking).kind).toBe("transient");
+    });
+});
+
+describe("the device secret lives in the notes cache", () => {
+  test("tabs creating it at once agree on one secret", async () => {
+    const name = "device-" + crypto.randomUUID();
+    const first = new NotesStore(name);
+    const second = new NotesStore(name);
+    const [a, b] = await Promise.all([
+      first.deviceSecret(),
+      second.deviceSecret(),
+    ]);
+    expect(a).toBe(b);
+    expect(a).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(await first.deviceSecret()).toBe(a);
+  });
+
+  test("copies are counted per account", async () => {
+    const store = new NotesStore("copies-" + crypto.randomUUID());
+    expect(await store.hasCopies("u")).toBe(false);
+    const db = (
+      store as unknown as {
+        db: { drafts: { put(row: unknown): Promise<unknown> } };
+      }
+    ).db;
+    await db.drafts.put({ accountId: "u", id: "n1", doc: "{}", updatedAt: 1 });
+    expect(await store.hasCopies("u")).toBe(true);
+    expect(await store.hasCopies("someone-else")).toBe(false);
   });
 });
 

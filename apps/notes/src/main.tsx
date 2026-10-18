@@ -148,6 +148,10 @@ if (!fixture && typeof siteURL === "string" && siteURL) {
       const connection = createAuthService(
         siteURL,
         typeof convexURL === "string" && convexURL ? convexURL : undefined,
+        {
+          secret: () => store.deviceSecret(),
+          hasCopies: (accountId) => store.hasCopies(accountId),
+        },
       );
       transport = connection.service;
       if (typeof convexURL === "string" && convexURL) {

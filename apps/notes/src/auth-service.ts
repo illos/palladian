@@ -6,27 +6,13 @@ import {
 } from "@convex-dev/better-auth/client/plugins";
 import type { SessionService } from "./session";
 
-const DEVICE_KEY = "palladian.notes.device.v1";
-
 /**
- * A random secret identifying this browser to the server's device records
- * (D98). Only its hash is stored there; only this browser can ask about it.
+ * This browser's side of the server's device records (D98), kept by the notes
+ * cache: the secret lives with the copies it vouches for.
  */
-export function deviceSecret(): string | null {
-  try {
-    const stored = localStorage.getItem(DEVICE_KEY);
-    if (stored && /^[A-Za-z0-9_-]{43}$/.test(stored)) return stored;
-    const bytes = crypto.getRandomValues(new Uint8Array(32));
-    const secret = btoa(String.fromCharCode(...bytes))
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/, "");
-    localStorage.setItem(DEVICE_KEY, secret);
-    return secret;
-  } catch {
-    // Without storage the browser cannot take part; it keeps expiry behaviour.
-    return null;
-  }
+export interface DeviceStore {
+  secret(): Promise<string>;
+  hasCopies(accountId: string): Promise<boolean>;
 }
 
 /** One Convex function call over HTTP, outside the live connection. */
@@ -53,35 +39,73 @@ async function convexCall(
   return body.value;
 }
 
-interface DeviceEntry {
-  accountId: string;
-  revoked: boolean;
+interface DeviceStatus {
+  known: boolean;
+  behind: boolean;
 }
 
 async function deviceStatus(
   convexURL: string,
   secret: string,
+  accountId: string,
   signal: AbortSignal,
-): Promise<DeviceEntry[]> {
+): Promise<DeviceStatus> {
   const value = await convexCall(
     convexURL,
     "query",
     "devices:status",
-    { secret },
+    { secret, accountId },
     signal,
   );
-  if (!Array.isArray(value)) throw new Error("Device check unavailable");
-  return value as DeviceEntry[];
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !("known" in value) ||
+    !("behind" in value) ||
+    typeof value.known !== "boolean" ||
+    typeof value.behind !== "boolean"
+  )
+    throw new Error("Device check unavailable");
+  return { known: value.known, behind: value.behind };
 }
 
 /** The official client owns credentials; the notes display never awaits this module. */
-export function createAuthService(siteURL: string, convexURL?: string) {
+export function createAuthService(
+  siteURL: string,
+  convexURL?: string,
+  device?: DeviceStore,
+) {
   const auth = createAuthClient({
     baseURL: siteURL,
     plugins: [convexClient(), crossDomainClient(), passkeyClient()],
   });
-  /** Record with the signed-in session that this browser is current. */
-  async function bindDevice(secret: string, signal: AbortSignal) {
+  /** The device secret, or null where the cache cannot keep one (then it keeps no copies either). */
+  async function secret(): Promise<string | null> {
+    if (!convexURL || !device) return null;
+    try {
+      return await device.secret();
+    } catch {
+      return null;
+    }
+  }
+  /**
+   * Whether this browser must clear the account's copies before showing it
+   * again: it is behind a password reset, or unknown here (new, or its
+   * identity was lost), while it still stores copies that cannot be shown to
+   * postdate the last reset (D98).
+   */
+  async function owesClearing(
+    key: string,
+    accountId: string,
+    signal: AbortSignal,
+  ): Promise<{ owes: boolean; current: boolean }> {
+    const status = await deviceStatus(convexURL!, key, accountId, signal);
+    const current = status.known && !status.behind;
+    if (current) return { owes: false, current };
+    return { owes: await device!.hasCopies(accountId), current };
+  }
+  /** Record with the signed-in session that this browser holds no older copies. */
+  async function bindDevice(key: string, signal: AbortSignal) {
     const result = await auth.convex.token({
       fetchOptions: { signal, throw: false },
     });
@@ -91,7 +115,7 @@ export function createAuthService(siteURL: string, convexURL?: string) {
       convexURL!,
       "mutation",
       "devices:bind",
-      { secret },
+      { secret: key },
       signal,
       token,
     );
@@ -101,41 +125,47 @@ export function createAuthService(siteURL: string, convexURL?: string) {
     message: "Session service unavailable",
   } as const;
   const service: SessionService = {
-    async check(signal, hinted) {
+    async check(signal, shown) {
       const before = authMoment(auth);
+      // A newer sign-in or sign-out (in any tab) outranks anything this
+      // check learned; it is asked again after every wait.
+      const stale = () => signal.aborted || superseded(auth, before);
       try {
         const result = await auth.getSession({
           fetchOptions: { signal, throw: false },
         });
         if (signal.aborted || result.error) return transient;
-        const secret = convexURL ? deviceSecret() : null;
+        const key = await secret();
         if (result.data) {
           const accountId = result.data.user.id;
-          if (!secret) return { kind: "ready", accountId };
-          const known = (await deviceStatus(convexURL!, secret, signal)).find(
-            (entry) => entry.accountId === accountId,
-          );
-          if (known && !known.revoked) return { kind: "ready", accountId };
-          // New to this browser, or holding copies from before a password
-          // reset: record that it is current before this account's copies
-          // can appear here; old copies are then cleared as revoked (D98).
-          // An interrupted clear resumes after reload (pending cleanup).
-          await bindDevice(secret, signal);
-          if (signal.aborted || superseded(auth, before)) return transient;
-          return known?.revoked
-            ? { kind: "revoked", accountId }
-            : { kind: "ready", accountId };
+          if (!key) return stale() ? transient : { kind: "ready", accountId };
+          // The account on screen first: its copies from before a reset are
+          // cleared before a switch could offer them for export.
+          if (shown && shown !== accountId) {
+            const previous = await owesClearing(key, shown, signal);
+            if (stale()) return transient;
+            if (previous.owes) return { kind: "revoked", accountId: shown };
+          }
+          const standing = await owesClearing(key, accountId, signal);
+          if (stale()) return transient;
+          // Clear first; the server hears this browser is current only once
+          // no older copies remain, so a lost answer cannot skip the clear.
+          if (standing.owes) return { kind: "revoked", accountId };
+          if (!standing.current) {
+            await bindDevice(key, signal);
+            if (stale()) return transient;
+          }
+          return { kind: "ready", accountId };
         }
-        // No session. Only a server answer that this browser's copies of the
-        // account predate a reset revokes it; otherwise it is plain expiry.
-        if (!hinted || !secret) return { kind: "expired" };
-        const entry = (await deviceStatus(convexURL!, secret, signal)).find(
-          (candidate) => candidate.accountId === hinted,
-        );
-        // A newer sign-in or sign-out meanwhile (in any tab) outranks this answer.
-        if (signal.aborted || superseded(auth, before)) return transient;
-        return entry?.revoked
-          ? { kind: "revoked", accountId: hinted }
+        // No session: revoked only when the server says this browser is
+        // behind a reset for the account on screen and it still holds copies.
+        if (!shown || !key) return { kind: "expired" };
+        const status = await deviceStatus(convexURL!, key, shown, signal);
+        const copies =
+          status.known && status.behind && (await device!.hasCopies(shown));
+        if (stale()) return transient;
+        return copies
+          ? { kind: "revoked", accountId: shown }
           : { kind: "expired" };
       } catch {
         return transient;
@@ -148,7 +178,7 @@ export function createAuthService(siteURL: string, convexURL?: string) {
       if (result.error) throw new Error("Remote sign-out unavailable");
     },
   };
-  return { auth, service };
+  return { auth, service, deviceSecret: secret };
 }
 
 export type AuthClient = ReturnType<typeof createAuthService>["auth"];
