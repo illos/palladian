@@ -12,9 +12,14 @@ import type { SessionCheck } from "./session";
  */
 export interface DeviceStore {
   secret(): Promise<string>;
-  hasCopies(accountId: string): Promise<boolean>;
-  /** Clear the account's copies in every tab (the cache's fenced clear). */
-  clear(accountId: string): Promise<void>;
+  /** The account's stored lifecycle, read before asking the server. */
+  lifecycle(accountId: string): Promise<number>;
+  /**
+   * Clear the account's copies in every tab (the cache's fenced clear, which
+   * also drops other tabs' memory-only drafts). Fails, changing nothing, if
+   * a tab has begun a newer lifecycle of the account since `lifecycle`.
+   */
+  clear(accountId: string, lifecycle: number): Promise<void>;
 }
 
 /**
@@ -143,46 +148,53 @@ export function createAuthService(
           // Failing to read or create the secret proves nothing about the
           // copies here: retry rather than open (cached viewing continues).
           const key = await devices.secret();
+          const switching = shown && shown !== accountId ? shown : null;
+          // Lifecycles are read before the server is asked: a clear decided
+          // on its answer applies only if no tab has since begun a newer one.
+          const shownLifecycle = switching
+            ? await devices.lifecycle(switching)
+            : 0;
+          const lifecycle = await devices.lifecycle(accountId);
           if (stale()) return transient;
-          // The account on screen first: its copies from before a reset are
-          // cleared before a switch could offer them for export.
-          if (shown && shown !== accountId) {
-            const previous = await deviceStatus(convexURL!, key, shown, signal);
-            const owes =
-              !(previous.known && !previous.behind) &&
-              (await devices.hasCopies(shown));
+          // The account on screen first: if this browser is behind a reset
+          // for it, or unknown, its copies go before a switch could offer
+          // them for export.
+          if (switching) {
+            const previous = await deviceStatus(
+              convexURL!,
+              key,
+              switching,
+              signal,
+            );
             if (stale()) return transient;
-            if (owes) return { kind: "revoked", accountId: shown };
+            if (!(previous.known && !previous.behind)) {
+              await devices.clear(switching, shownLifecycle);
+              if (stale()) return transient;
+            }
           }
           const status = await deviceStatus(convexURL!, key, accountId, signal);
           if (stale()) return transient;
           if (status.known && !status.behind)
             return { kind: "ready", accountId };
-          // Behind a reset, or unknown here (new, or its identity was lost).
-          // Copies seen here are removed as on revocation, with notice.
-          const copies = await devices.hasCopies(accountId);
-          if (stale()) return transient;
-          if (copies) return { kind: "revoked", accountId };
-          // None seen here: still clear the account in every tab, dropping
-          // drafts other tabs hold only in memory, and only then tell the
-          // server this browser is current (D98).
-          await devices.clear(accountId);
+          // Behind a reset, or unknown here (new, or its identity was lost):
+          // clear the account in every tab, then tell the server this browser
+          // is current, then check again under a fresh fence (D98).
+          await devices.clear(accountId, lifecycle);
           if (stale()) return transient;
           await bindDevice(key, accountId, signal, stale);
           return stale() ? transient : { kind: "reconciled" };
         }
-        // No session: revoked only when the server says this browser is
-        // behind a reset for the account on screen and it holds copies.
+        // No session. Behind a reset for the account on screen: clear it in
+        // every tab and report the revocation. Otherwise plain expiry.
         if (!devices || !shown)
           return stale() ? transient : { kind: "expired" };
         const key = await devices.secret();
+        const lifecycle = await devices.lifecycle(shown);
         const status = await deviceStatus(convexURL!, key, shown, signal);
-        const copies =
-          status.known && status.behind && (await devices.hasCopies(shown));
         if (stale()) return transient;
-        return copies
-          ? { kind: "revoked", accountId: shown }
-          : { kind: "expired" };
+        if (!(status.known && status.behind)) return { kind: "expired" };
+        await devices.clear(shown, lifecycle);
+        return stale() ? transient : { kind: "revoked", accountId: shown };
       } catch {
         return transient;
       }

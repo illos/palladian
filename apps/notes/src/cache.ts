@@ -622,13 +622,15 @@ export class NotesStore {
   async clearAccount(
     accountId: string,
     operation: string = crypto.randomUUID(),
+    /** The lifecycle the caller decided about; a newer one refuses the clear. */
+    lifecycle?: number,
   ): Promise<boolean> {
     if (!this.clearOps.has(operation)) {
       await this.lifecyclesLoaded;
       if (!this.clearOps.has(operation)) {
         this.clearOps.set(operation, {
           accountId,
-          lifecycle: this.lifecycles.get(accountId),
+          lifecycle: lifecycle ?? this.lifecycles.get(accountId),
           result: null,
           attempts: 0,
         });
@@ -861,27 +863,11 @@ export class NotesStore {
     });
   }
   /**
-   * Whether this browser holds any of the account's notes, text, drafts or
-   * notebooks, including drafts this tab keeps only in memory after a failed
-   * write. Other tabs' memory-only drafts are dropped by a clear's broadcast.
+   * The account's current lifecycle as stored (shared by every tab). A
+   * decision taken about this lifecycle can be enforced by `clearAccount`.
    */
-  async hasCopies(accountId: string): Promise<boolean> {
-    for (const draft of this.recoveryDrafts.values())
-      if (draft.accountId === accountId) return true;
-    const { summaries, bodies, drafts, notebooks } = this.db;
-    return this.db.transaction(
-      "r",
-      [summaries, bodies, drafts, notebooks],
-      async () => {
-        const counts = await Promise.all([
-          summaries.where("accountId").equals(accountId).count(),
-          bodies.where("accountId").equals(accountId).count(),
-          drafts.where("accountId").equals(accountId).count(),
-          notebooks.where("accountId").equals(accountId).count(),
-        ]);
-        return counts.some((count) => count > 0);
-      },
-    );
+  async lifecycleOf(accountId: string): Promise<number> {
+    return (await this.db.accounts.get(accountId))?.lifecycle ?? 0;
   }
   async hasDrafts(accountId: string) {
     return (await this.unsavedWork(accountId)).total > 0;

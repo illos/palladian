@@ -152,8 +152,6 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 const { createAuthService, authMoment } =
   await import("../../src/auth-service");
 const { NotesStore } = await import("../../src/cache");
-const { draftOf } = await import("./fake-server");
-const { markdownToDoc } = await import("@palladian/notes-core");
 const { passkeyCeremony, signInAfter, started } =
   await import("../../src/sign-in-flow");
 
@@ -322,27 +320,30 @@ describe("signing in after a reset or account creation", () => {
 describe("browsers holding copies from before a password reset (D98)", () => {
   const signal = () => new AbortController().signal;
   const live = { createdAt: "2026-10-18T10:00:00.000Z" };
-  const copies = new Set<string>();
   const steps: string[] = [];
   let secretFails = false;
+  let clearRefused = false;
   let onClear: null | (() => Promise<void>) = null;
   const device = {
     secret: async () => {
       if (secretFails) throw new DOMException("quota", "QuotaExceededError");
       return "s".repeat(43);
     },
-    hasCopies: async (accountId: string) => copies.has(accountId),
-    clear: async (accountId: string) => {
-      steps.push(`clear ${accountId}`);
-      copies.delete(accountId);
+    lifecycle: async (accountId: string) => {
+      steps.push(`lifecycle ${accountId}`);
+      return 7;
+    },
+    clear: async (accountId: string, lifecycle: number) => {
+      steps.push(`clear ${accountId}@${lifecycle}`);
+      if (clearRefused) throw new Error("Clear superseded");
       await onClear?.();
     },
   };
   const service = () => createAuthService(SITE, CONVEX, device).service;
   beforeEach(() => {
-    copies.clear();
     steps.length = 0;
     secretFails = false;
+    clearRefused = false;
     onClear = null;
   });
   const recorded = () => server.binds.length;
@@ -352,7 +353,8 @@ describe("browsers holding copies from before a password reset (D98)", () => {
     expect(await service().check(signal(), null)).toEqual({
       kind: "reconciled",
     });
-    expect(steps).toEqual(["clear u"]);
+    // The lifecycle is read before the server is asked, and binds the clear.
+    expect(steps).toEqual(["lifecycle u", "clear u@7"]);
     expect(server.binds).toEqual(["Bearer jwt"]);
     expect(await service().check(signal(), null)).toEqual({
       kind: "ready",
@@ -364,70 +366,48 @@ describe("browsers holding copies from before a password reset (D98)", () => {
   test("a current browser opens without clearing or recording", async () => {
     server.session = live;
     server.devices.u = { known: true, behind: false };
-    copies.add("u");
     expect(await service().check(signal(), "u")).toEqual({
       kind: "ready",
       accountId: "u",
     });
-    expect(steps).toEqual([]);
+    expect(steps).toEqual(["lifecycle u"]);
     expect(recorded()).toBe(0);
   });
 
-  test("copies from before a reset are removed with notice before anything is recorded", async () => {
+  test("behind a reset, even after signing in again, it clears every tab before recording", async () => {
     server.session = live;
     server.devices.u = { known: true, behind: true };
-    copies.add("u");
     expect(await service().check(signal(), "u")).toEqual({
-      kind: "revoked",
-      accountId: "u",
-    });
-    expect(recorded()).toBe(0);
-    copies.delete("u");
-    expect(await service().check(signal(), null)).toEqual({
       kind: "reconciled",
     });
-    expect(await service().check(signal(), null)).toEqual({
-      kind: "ready",
-      accountId: "u",
-    });
-  });
-
-  test("behind a reset with nothing seen here, it still clears every tab before recording", async () => {
-    server.session = live;
-    server.devices.u = { known: true, behind: true };
-    expect(await service().check(signal(), null)).toEqual({
-      kind: "reconciled",
-    });
-    expect(steps).toEqual(["clear u"]);
+    expect(steps).toEqual(["lifecycle u", "clear u@7"]);
     expect(recorded()).toBe(1);
   });
 
-  test("copies in a browser unknown here (lost identity) are removed first", async () => {
+  test("a clear refused because a tab began a newer lifecycle records nothing", async () => {
     server.session = live;
-    copies.add("u");
-    expect(await service().check(signal(), "u")).toEqual({
-      kind: "revoked",
-      accountId: "u",
-    });
+    server.devices.u = { known: true, behind: true };
+    clearRefused = true;
+    expect((await service().check(signal(), "u")).kind).toBe("transient");
     expect(recorded()).toBe(0);
   });
 
-  test("the account on screen is removed before switching to another", async () => {
+  test("the account on screen is cleared before switching to another", async () => {
     server.session = live;
     server.devices.u = { known: true, behind: false };
     server.devices.shown = { known: true, behind: true };
-    copies.add("shown");
     expect(await service().check(signal(), "shown")).toEqual({
-      kind: "revoked",
-      accountId: "shown",
+      kind: "ready",
+      accountId: "u",
     });
+    expect(steps).toEqual(["lifecycle shown", "lifecycle u", "clear shown@7"]);
   });
 
   test("a lost answer to a committed recording is retried without skipping the clear", async () => {
     server.session = live;
     server.bindAnswer = 503;
     expect((await service().check(signal(), null)).kind).toBe("transient");
-    expect(steps).toEqual(["clear u"]);
+    expect(steps).toEqual(["lifecycle u", "clear u@7"]);
     server.bindAnswer = 200;
     expect(await service().check(signal(), null)).toEqual({
       kind: "ready",
@@ -472,24 +452,28 @@ describe("browsers holding copies from before a password reset (D98)", () => {
     expect(recorded()).toBe(0);
   });
 
-  test("no session, behind a reset, holding copies: revoked", async () => {
+  test("no session and behind a reset: every tab clears the account, then revoked", async () => {
     server.devices.u = { known: true, behind: true };
-    copies.add("u");
     expect(await service().check(signal(), "u")).toEqual({
       kind: "revoked",
       accountId: "u",
     });
+    expect(steps).toEqual(["lifecycle u", "clear u@7"]);
+  });
+
+  test("no session: a clear refused for a newer lifecycle is retried, not reported", async () => {
+    server.devices.u = { known: true, behind: true };
+    clearRefused = true;
+    expect((await service().check(signal(), "u")).kind).toBe("transient");
   });
 
   test("no session otherwise: plain expiry keeps the copies", async () => {
-    copies.add("u");
     expect(await service().check(signal(), "u")).toEqual({ kind: "expired" });
     server.devices.u = { known: true, behind: false };
     expect(await service().check(signal(), "u")).toEqual({ kind: "expired" });
     server.devices.u = { known: true, behind: true };
-    copies.clear();
-    expect(await service().check(signal(), "u")).toEqual({ kind: "expired" });
     expect(await service().check(signal(), null)).toEqual({ kind: "expired" });
+    expect(steps.filter((step) => step.startsWith("clear"))).toEqual([]);
   });
 
   test("an expiry learned before another tab's sign-in is not reported", async () => {
@@ -511,7 +495,6 @@ describe("browsers holding copies from before a password reset (D98)", () => {
 
   test("a failed question is retried, never taken as revocation", async () => {
     server.statusFails = true;
-    copies.add("u");
     expect((await service().check(signal(), "u")).kind).toBe("transient");
     server.session = live;
     expect((await service().check(signal(), "u")).kind).toBe("transient");
@@ -531,7 +514,6 @@ describe("browsers holding copies from before a password reset (D98)", () => {
     test(`a sign-in in another tab outranks a late answer (${withSession ? "live session" : "no session"})`, async () => {
       server.session = withSession ? live : null;
       server.devices.u = { known: true, behind: !withSession };
-      copies.add("u");
       const other = createAuthService(SITE, CONVEX);
       let release!: () => void;
       server.statusGate = new Promise<void>((resolve) => (release = resolve));
@@ -567,29 +549,6 @@ describe("the device secret lives in the notes cache", () => {
     storage.setItem("palladian.notes.device.v1", legacy);
     const store = new NotesStore("legacy-" + crypto.randomUUID());
     expect(await store.deviceSecret()).toBe(legacy);
-  });
-
-  test("copies are counted per account, including drafts kept only in memory", async () => {
-    const store = new NotesStore("copies-" + crypto.randomUUID());
-    expect(await store.hasCopies("account")).toBe(false);
-    await store.allowAccount(
-      "account",
-      await store.captureActivationFence(),
-      () => true,
-    );
-    const drafts = (
-      store as unknown as {
-        db: { drafts: { put: (...args: unknown[]) => unknown } };
-      }
-    ).db.drafts;
-    drafts.put = () => {
-      throw new DOMException("quota", "QuotaExceededError");
-    };
-    await store
-      .writeDraft(draftOf(markdownToDoc("Unsaved typing")))
-      .catch(() => undefined);
-    expect(await store.hasCopies("account")).toBe(true);
-    expect(await store.hasCopies("someone-else")).toBe(false);
   });
 });
 
