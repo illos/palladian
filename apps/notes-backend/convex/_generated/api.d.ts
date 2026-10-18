@@ -15,6 +15,7 @@ import type * as config from "../config.js";
 import type * as connections from "../connections.js";
 import type * as crons from "../crons.js";
 import type * as documents from "../documents.js";
+import type * as email from "../email.js";
 import type * as history from "../history.js";
 import type * as http from "../http.js";
 import type * as invitations from "../invitations.js";
@@ -22,6 +23,7 @@ import type * as library from "../library.js";
 import type * as lifecycle from "../lifecycle.js";
 import type * as notebooks from "../notebooks.js";
 import type * as notes from "../notes.js";
+import type * as passwords from "../passwords.js";
 import type * as provision from "../provision.js";
 import type * as publishing from "../publishing.js";
 import type * as sharing from "../sharing.js";
@@ -41,6 +43,7 @@ declare const fullApi: ApiFromModules<{
   connections: typeof connections;
   crons: typeof crons;
   documents: typeof documents;
+  email: typeof email;
   history: typeof history;
   http: typeof http;
   invitations: typeof invitations;
@@ -48,6 +51,7 @@ declare const fullApi: ApiFromModules<{
   lifecycle: typeof lifecycle;
   notebooks: typeof notebooks;
   notes: typeof notes;
+  passwords: typeof passwords;
   provision: typeof provision;
   publishing: typeof publishing;
   sharing: typeof sharing;
@@ -81,5 +85,5 @@ export declare const internal: FilterApi<
 >;
 
 export declare const components: {
-  betterAuth: import("@convex-dev/better-auth/_generated/component.js").ComponentApi<"betterAuth">;
+  betterAuth: import("../betterAuth/_generated/component.js").ComponentApi<"betterAuth">;
 };

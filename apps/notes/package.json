@@ -12,6 +12,7 @@
     "test:offline": "playwright test --config playwright.offline.config.ts"
   },
   "dependencies": {
+    "@better-auth/passkey": "1.6.30",
     "@convex-dev/better-auth": "0.12.5",
     "@palladian/notes-backend": "workspace:*",
     "@palladian/notes-core": "workspace:*",

@@ -23,6 +23,10 @@ export type DeployedEnv = Omit<Env, "OAUTH_KV" | "OAUTH_PROVIDER"> & {
   OAUTH_DB?: D1Database;
   /** Per-address limit on anonymous client registration. */
   REGISTRATION_LIMIT?: RateLimit;
+  /** Account email (src/email.ts); without all three the relay answers 503. */
+  EMAIL?: SendEmail;
+  EMAIL_FROM?: string;
+  EMAIL_RELAY_SECRET?: string;
 };
 
 /** What `completeAuthorization()` stores and every MCP request receives. */

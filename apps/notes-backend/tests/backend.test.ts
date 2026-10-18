@@ -1,20 +1,24 @@
 /// <reference types="vite/client" />
-import betterAuthTest from "@convex-dev/better-auth/test";
 import { markdownToDoc, notesSchema } from "@palladian/notes-core";
 import { convexTest } from "convex-test";
 import { Transform } from "prosemirror-transform";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, components, internal } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
+import authSchema from "../convex/betterAuth/schema";
 import schema from "../convex/schema";
 
 const AGENT_ISSUER = "https://agent.test";
 process.env.AGENT_JWT_ISSUER = AGENT_ISSUER;
-const modules = import.meta.glob("../convex/**/*.ts");
+const modules = import.meta.glob([
+  "../convex/**/*.ts",
+  "!../convex/betterAuth/**",
+]);
+const authModules = import.meta.glob("../convex/betterAuth/**/*.ts");
 
 function setup() {
   const t = convexTest(schema, modules);
-  betterAuthTest.register(t);
+  t.registerComponent("betterAuth", authSchema, authModules);
   return t;
 }
 type T = ReturnType<typeof setup>;

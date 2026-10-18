@@ -22,6 +22,7 @@
       "/oauth/*",
       "/.well-known/*",
       "/connect",
+      "/internal/*",
     ],
   },
   // OAuth storage. The provider expects KV; the Worker adapts this D1
@@ -42,6 +43,14 @@
       "simple": { "limit": 10, "period": 60 },
     },
   ],
+  // Account email (password reset, invitations) from the onboarded sender
+  // domain; Convex hands messages to /internal/email (src/email.ts).
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "allowed_sender_addresses": ["notes@parabolic.studio"],
+    },
+  ],
   // Daily removal of registrations that never completed an authorization.
   "triggers": { "crons": ["23 4 * * *"] },
   "vars": {
@@ -49,8 +58,10 @@
     "PUBLIC_ORIGIN": "https://palladian.rdxx.workers.dev",
     "AGENT_JWT_ISSUER": "https://palladian.rdxx.workers.dev",
     "CONVEX_URL": "https://adamant-hound-861.convex.cloud",
+    "EMAIL_FROM": "notes@parabolic.studio",
   },
-  // Secret (not in this file): AGENT_JWT_PRIVATE_KEY, the private ES256 JWK
-  // as a JSON string. Set with `wrangler secret put AGENT_JWT_PRIVATE_KEY`.
+  // Secrets (not in this file): AGENT_JWT_PRIVATE_KEY, the private ES256 JWK
+  // as a JSON string, and EMAIL_RELAY_SECRET, shared with Convex. Set each
+  // with `wrangler secret put <NAME>`.
   "observability": { "enabled": true },
 }

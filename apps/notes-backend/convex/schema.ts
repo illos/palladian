@@ -218,4 +218,12 @@ export default defineSchema({
   })
     .index("by_token", ["tokenHash"])
     .index("by_inviter", ["invitedBy"]),
+
+  /** Recent account emails, kept briefly to limit sends per subject and overall. */
+  emailSends: defineTable({
+    key: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_key_and_created_at", ["key", "createdAt"])
+    .index("by_created_at", ["createdAt"]),
 });

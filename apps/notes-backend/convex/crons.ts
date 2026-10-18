@@ -8,4 +8,10 @@ crons.daily(
   internal.lifecycle.purgeExpired,
   {},
 );
+crons.daily(
+  "prune account email log",
+  { hourUTC: 4, minuteUTC: 41 },
+  internal.email.prune,
+  {},
+);
 export default crons;

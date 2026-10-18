@@ -5,9 +5,11 @@ import type { Doc, Id } from "./_generated/dataModel";
 import {
   action,
   internalMutation,
+  internalQuery,
   mutation,
   query,
   type MutationCtx,
+  type QueryCtx,
 } from "./_generated/server";
 import {
   fail,
@@ -18,6 +20,7 @@ import {
 } from "./access";
 import { authOptions } from "./auth";
 import { touchNote } from "./documents";
+import { relay, siteLink } from "./email";
 import { createNotebook } from "./notebooks";
 import { role } from "./schema";
 
@@ -163,6 +166,74 @@ export const create = mutation({
   },
 });
 
+async function targetName(ctx: QueryCtx, invitation: Doc<"invitations">) {
+  if (invitation.notebookId)
+    return (await ctx.db.get(invitation.notebookId))?.name ?? null;
+  if (invitation.noteId)
+    return (await ctx.db.get(invitation.noteId))?.title || "a note";
+  return null;
+}
+
+/** What an invitation email says: only for its inviter, while it is open. */
+export const emailDetails = internalQuery({
+  args: { tokenHash: v.string() },
+  returns: v.object({
+    id: v.id("invitations"),
+    email: v.string(),
+    inviterName: v.string(),
+    target: v.union(v.string(), v.null()),
+  }),
+  handler: async (ctx, args) => {
+    const actor = await requireHuman(ctx);
+    const invitation = await ctx.db
+      .query("invitations")
+      .withIndex("by_token", (q) => q.eq("tokenHash", args.tokenHash))
+      .unique();
+    if (
+      !invitation ||
+      invitation.invitedBy !== actor._id ||
+      invitation.acceptedAt !== undefined ||
+      invitation.revokedAt !== undefined ||
+      invitation.expiresAt <= Date.now()
+    )
+      fail("invalid", "This invitation is no longer valid.");
+    return {
+      id: invitation._id,
+      email: invitation.email,
+      inviterName: actor.name,
+      target: await targetName(ctx, invitation),
+    };
+  },
+});
+
+/**
+ * Email an invitation the caller just created. The link token exists only in
+ * the inviter's browser and this request; it is never stored or scheduled.
+ * Resolves false when the email could not be sent; the link still works.
+ */
+export const sendEmail = action({
+  args: { token: v.string() },
+  returns: v.boolean(),
+  handler: async (ctx, args): Promise<boolean> => {
+    if (args.token.length < 20 || args.token.length > 100)
+      fail("invalid", "This invitation is no longer valid.");
+    const details = await ctx.runQuery(internal.invitations.emailDetails, {
+      tokenHash: await hashToken(args.token),
+    });
+    const allowed = await ctx.runMutation(internal.email.reserve, {
+      key: `invite:${details.id}`,
+    });
+    if (!allowed) return false;
+    return relay({
+      kind: "invite",
+      to: details.email,
+      url: siteLink("/invite", args.token),
+      inviterName: details.inviterName,
+      target: details.target,
+    });
+  },
+});
+
 /** What an invitation link offers, without revealing anything beyond it. */
 export const preview = query({
   args: { token: v.string() },
@@ -192,11 +263,7 @@ export const preview = query({
     const inviter = invitation.invitedBy
       ? await ctx.db.get(invitation.invitedBy)
       : null;
-    let target: string | null = null;
-    if (invitation.notebookId)
-      target = (await ctx.db.get(invitation.notebookId))?.name ?? null;
-    else if (invitation.noteId)
-      target = (await ctx.db.get(invitation.noteId))?.title || "a note";
+    const target = await targetName(ctx, invitation);
     const account = await ctx.db
       .query("principals")
       .withIndex("by_email", (q) => q.eq("email", invitation.email))

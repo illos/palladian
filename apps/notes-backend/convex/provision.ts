@@ -1,5 +1,7 @@
 import { v } from "convex/values";
-import { internalMutation } from "./_generated/server";
+import { internal } from "./_generated/api";
+import { internalAction, internalMutation } from "./_generated/server";
+import { relay, siteLink } from "./email";
 import { hashToken, newToken, normalizeEmail } from "./invitations";
 
 const SETUP_TTL_MS = 7 * 24 * 60 * 60_000;
@@ -22,5 +24,25 @@ export const setupOwner = internalMutation({
       createdAt: now,
     });
     return { token, expiresAt: now + SETUP_TTL_MS };
+  },
+});
+
+/** Operator-only: email a new setup link instead of handing it over. */
+export const emailOwnerSetup = internalAction({
+  args: { email: v.string() },
+  returns: v.object({ sent: v.boolean(), expiresAt: v.number() }),
+  handler: async (ctx, args): Promise<{ sent: boolean; expiresAt: number }> => {
+    const { token, expiresAt } = await ctx.runMutation(
+      internal.provision.setupOwner,
+      { email: args.email },
+    );
+    const sent = await relay({
+      kind: "invite",
+      to: normalizeEmail(args.email),
+      url: siteLink("/invite", token),
+      inviterName: null,
+      target: null,
+    });
+    return { sent, expiresAt };
   },
 });

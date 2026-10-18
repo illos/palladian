@@ -10,6 +10,7 @@ import {
   handleRequestInfo,
 } from "./consent.ts";
 import { D1KV, purgeAbandonedClients, reserveRegistration } from "./d1-kv.ts";
+import { EMAIL_RELAY_PATH, handleEmailRelay } from "./email.ts";
 import {
   MCP_PATH,
   publicOrigin,
@@ -147,6 +148,8 @@ async function registrationAllowed(request: Request, deployed: DeployedEnv) {
 
 export default {
   async fetch(request, deployed, ctx) {
+    if (new URL(request.url).pathname === EMAIL_RELAY_PATH)
+      return handleEmailRelay(request, deployed);
     if (
       new URL(request.url).pathname === "/oauth/register" &&
       !(await registrationAllowed(request, deployed))
