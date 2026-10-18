@@ -301,6 +301,35 @@ test("hung remote logout is bounded even if transport ignores abort", async () =
   assert.equal(session.getSnapshot().status, "signed-out");
   session.stop();
 });
+test("settled waits for the remote sign-out after the signed-out screen shows", async () => {
+  const remote = deferred<void>();
+  const { session } = setup({
+    check: async () => ({ kind: "ready", accountId: "owner" }),
+    signOut: async () => remote.promise,
+  });
+  session.start();
+  await flush();
+  let settled = false;
+  void session.settled().then(() => {
+    settled = true;
+  });
+  await flush();
+  assert.equal(settled, true, "nothing to wait for before a sign-out");
+  settled = false;
+  const loggingOut = session.logout();
+  await flush();
+  assert.equal(session.getSnapshot().status, "signed-out");
+  void session.settled().then(() => {
+    settled = true;
+  });
+  await flush();
+  assert.equal(settled, false, "the server has not answered yet");
+  remote.resolve();
+  assert.equal(await loggingOut, true);
+  await flush();
+  assert.equal(settled, true);
+  session.stop();
+});
 test("cross-tab invalidation fences late ready and passive retry", async () => {
   const pending = deferred<SessionCheck>();
   const { session, hints } = setup({ check: async () => pending.promise });

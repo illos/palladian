@@ -16,7 +16,9 @@ const page =
     ? "connect"
     : location.pathname === "/invite"
       ? "invite"
-      : "notes";
+      : location.pathname === "/reset"
+        ? "reset"
+        : "notes";
 const hints = browserAccountHints(localStorage);
 const query = new URLSearchParams(location.search);
 const fixture = __NOTES_DEV__ && query.has("fixture");
@@ -150,8 +152,13 @@ if (!fixture && typeof siteURL === "string" && siteURL) {
         liveBox.set(createLive(convexURL, connection.auth, store, session));
       }
       if (page !== "notes") {
-        const { ConnectPage, InvitePage } = await import("./pages");
-        const Page = page === "connect" ? ConnectPage : InvitePage;
+        const { ConnectPage, InvitePage, ResetPage } = await import("./pages");
+        const Page =
+          page === "connect"
+            ? ConnectPage
+            : page === "invite"
+              ? InvitePage
+              : ResetPage;
         createRoot(element).render(
           <Page session={session} connection={connection} liveBox={liveBox} />,
         );

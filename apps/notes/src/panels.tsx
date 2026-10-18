@@ -1,11 +1,25 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ConvexProvider, useMutation, useQuery } from "convex/react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import {
+  ConvexProvider,
+  useAction as useConvexAction,
+  useMutation,
+  useQuery,
+} from "convex/react";
 import { api } from "@palladian/notes-backend/api";
 import type { Id } from "@palladian/notes-backend/dataModel";
 import type { CachedNotebook } from "./cache";
+import type { AuthClient } from "./auth-service";
 import type { LiveController } from "./live";
 import { transportError } from "./live";
+import { deviceName, passkeyOffer, passkeysSupported } from "./passkeys";
 import type { SessionController } from "./session";
+import { PasswordInput } from "./SignIn";
 
 type Panel = "agents" | "account" | "share" | "notebook" | "move";
 type Role = "read" | "edit";
@@ -94,14 +108,36 @@ function RoleSelect({
   );
 }
 
-function InviteLink({ token }: { token: string }) {
+/** Invitations already emailed from this page, so a re-render never resends. */
+const emailedInvitations = new Map<string, Promise<boolean>>();
+
+function InviteLink({ token, email }: { token: string; email: string }) {
   const link = `${location.origin}/invite#${token}`;
+  const sendEmail = useConvexAction(api.invitations.sendEmail);
   const [copied, setCopied] = useState(false);
+  const [emailed, setEmailed] = useState<boolean | null>(null);
+  useEffect(() => {
+    let sending = emailedInvitations.get(token);
+    if (!sending) {
+      sending = sendEmail({ token }).catch(() => false);
+      emailedInvitations.set(token, sending);
+    }
+    let active = true;
+    void sending.then((sent) => {
+      if (active) setEmailed(sent);
+    });
+    return () => {
+      active = false;
+    };
+  }, [token]);
   return (
     <div className="invite-link">
-      <p>
-        Send this single-use link to the person you invited. It expires in 14
-        days.
+      <p role="status">
+        {emailed === null
+          ? `Emailing an invitation to ${email}…`
+          : emailed
+            ? `Invitation emailed to ${email}. You can also send them this single-use link; it expires in 14 days.`
+            : `The invitation email could not be sent. Send ${email} this single-use link instead; it expires in 14 days.`}
       </p>
       <input
         readOnly
@@ -138,7 +174,10 @@ function AddMember({
   const [choice, setChoice] = useState("");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<Role>("edit");
-  const [token, setToken] = useState<string | null>(null);
+  const [invited, setInvited] = useState<{
+    token: string;
+    email: string;
+  } | null>(null);
   const available = candidates.filter((c) => !existing.has(c.principalId));
   return (
     <div className="add-member">
@@ -181,9 +220,10 @@ function AddMember({
         onSubmit={(event) => {
           event.preventDefault();
           if (!email.trim()) return;
+          const address = email.trim();
           void onInvite(email, role).then((result) => {
-            setToken(result);
-            if (result !== null || result === null) setEmail("");
+            setInvited(result ? { token: result, email: address } : null);
+            setEmail("");
           });
         }}
       >
@@ -196,7 +236,7 @@ function AddMember({
         />
         <button disabled={!email.trim()}>Invite</button>
       </form>
-      {token && <InviteLink token={token} />}
+      {invited && <InviteLink token={invited.token} email={invited.email} />}
     </div>
   );
 }
@@ -809,7 +849,200 @@ function AgentsPanel({ notebooks }: { notebooks: CachedNotebook[] }) {
   );
 }
 
-function AccountPanel({ session }: { session: SessionController }) {
+interface PasskeyRow {
+  id: string;
+  name?: string | null | undefined;
+  createdAt: Date | string | number;
+  backedUp: boolean;
+}
+
+/** Passkeys and password: everything that signs this person in. */
+function SecuritySection({ auth, email }: { auth: AuthClient; email: string }) {
+  const [passkeys, setPasskeys] = useState<PasskeyRow[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [password, setPassword] = useState("");
+  const [removing, setRemoving] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    const result = await auth.passkey.listUserPasskeys();
+    if (result.data) setPasskeys(result.data);
+    else setError("Passkeys could not be loaded.");
+  }, [auth]);
+  useEffect(() => {
+    void load().catch(() => setError("Passkeys could not be loaded."));
+  }, [load]);
+  async function act(work: () => Promise<void>) {
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await work();
+    } catch {
+      setError("Unable to connect. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  const add = () =>
+    act(async () => {
+      const result = await auth.passkey.addPasskey({ name: deviceName() });
+      if (!result.error) {
+        passkeyOffer.settle();
+        setMessage("Passkey added.");
+        await load();
+      } else if (result.error.status === 403) setConfirming(true);
+      else if (!/cancel/i.test(result.error.message ?? ""))
+        setError(
+          result.error.message?.includes("previously registered")
+            ? "This device already has a passkey for your account."
+            : "The passkey could not be added.",
+        );
+    });
+  return (
+    <section className="member-list security-section">
+      <h3>Sign-in &amp; security</h3>
+      <h4>Passkeys</h4>
+      <p className="muted">
+        Sign in with Face ID, Touch ID or your device passcode instead of your
+        password.
+      </p>
+      {passkeys?.length === 0 && <p className="muted">No passkeys yet.</p>}
+      <ul>
+        {passkeys?.map((passkey) => (
+          <li key={passkey.id}>
+            <span>
+              {passkey.name || "Passkey"} · added{" "}
+              {new Date(passkey.createdAt).toLocaleDateString()}
+              {passkey.backedUp ? " · synced" : ""}
+            </span>
+            {removing === passkey.id ? (
+              <span className="button-row">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    void act(async () => {
+                      const result = await auth.passkey.deletePasskey({
+                        id: passkey.id,
+                      });
+                      if (result.error)
+                        setError("The passkey could not be removed.");
+                      setRemoving(null);
+                      await load();
+                    })
+                  }
+                >
+                  Remove
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setRemoving(null)}
+                >
+                  Keep
+                </button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="secondary"
+                disabled={busy}
+                onClick={() => setRemoving(passkey.id)}
+              >
+                Remove…
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {confirming ? (
+        <form
+          className="stacked-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void act(async () => {
+              const result = await auth.signIn.email({ email, password });
+              if (result.error) {
+                setError("That password is not right.");
+                return;
+              }
+              setPassword("");
+              setConfirming(false);
+              await add();
+            });
+          }}
+        >
+          <PasswordInput
+            label="Confirm your password to add a passkey"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            required
+          />
+          <div className="button-row">
+            <button disabled={busy}>Continue</button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setConfirming(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      ) : (
+        passkeysSupported() && (
+          <button type="button" disabled={busy} onClick={() => void add()}>
+            Add a passkey on this device
+          </button>
+        )
+      )}
+      <h4>Password</h4>
+      <p className="muted">
+        To change your password, we email you a link. Changing it signs out your
+        other devices.
+      </p>
+      <button
+        type="button"
+        className="secondary"
+        disabled={busy}
+        onClick={() =>
+          void act(async () => {
+            const result = await auth.requestPasswordReset({ email });
+            if (result.error)
+              setError(
+                result.error.status === 429
+                  ? "Too many requests. Wait a few minutes and try again."
+                  : "The email could not be requested.",
+              );
+            else
+              setMessage(
+                `We emailed a link to ${email}. It works once, for one hour.`,
+              );
+          })
+        }
+      >
+        Email me a password link
+      </button>
+      {message && <p role="status">{message}</p>}
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function AccountPanel({
+  session,
+  auth,
+}: {
+  session: SessionController;
+  auth: AuthClient;
+}) {
   const me = useQuery(api.account.me, {});
   const rename = useMutation(api.account.rename);
   const pending = useQuery(api.invitations.pending, {});
@@ -860,6 +1093,7 @@ function AccountPanel({ session }: { session: SessionController }) {
           </select>
         </label>
       )}
+      {me?.email && <SecuritySection auth={auth} email={me.email} />}
       <section className="member-list">
         <h3>Pending invitations</h3>
         {pending?.length === 0 && <p className="muted">None.</p>}
@@ -918,7 +1152,9 @@ export default function Panels({
   return (
     <ConvexProvider client={live.client}>
       {panel === "agents" && <AgentsPanel notebooks={notebooks} />}
-      {panel === "account" && <AccountPanel session={session} />}
+      {panel === "account" && (
+        <AccountPanel session={session} auth={live.auth} />
+      )}
       {panel === "share" && noteId && (
         <ShareNote noteId={noteId as Id<"notes">} onClose={close} />
       )}

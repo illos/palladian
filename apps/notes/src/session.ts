@@ -74,6 +74,7 @@ export class SessionController {
   private cancelDeadline: (() => void) | null = null;
   private failures = 0;
   private logoutPending = false;
+  private logoutRun: Promise<void> | null = null;
   private pendingCleanup: string | null = null;
   /**
    * Whether the pending cleanup is this page's own decision (sign-out,
@@ -327,9 +328,21 @@ export class SessionController {
         this.fail();
       });
   }
+  /**
+   * Resolves once no sign-out is still talking to the server. A sign-out
+   * shows the signed-out screen first and clears the stored credential last;
+   * a passkey ceremony begun in between would lose its challenge.
+   */
+  settled(): Promise<void> {
+    return this.logoutRun ?? Promise.resolve();
+  }
+
   async logout(): Promise<boolean> {
     if (this.logoutPending) return false;
     this.logoutPending = true;
+    let finished!: () => void;
+    const run = new Promise<void>((resolve) => (finished = resolve));
+    this.logoutRun = run;
     this.fence();
     const logoutGeneration = this.snapshot.generation;
     try {
@@ -389,6 +402,8 @@ export class SessionController {
       return true;
     } finally {
       this.logoutPending = false;
+      if (this.logoutRun === run) this.logoutRun = null;
+      finished();
     }
   }
 }

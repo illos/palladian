@@ -1044,7 +1044,7 @@ ul.member-list {
 .invite-link button,
 .agents-panel button,
 .account-panel > button,
-.standalone-card button:not(.link-button) {
+.standalone-card button:not(.link-button):not(.reveal) {
   background: var(--accent);
   color: var(--on-accent);
   border-radius: 8px;
@@ -1177,46 +1177,215 @@ ul.member-list {
   display: flex;
   gap: 10px;
 }
-.sign-in {
-  display: grid;
-  gap: 10px;
+.security-section h4 {
+  margin: 14px 0 2px;
+  font-size: 14px;
+  color: var(--ink);
 }
-.sign-in label {
+.security-section > p {
+  margin: 0 0 8px;
+}
+.security-section button:not(.reveal) {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-weight: 500;
+}
+.security-section button.secondary {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--border);
+}
+.security-section > button {
+  margin-top: 8px;
+}
+.security-section [role="status"] {
+  margin: 10px 0 0;
+  font-size: 14px;
+}
+
+/* ---- Signing in ---- */
+.sign-in,
+.auth-form {
+  display: grid;
+  gap: 12px;
+}
+.auth-form label,
+.password-field {
   display: grid;
   gap: 5px;
   font-size: 14px;
+  color: var(--ink);
 }
-.sign-in input {
+.auth-form p {
+  margin: 0;
+}
+.auth-form input,
+.stacked-form .password-input input {
   font: inherit;
+  /* 16px keeps iOS Safari from zooming into the field. */
+  font-size: 16px;
   color: var(--ink);
   background: var(--list);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 9px 11px;
+  min-width: 0;
+  width: 100%;
 }
-.sign-in button {
+.password-input {
+  position: relative;
+  display: flex;
+}
+.password-input input {
+  flex: 1;
+  padding-right: 64px !important;
+}
+.password-input .reveal,
+.stacked-form .password-input .reveal {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  color: var(--secondary);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+.password-input .reveal:hover {
+  color: var(--ink);
+  background: var(--sel);
+}
+.auth-form button.primary,
+.auth-form button.secondary,
+.auth-toast button {
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-weight: 500;
+}
+.auth-form button.primary,
+.auth-toast button:not(.secondary) {
   background: var(--accent);
   color: var(--on-accent);
+}
+.auth-form button.secondary,
+.auth-toast button.secondary {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--border);
+}
+.auth-form button:disabled {
+  opacity: 0.6;
+}
+.auth-form .link-button {
+  justify-self: center;
+  font-size: 14px;
+}
+.auth-form [role="alert"] {
+  color: var(--ink);
+  background: var(--sel);
   border-radius: 8px;
-  padding: 8px 14px;
-  font-weight: 500;
+  padding: 8px 10px;
+  font-size: 14px;
 }
 .sign-in h2 {
   margin: 0;
   font-size: var(--h2);
   color: var(--ink);
 }
-.sign-in-layer .sign-in {
+.auth-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  overflow-y: auto;
+  padding: max(24px, env(safe-area-inset-top)) 16px
+    max(24px, env(safe-area-inset-bottom));
+  background: var(--nav);
+}
+.auth-card {
+  width: min(400px, 100%);
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px 26px 26px;
+}
+.auth-card .wordmark {
+  padding: 0 0 14px;
+  min-height: 0;
+}
+.auth-card h1 {
+  font-size: 24px;
+  color: var(--ink);
+  margin: 0 0 16px;
+}
+.auth-foot {
+  margin: 20px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--secondary);
+  font-size: 13px;
+}
+.sign-in-layer .reconnect,
+.sign-in-layer .auth-toast {
   position: fixed;
   right: 18px;
   bottom: 18px;
-  width: min(340px, calc(100vw - 36px));
+  width: min(360px, calc(100vw - 36px));
   background: var(--paper);
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 16px 18px 18px;
   box-shadow: 0 16px 40px rgb(0 0 0 / 0.16);
   z-index: 20;
+}
+.reconnect header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.reconnect header .link-button {
+  font-size: 14px;
+}
+.reconnect > p,
+.auth-toast p {
+  margin: 0;
+  font-size: 14px;
+}
+.auth-pill {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 20;
+  background: var(--accent);
+  color: var(--on-accent);
+  border-radius: 999px;
+  padding: 9px 16px;
+  font-weight: 500;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.16);
+}
+@media (max-width: 760px) {
+  .auth-card {
+    border-radius: 14px;
+    padding: 22px 20px 22px;
+  }
+  /* Stay above the mobile tab bar. */
+  .sign-in-layer .reconnect,
+  .sign-in-layer .auth-toast,
+  .auth-pill {
+    right: 12px;
+    left: 12px;
+    width: auto;
+    bottom: calc(env(safe-area-inset-bottom) + 76px);
+  }
+  .auth-pill {
+    left: auto;
+  }
 }
 .public-link {
   margin-top: 6px;

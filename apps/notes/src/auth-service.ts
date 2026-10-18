@@ -1,4 +1,5 @@
 import { createAuthClient } from "better-auth/react";
+import { passkeyClient } from "@better-auth/passkey/client";
 import {
   convexClient,
   crossDomainClient,
@@ -9,7 +10,7 @@ import type { SessionService } from "./session";
 export function createAuthService(siteURL: string) {
   const auth = createAuthClient({
     baseURL: siteURL,
-    plugins: [convexClient(), crossDomainClient()],
+    plugins: [convexClient(), crossDomainClient(), passkeyClient()],
   });
   const service: SessionService = {
     async check(signal) {
@@ -34,3 +35,5 @@ export function createAuthService(siteURL: string) {
   };
   return { auth, service };
 }
+
+export type AuthClient = ReturnType<typeof createAuthService>["auth"];

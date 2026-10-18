@@ -97,7 +97,8 @@ export function transportError(error: unknown): TransportError {
  */
 export class LiveController {
   readonly client: ConvexReactClient;
-  private readonly auth: Auth;
+  /** The Better Auth client, for account settings (passkeys, reset email). */
+  readonly auth: Auth;
   private readonly store: NotesStore;
   private readonly session: SessionController;
   private state: LiveState = {

@@ -2,7 +2,7 @@
 
 ## Accounts and reliable sessions
 
-**Confirmed:** the first release supports the owner plus invited collaborators, without public signup. Email/password sign-in, emailed password recovery through Cloudflare Email Service, and invitation acceptance that verifies the invited address are v1 requirements. Passkeys, magic-link sign-in, and two-factor authentication are deferred.
+**Confirmed:** the first release supports the owner plus invited collaborators, without public signup. Email/password sign-in, emailed password recovery through Cloudflare Email Service, and invitation acceptance that verifies the invited address are v1 requirements. Passkeys also ship in v1 (D96, 2026-10-18); magic-link sign-in and two-factor authentication are deferred. Account email comes from notes@parabolic.studio for now (D97).
 
 Better Auth with Convex is proposed, subject to G03. Required outcomes:
 

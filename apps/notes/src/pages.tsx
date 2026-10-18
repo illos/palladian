@@ -4,8 +4,9 @@ import { api } from "@palladian/notes-backend/api";
 import type { createAuthService } from "./auth-service";
 import { transportError } from "./live";
 import { liveStateSource, type LiveBox } from "./liveBox";
+import { passkeyOffer } from "./passkeys";
 import type { SessionController } from "./session";
-import { SignIn } from "./SignIn";
+import { PasswordInput, SignIn } from "./SignIn";
 
 type Connection = ReturnType<typeof createAuthService>;
 interface PageProps {
@@ -464,6 +465,7 @@ function InviteBody({
             });
             if (result.error)
               throw new Error("Your account was created. Sign in to continue.");
+            passkeyOffer.ask();
             setDone(true);
             session.retry({ afterSignIn: true });
           })
@@ -492,31 +494,25 @@ function InviteBody({
         Email
         <input value={preview.email} readOnly autoComplete="username" />
       </label>
-      <label>
-        Choose a password{" "}
-        <span className="muted">(at least 12 characters)</span>
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          minLength={12}
-          maxLength={128}
-          required
-          autoComplete="new-password"
-        />
-      </label>
-      <label>
-        Confirm password
-        <input
-          type="password"
-          value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
-          minLength={12}
-          maxLength={128}
-          required
-          autoComplete="new-password"
-        />
-      </label>
+      <PasswordInput
+        label="Choose a password"
+        hint="(at least 12 characters)"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        minLength={12}
+        maxLength={128}
+        required
+        autoComplete="new-password"
+      />
+      <PasswordInput
+        label="Confirm password"
+        value={confirm}
+        onChange={(e) => setConfirm(e.target.value)}
+        minLength={12}
+        maxLength={128}
+        required
+        autoComplete="new-password"
+      />
       <button disabled={busy}>
         {busy ? "Creating your account…" : "Create account"}
       </button>
@@ -543,6 +539,161 @@ export function InvitePage(props: PageProps) {
         <ConvexProvider client={live.client}>
           <InviteBody {...props} token={token} />
         </ConvexProvider>
+      ) : (
+        <p>Loading…</p>
+      )}
+    </Page>
+  );
+}
+
+type AgentChoice = "keep" | "disconnect";
+
+function ResetBody({
+  token,
+  session,
+  connection,
+  liveBox,
+}: PageProps & { token: string }) {
+  const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  const { live } = useLive(liveBox);
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  // No default: the person must choose (D26).
+  const [agents, setAgents] = useState<AgentChoice | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<number | null>(null);
+  useEffect(() => {
+    if (done !== null && snapshot.status === "ready") location.replace("/");
+  }, [done, snapshot.status]);
+  if (done !== null)
+    return (
+      <p role="status">
+        Your password is changed and your other devices are signed out
+        {done > 0
+          ? `; ${done} agent connection${done === 1 ? " was" : "s were"} disconnected`
+          : ""}
+        . Signing you in…
+      </p>
+    );
+  return (
+    <form
+      className="stacked-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (busy || !live) return;
+        if (password !== confirm) {
+          setError("The passwords do not match.");
+          return;
+        }
+        if (!agents) {
+          setError("Choose what happens to connected AI agents.");
+          return;
+        }
+        setBusy(true);
+        setError(null);
+        void live.client
+          .action(api.passwords.reset, {
+            token,
+            newPassword: password,
+            agents,
+          })
+          .then(async ({ email, agentsDisconnected }) => {
+            const result = await connection.auth.signIn.email({
+              email,
+              password,
+            });
+            if (result.error)
+              throw new Error(
+                "Your password was changed. Sign in with it to continue.",
+              );
+            passkeyOffer.ask();
+            setDone(agentsDisconnected);
+            session.retry({ afterSignIn: true });
+          })
+          .catch((failure: unknown) => {
+            setError(
+              failure instanceof Error && !("data" in failure)
+                ? failure.message
+                : transportError(failure).message,
+            );
+            setBusy(false);
+          });
+      }}
+    >
+      <p>
+        Choose a new password. Every device signed in to your account will be
+        signed out.
+      </p>
+      <PasswordInput
+        label="New password"
+        hint="(at least 12 characters)"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        minLength={12}
+        maxLength={128}
+        required
+        autoComplete="new-password"
+      />
+      <PasswordInput
+        label="Confirm new password"
+        value={confirm}
+        onChange={(e) => setConfirm(e.target.value)}
+        minLength={12}
+        maxLength={128}
+        required
+        autoComplete="new-password"
+      />
+      <fieldset className="share-scope">
+        <legend>Connected AI agents</legend>
+        <label className="checkbox-row">
+          <input
+            type="radio"
+            name="agents"
+            checked={agents === "keep"}
+            onChange={() => setAgents("keep")}
+            required
+          />
+          Keep them connected
+        </label>
+        <label className="checkbox-row">
+          <input
+            type="radio"
+            name="agents"
+            checked={agents === "disconnect"}
+            onChange={() => setAgents("disconnect")}
+          />
+          Disconnect them (each must be approved again)
+        </label>
+      </fieldset>
+      <button disabled={busy || !live}>
+        {busy ? "Saving…" : "Set new password"}
+      </button>
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+      <a href="/">Back to sign in</a>
+    </form>
+  );
+}
+
+export function ResetPage(props: PageProps) {
+  const { live } = useLive(props.liveBox);
+  const token = location.hash.slice(1);
+  useEffect(() => {
+    props.session.start();
+  }, []);
+  return (
+    <Page title="Choose a new password">
+      {!/^[A-Za-z0-9_-]{16,100}$/.test(token) ? (
+        <p>
+          This reset link is not valid. <a href="/">Request a new one</a> from
+          the sign-in screen.
+        </p>
+      ) : live ? (
+        <ResetBody {...props} token={token} />
       ) : (
         <p>Loading…</p>
       )}

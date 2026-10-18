@@ -36,7 +36,7 @@ Stable IDs preserve the discussion record. Later clarifications apply throughout
 | Q03 | Cached existing notes display immediately; a brief read-only wait for live editing is acceptable, with reading/navigation available                               | Owner confirmation, 2026-09-27                                    |
 | Q04 | Automatically cache all note text; pictures and PDFs lazy-load when needed                                                                                        | Owner confirmation, 2026-09-27                                    |
 | D21 | Reminders target v2 and are outside the first usable release                                                                                                      | Owner confirmation, 2026-09-27                                    |
-| D22 | V1 sign-in uses email and password; passkeys and magic-link sign-in are deferred to a later release                                                               | Owner confirmation, 2026-09-28                                    |
+| D22 | V1 sign-in uses email and password; magic-link sign-in is deferred (passkeys: see D96)                                                                            | Owner confirmation, 2026-09-28                                    |
 | D23 | V1 password recovery uses emailed reset links delivered through Cloudflare Email Service                                                                          | Owner confirmation, 2026-09-28                                    |
 | D24 | Two-factor authentication is deferred beyond v1; later release unspecified                                                                                        | Owner confirmation, 2026-09-28                                    |
 | D25 | Successful password reset automatically signs out other devices; reset effects on agent connections remain separate                                               | Owner confirmation, 2026-09-28                                    |
@@ -110,6 +110,9 @@ Stable IDs preserve the discussion record. Later clarifications apply throughout
 | D92 | Engineering chooses the collaboration backend; the proof's `prosemirror-sync` wrapper is replaced by an owned step log with checkpoints                           | Owner delegation, 2026-10-14                                      |
 | D93 | External agents sign in through OAuth so the owner can connect Claude and ChatGPT subscriptions; a PAT-only first release is rejected                             | Owner direction, 2026-10-14                                       |
 | D94 | Convex production and Cloudflare Worker deployments are authorized as needed; DNS changes, purchases and real-data import still need separate approval            | Owner authorization, 2026-10-14                                   |
+| D95 | Accounts stay invite-only (Q01 reaffirmed); the sign-in screen tells newcomers to open their invitation link                                                      | Owner direction, 2026-10-18                                       |
+| D96 | Passkeys ship in v1 beside email and password (supersedes D22's passkey deferral); magic links and two-factor stay deferred                                       | Owner direction, 2026-10-18                                       |
+| D97 | Account email is sent from notes@parabolic.studio for now; adding Cloudflare Email Sending records to parabolic.studio is approved                                | Owner direction, 2026-10-18                                       |
 | Q13 | Local privacy settled: expiry preserves viewing; device revocation clears cache; no unsaved-work export after notebook access removal; device security sufficient | Owner decisions D65–D67, D83, D85–D87                             |
 | Q06 | Public link lifecycle settled: latest content, restoration, replacement invalidation, default indexing, no automatic expiry                                       | Owner decisions D12, D38, D52–D54, D74                            |
 
@@ -138,7 +141,7 @@ Engineering must also define backup expiry, deletion propagation, idempotency wi
 4. Prove two-client online editing, agent transform, claim takeover, dropped-response retry, and recovery. Select the collaboration component based on evidence.
 5. Build a narrow end-to-end MCP flow: authenticated create, search, targeted edit, history, and explicit publication using real clients.
 6. Complete chosen first-release organization, file, sharing, and operational scope. Review protected contracts independently before acceptance.
-7. Later: reminders (confirmed v2 target), passkeys, magic-link sign-in, and two-factor authentication (release unspecified), sidebar agents, offline draft adapter/conflict-copy UI, and native app investigation, each with separate requirements.
+7. Later: reminders (confirmed v2 target), magic-link sign-in, and two-factor authentication (release unspecified), sidebar agents, offline draft adapter/conflict-copy UI, and native app investigation, each with separate requirements.
 
 None of these steps authorizes production deployment or personal-data import by itself.
 
@@ -186,7 +189,7 @@ Use the contracts in documents 02–05; the matrix and checklist do not silently
 - **A16, public links:** public pages show only accepted live content, including current authorized attachments if that proposal is adopted. Trashing denies note links and excludes notes from public notebook listings. Restore re-enables only the current link if visibility permits; replacing the URL invalidates its predecessor permanently. Links have no automatic expiry; public pages are indexable by default, without promising search-engine indexing. Private/trashed content and restricted metadata stay out of public responses/discovery. Ordinary save never publishes a private note.
 - **A17/A19/A20, later releases:** reminders need their own delivery contract. Offline branch tests preserve device edit times and ancestry, accept a current-base branch once, and fork divergent authorized work without overwriting the online head. Deletion/revocation rules override recovery; invited-editor conflict placement remains Q11. These cases do not imply v1 offline editing.
 
-Manual Deltos import uses ordinary MCP creation/attachment operations. A disposable fixture must show retry safety and unsupported-content reporting; the actual import is a separate Q15 task. Tags, pinning, alternate sorting, standalone archive, editable tables, passkeys, magic-link login, two-factor auth, sidebar chat, native apps, and explicit offline attachment downloads are outside v1.
+Manual Deltos import uses ordinary MCP creation/attachment operations. A disposable fixture must show retry safety and unsupported-content reporting; the actual import is a separate Q15 task. Tags, pinning, alternate sorting, standalone archive, editable tables, magic-link login, two-factor auth, sidebar chat, native apps, and explicit offline attachment downloads are outside v1.
 
 ## Performance budget proposal to discuss
 
