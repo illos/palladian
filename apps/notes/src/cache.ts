@@ -138,6 +138,24 @@ class NotesDatabase extends Dexie {
   }
 }
 
+function newDeviceSecret(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+/** A secret an earlier build kept in local storage, adopted so the browser keeps its record. */
+function legacyDeviceSecret(): string | null {
+  try {
+    const value = globalThis.localStorage?.getItem("palladian.notes.device.v1");
+    return value && /^[A-Za-z0-9_-]{43}$/.test(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 /** A clear retried after the account was signed in again. */
 class SupersededClear extends Error {}
 interface ClearOperation {
@@ -837,17 +855,19 @@ export class NotesStore {
     return this.db.transaction("rw", this.db.device, async () => {
       const stored = await this.db.device.get("secret");
       if (stored) return stored.secret;
-      const bytes = crypto.getRandomValues(new Uint8Array(32));
-      const secret = btoa(String.fromCharCode(...bytes))
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/, "");
+      const secret = legacyDeviceSecret() ?? newDeviceSecret();
       await this.db.device.put({ key: "secret", secret });
       return secret;
     });
   }
-  /** Whether this browser stores any of the account's notes, text, drafts or notebooks. */
+  /**
+   * Whether this browser holds any of the account's notes, text, drafts or
+   * notebooks, including drafts this tab keeps only in memory after a failed
+   * write. Other tabs' memory-only drafts are dropped by a clear's broadcast.
+   */
   async hasCopies(accountId: string): Promise<boolean> {
+    for (const draft of this.recoveryDrafts.values())
+      if (draft.accountId === accountId) return true;
     const { summaries, bodies, drafts, notebooks } = this.db;
     return this.db.transaction(
       "r",

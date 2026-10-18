@@ -4,7 +4,7 @@ import {
   convexClient,
   crossDomainClient,
 } from "@convex-dev/better-auth/client/plugins";
-import type { SessionService } from "./session";
+import type { SessionCheck } from "./session";
 
 /**
  * This browser's side of the server's device records (D98), kept by the notes
@@ -13,6 +13,21 @@ import type { SessionService } from "./session";
 export interface DeviceStore {
   secret(): Promise<string>;
   hasCopies(accountId: string): Promise<boolean>;
+  /** Clear the account's copies in every tab (the cache's fenced clear). */
+  clear(accountId: string): Promise<void>;
+}
+
+/**
+ * A session check's answer, or `reconciled`: the browser has just cleared any
+ * older copies of the account and recorded itself current, so the caller
+ * checks again under a fresh activation fence.
+ */
+export type TransportCheck = SessionCheck | { kind: "reconciled" };
+
+/** The session service as the app's boot code drives it. */
+export interface AuthTransport {
+  check(signal: AbortSignal, shown?: string | null): Promise<TransportCheck>;
+  signOut?(signal: AbortSignal): Promise<void>;
 }
 
 /** One Convex function call over HTTP, outside the live connection. */
@@ -79,43 +94,29 @@ export function createAuthService(
     baseURL: siteURL,
     plugins: [convexClient(), crossDomainClient(), passkeyClient()],
   });
-  /** The device secret, or null where the cache cannot keep one (then it keeps no copies either). */
-  async function secret(): Promise<string | null> {
-    if (!convexURL || !device) return null;
-    try {
-      return await device.secret();
-    } catch {
-      return null;
-    }
-  }
+  const devices = convexURL && device ? device : null;
   /**
-   * Whether this browser must clear the account's copies before showing it
-   * again: it is behind a password reset, or unknown here (new, or its
-   * identity was lost), while it still stores copies that cannot be shown to
-   * postdate the last reset (D98).
+   * Record with the signed-in session that this browser holds no copies of
+   * `accountId` from before its last reset. A sign-in elsewhere while the
+   * token is fetched cancels it; the server refuses a token for another
+   * account.
    */
-  async function owesClearing(
+  async function bindDevice(
     key: string,
     accountId: string,
     signal: AbortSignal,
-  ): Promise<{ owes: boolean; current: boolean }> {
-    const status = await deviceStatus(convexURL!, key, accountId, signal);
-    const current = status.known && !status.behind;
-    if (current) return { owes: false, current };
-    return { owes: await device!.hasCopies(accountId), current };
-  }
-  /** Record with the signed-in session that this browser holds no older copies. */
-  async function bindDevice(key: string, signal: AbortSignal) {
+    stale: () => boolean,
+  ) {
     const result = await auth.convex.token({
       fetchOptions: { signal, throw: false },
     });
     const token = result.data?.token;
-    if (!token) throw new Error("Device check unavailable");
+    if (!token || stale()) throw new Error("Device check superseded");
     await convexCall(
       convexURL!,
       "mutation",
       "devices:bind",
-      { secret: key },
+      { secret: key, accountId },
       signal,
       token,
     );
@@ -124,7 +125,7 @@ export function createAuthService(
     kind: "transient",
     message: "Session service unavailable",
   } as const;
-  const service: SessionService = {
+  const service: AuthTransport = {
     async check(signal, shown) {
       const before = authMoment(auth);
       // A newer sign-in or sign-out (in any tab) outranks anything this
@@ -135,34 +136,49 @@ export function createAuthService(
           fetchOptions: { signal, throw: false },
         });
         if (signal.aborted || result.error) return transient;
-        const key = await secret();
         if (result.data) {
           const accountId = result.data.user.id;
-          if (!key) return stale() ? transient : { kind: "ready", accountId };
+          if (!devices)
+            return stale() ? transient : { kind: "ready", accountId };
+          // Failing to read or create the secret proves nothing about the
+          // copies here: retry rather than open (cached viewing continues).
+          const key = await devices.secret();
+          if (stale()) return transient;
           // The account on screen first: its copies from before a reset are
           // cleared before a switch could offer them for export.
           if (shown && shown !== accountId) {
-            const previous = await owesClearing(key, shown, signal);
+            const previous = await deviceStatus(convexURL!, key, shown, signal);
+            const owes =
+              !(previous.known && !previous.behind) &&
+              (await devices.hasCopies(shown));
             if (stale()) return transient;
-            if (previous.owes) return { kind: "revoked", accountId: shown };
+            if (owes) return { kind: "revoked", accountId: shown };
           }
-          const standing = await owesClearing(key, accountId, signal);
+          const status = await deviceStatus(convexURL!, key, accountId, signal);
           if (stale()) return transient;
-          // Clear first; the server hears this browser is current only once
-          // no older copies remain, so a lost answer cannot skip the clear.
-          if (standing.owes) return { kind: "revoked", accountId };
-          if (!standing.current) {
-            await bindDevice(key, signal);
-            if (stale()) return transient;
-          }
-          return { kind: "ready", accountId };
+          if (status.known && !status.behind)
+            return { kind: "ready", accountId };
+          // Behind a reset, or unknown here (new, or its identity was lost).
+          // Copies seen here are removed as on revocation, with notice.
+          const copies = await devices.hasCopies(accountId);
+          if (stale()) return transient;
+          if (copies) return { kind: "revoked", accountId };
+          // None seen here: still clear the account in every tab, dropping
+          // drafts other tabs hold only in memory, and only then tell the
+          // server this browser is current (D98).
+          await devices.clear(accountId);
+          if (stale()) return transient;
+          await bindDevice(key, accountId, signal, stale);
+          return stale() ? transient : { kind: "reconciled" };
         }
         // No session: revoked only when the server says this browser is
-        // behind a reset for the account on screen and it still holds copies.
-        if (!shown || !key) return { kind: "expired" };
+        // behind a reset for the account on screen and it holds copies.
+        if (!devices || !shown)
+          return stale() ? transient : { kind: "expired" };
+        const key = await devices.secret();
         const status = await deviceStatus(convexURL!, key, shown, signal);
         const copies =
-          status.known && status.behind && (await device!.hasCopies(shown));
+          status.known && status.behind && (await devices.hasCopies(shown));
         if (stale()) return transient;
         return copies
           ? { kind: "revoked", accountId: shown }
@@ -178,7 +194,15 @@ export function createAuthService(
       if (result.error) throw new Error("Remote sign-out unavailable");
     },
   };
-  return { auth, service, deviceSecret: secret };
+  /** For the reset page: this browser keeps its copies when it makes a reset. */
+  async function deviceSecret(): Promise<string | null> {
+    try {
+      return devices ? await devices.secret() : null;
+    } catch {
+      return null;
+    }
+  }
+  return { auth, service, deviceSecret };
 }
 
 export type AuthClient = ReturnType<typeof createAuthService>["auth"];

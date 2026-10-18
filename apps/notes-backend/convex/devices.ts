@@ -118,10 +118,14 @@ export const status = query({
  * reset: it is new here, or has cleared them. Called before the account opens.
  */
 export const bind = mutation({
-  args: { secret: v.string() },
+  // The account the browser checked: a sign-in elsewhere in between must not
+  // record this browser for a different account.
+  args: { secret: v.string(), accountId: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
     const person = await requireHuman(ctx);
+    if (person.authUserId !== args.accountId)
+      fail("conflict", "Signed in as a different account.");
     if (!validSecret(args.secret)) fail("invalid", "Invalid device.");
     await bindDevice(ctx, args.secret, person);
     return null;

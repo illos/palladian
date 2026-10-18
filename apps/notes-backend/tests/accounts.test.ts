@@ -127,15 +127,15 @@ describe("password reset", () => {
       t.query(api.devices.status, { secret, accountId });
     const laptop = "l".repeat(43);
     const phone = "p".repeat(43);
-    await as.mutation(api.devices.bind, { secret: laptop });
-    await as.mutation(api.devices.bind, { secret: phone });
+    await as.mutation(api.devices.bind, { secret: laptop, accountId });
+    await as.mutation(api.devices.bind, { secret: phone, accountId });
     expect(await status(phone)).toEqual({ known: true, behind: false });
     await resetWith(t, laptop);
     expect(await status(laptop)).toEqual({ known: true, behind: false });
     expect(await status(phone)).toEqual({ known: true, behind: true });
     // Once the phone has cleared its copies and signed in again it catches up.
     const again = await signedIn(t, "ada@example.com", NEW, false);
-    await again.as.mutation(api.devices.bind, { secret: phone });
+    await again.as.mutation(api.devices.bind, { secret: phone, accountId });
     expect(await status(phone)).toEqual({ known: true, behind: false });
   });
 
@@ -145,8 +145,8 @@ describe("password reset", () => {
     const accountId = person.authUserId!;
     const laptop = "l".repeat(43);
     const phone = "p".repeat(43);
-    await as.mutation(api.devices.bind, { secret: laptop });
-    await as.mutation(api.devices.bind, { secret: phone });
+    await as.mutation(api.devices.bind, { secret: laptop, accountId });
+    await as.mutation(api.devices.bind, { secret: phone, accountId });
     await resetWith(t, laptop);
     // The phone, still holding copies from before the first reset, resets again.
     await resetWith(t, phone, "another long password");
@@ -168,7 +168,7 @@ describe("password reset", () => {
     const t = setup();
     const { person, as } = await signedIn(t, "ada@example.com");
     const accountId = person.authUserId!;
-    await as.mutation(api.devices.bind, { secret: "l".repeat(43) });
+    await as.mutation(api.devices.bind, { secret: "l".repeat(43), accountId });
     const unknown = { known: false, behind: false };
     expect(
       await t.query(api.devices.status, { secret: "x".repeat(43), accountId }),
@@ -177,11 +177,16 @@ describe("password reset", () => {
       await t.query(api.devices.status, { secret: "short", accountId }),
     ).toEqual(unknown);
     await expect(
-      t.mutation(api.devices.bind, { secret: "x".repeat(43) }),
+      t.mutation(api.devices.bind, { secret: "x".repeat(43), accountId }),
     ).rejects.toThrow();
     await expect(
-      as.mutation(api.devices.bind, { secret: "short" }),
+      as.mutation(api.devices.bind, { secret: "short", accountId }),
     ).rejects.toThrow();
+    // A browser that checked one account cannot be recorded for another.
+    const { as: other } = await signedIn(t, "bo@example.com");
+    await expect(
+      other.mutation(api.devices.bind, { secret: "l".repeat(43), accountId }),
+    ).rejects.toThrow(/different account/);
   });
 
   test("records per account are bounded without dropping owed clean-up", async () => {
@@ -189,13 +194,16 @@ describe("password reset", () => {
     const { person, as } = await signedIn(t, "ada@example.com");
     const accountId = person.authUserId!;
     const owes = "o".repeat(43);
-    await as.mutation(api.devices.bind, { secret: owes });
+    await as.mutation(api.devices.bind, { secret: owes, accountId });
     await resetWith(t, undefined);
     const again = await signedIn(t, "ada@example.com", NEW, false);
     const secret = (i: number) =>
       `d${String(i).padStart(4, "0")}`.padEnd(43, "x");
     for (let i = 0; i < 205; i++)
-      await again.as.mutation(api.devices.bind, { secret: secret(i) });
+      await again.as.mutation(api.devices.bind, {
+        secret: secret(i),
+        accountId,
+      });
     const count = await t.run(
       async (ctx) =>
         (

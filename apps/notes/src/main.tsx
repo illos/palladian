@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { LiveBox } from "./liveBox";
+import type { AuthTransport } from "./auth-service";
 import { createNotesStore, type ActivationFence } from "./cache";
 import {
   browserAccountHints,
@@ -23,7 +24,7 @@ const hints = browserAccountHints(localStorage);
 const query = new URLSearchParams(location.search);
 const fixture = __NOTES_DEV__ && query.has("fixture");
 let mode = query.get("session") ?? "stall";
-let transport: SessionService = {
+let transport: AuthTransport = {
   check: async () => ({ kind: "transient", message: "Service not configured" }),
 };
 let activation: ActivationFence | null = null;
@@ -49,13 +50,20 @@ const fixtureService: SessionService = {
 };
 const service: SessionService = {
   async check(signal, accountId) {
-    const fence = await store.captureActivationFence();
-    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-    const selected = fixture ? fixtureService : transport;
-    const result = await selected.check(signal, accountId);
-    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-    activation = fence;
-    return result;
+    // At most one extra round: after the browser has cleared older copies of
+    // the account and recorded itself current (D98), check again under a
+    // fresh fence, since that clear ended the fence captured first.
+    for (let round = 0; round < 2; round++) {
+      const fence = await store.captureActivationFence();
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      const selected = fixture ? fixtureService : transport;
+      const result = await selected.check(signal, accountId);
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      if (result.kind === "reconciled") continue;
+      activation = fence;
+      return result;
+    }
+    return { kind: "transient", message: "Device check did not settle" };
   },
   async signOut(signal) {
     await transport?.signOut?.(signal);
@@ -151,6 +159,11 @@ if (!fixture && typeof siteURL === "string" && siteURL) {
         {
           secret: () => store.deviceSecret(),
           hasCopies: (accountId) => store.hasCopies(accountId),
+          async clear(accountId) {
+            // False: the account was signed in again meanwhile; check again.
+            if (!(await store.clearAccount(accountId, crypto.randomUUID())))
+              throw new Error("Clear superseded");
+          },
         },
       );
       transport = connection.service;
