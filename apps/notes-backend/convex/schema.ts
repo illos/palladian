@@ -222,6 +222,24 @@ export default defineSchema({
     .index("by_token", ["tokenHash"])
     .index("by_inviter", ["invitedBy"]),
 
+  /**
+   * Deltos notes waiting to be imported (Q15), loaded with `convex import`
+   * and removed as each becomes a Palladian note. A row that cannot convert
+   * keeps a generic `failure` reason and stays for inspection.
+   */
+  deltosImports: defineTable({
+    deltosId: v.string(),
+    /** The Deltos notebook's name; null for a note outside any notebook. */
+    notebook: v.union(v.string(), v.null()),
+    title: v.string(),
+    body: v.string(),
+    fileNote: v.boolean(),
+    fileExtract: v.union(v.string(), v.null()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    failure: v.optional(v.string()),
+  }).index("by_failure", ["failure"]),
+
   /** Recent account emails, kept briefly to limit sends per subject and overall. */
   emailSends: defineTable({
     key: v.string(),
