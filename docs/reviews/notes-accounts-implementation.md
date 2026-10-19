@@ -75,3 +75,20 @@ The reports record findings against earlier commits. **A1–A3, B1 and B5 remain
 | [7](notes-accounts-round7-astra-review.md) | Wipe-only **G1–G3**: cleanup retries can lose lifecycle authority, preliminary checks can leak account locks, and older tabs interpret reconciliation as sign-out. The owner chose "Ship now, wipe later" after this review. The device-check and lifecycle-bound wipe code is removed from this release; the findings continue with `feat/notes-device-wipe`. No claim of independent approval for the final release is made here.                                                                                                                                                                                |
 
 Round 8: release accepted. See [independent review](notes-accounts-round8-astra-review.md).
+
+## Production deployment
+
+2026-10-19: deployed pushed main commit `b9e095cd9f9aae47d34a2a3147635099331f2e99` (reviewed release `6ec2eca` plus the accepted round-8 review). Deployment used a fresh detached worktree and `pnpm install --frozen-lockfile` passed. Convex CLI explicitly targeted production `adamant-hound-861`; backend deployment passed, including schema validation. Production counts immediately before/after deployment were unchanged: **principals 91 → 91; Better Auth users 54 → 54**, before the disposable browser accounts were created. No account rows or credentials were printed.
+
+Cloudflare attached `notes.parabolic.studio` to the existing `palladian` Worker before configuration changes. Initial Python availability probes returned 403 (six attempts); subsequent curl checks returned 200 and verified the app document before proceeding. Set Worker and production Convex `EMAIL_RELAY_SECRET`; set production Convex `SITE_URL` and `AGENT_JWT_ISSUER` to `https://notes.parabolic.studio`. Worker build/deployment passed with the email binding, custom-domain route and `workers.dev` disabled; version `33d973e2-efc2-46e8-b6ad-409e00944a9f`.
+
+Verification after approximately 30 seconds:
+
+- App root: **HTTP 200**, app document verified.
+- OAuth authorization-server discovery: **HTTP 200**, issuer exactly `https://notes.parabolic.studio`.
+- Unauthenticated `POST /internal/email`: **HTTP 401**, confirming the relay is configured.
+- Old `https://palladian.rdxx.workers.dev/`: **HTTP 404**, no longer serving the app.
+- Production `live-e2e.mjs`: **11 checks passed on attempt 1**, covering account setup/sign-in, persistence, two-browser sync/convergence, formatting, reload, offline recovery, invitation acceptance and revocation clearing the collaborator's cached copy.
+- Production `browser-e2e.mjs`: **8 checks passed on attempt 1**, covering Worker-served setup/sign-in, OAuth consent/code exchange, MCP note creation/live display, disconnection returning 401, and isolation of a new same-named agent with no access. Neither browser suite needed a retry.
+
+These proofs used **real production Convex and Cloudflare services and headless Chromium**, with browser-controlled offline simulation and disposable `@example.test` accounts; **no service mocks**. The invitation proof attempts email only to a disposable `@example.test` address; inbox delivery was not verified. No email was sent to a real person and the owner's account was not used. `auth-e2e.mjs` was not run against production. Inbox delivery, request → inbox → reset → sign-in, second-device cached-note retention after reset, passkeys on the final hostname, Safari/WebKit and a real iPhone remain pending for the owner. The reviewed local mocked-test evidence above remains distinct from these production proofs.
