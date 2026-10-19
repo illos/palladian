@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- app-icon.svg scaled to 84% so the sill corners stay inside the maskable
+       safe zone (a centred circle of radius 40%). -->
+  <rect width="1024" height="1024" fill="#3b5bdb"/>
+  <g transform="translate(512 512) scale(.84) translate(-512 -512)">
+    <rect x="216" y="378" width="96" height="384" fill="#8da0ea"/>
+    <rect x="712" y="378" width="96" height="384" fill="#8da0ea"/>
+    <path d="M352 762V362a160 160 0 0 1 320 0v400z" fill="#fff"/>
+    <rect x="400" y="416" width="224" height="40" rx="20" fill="#1a1c1f"/>
+    <rect x="400" y="492" width="224" height="24" rx="12" fill="#b5c1f1"/>
+    <rect x="400" y="544" width="224" height="24" rx="12" fill="#b5c1f1"/>
+    <rect x="400" y="596" width="148" height="24" rx="12" fill="#b5c1f1"/>
+    <rect x="176" y="794" width="672" height="28" rx="14" fill="#fff"/>
+  </g>
+</svg>

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="160 164 704 704">
+  <!-- Favicon: the app icon's serliana without the note lines, on a transparent
+       ground, in the Graphite light and dark accent and ink. -->
+  <style>
+    .glass { fill: #3b5bdb; }
+    .sill { fill: #1a1c1f; }
+    @media (prefers-color-scheme: dark) {
+      .glass { fill: #5b7bff; }
+      .sill { fill: #e6e8eb; }
+    }
+  </style>
+  <rect class="glass" x="216" y="378" width="96" height="384" fill-opacity=".45"/>
+  <rect class="glass" x="712" y="378" width="96" height="384" fill-opacity=".45"/>
+  <path class="glass" d="M352 762V362a160 160 0 0 1 320 0v400z"/>
+  <rect class="sill" x="176" y="790" width="672" height="40" rx="20"/>
+</svg>
