@@ -1,14 +1,13 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { LiveBox } from "./liveBox";
-import type { AuthTransport } from "./auth-service";
-import { createNotesStore } from "./cache";
+import { createNotesStore, type ActivationFence } from "./cache";
 import {
   browserAccountHints,
+  SessionController,
   type SessionCheck,
   type SessionService,
 } from "./session";
-import { wireSession } from "./session-wiring";
 
 const store = createNotesStore();
 const liveBox = new LiveBox();
@@ -24,9 +23,11 @@ const hints = browserAccountHints(localStorage);
 const query = new URLSearchParams(location.search);
 const fixture = __NOTES_DEV__ && query.has("fixture");
 let mode = query.get("session") ?? "stall";
-let transport: AuthTransport = {
+let transport: SessionService = {
   check: async () => ({ kind: "transient", message: "Service not configured" }),
 };
+let activation: ActivationFence | null = null;
+let activated: string | null = null;
 const fixtureAccount = "fixture-account";
 if (fixture && query.get("fixture") === "seed") hints.remember(fixtureAccount);
 const fixtureService: SessionService = {
@@ -46,16 +47,41 @@ const fixtureService: SessionService = {
     return { kind: "transient", message: "Synthetic unavailable service" };
   },
 };
-const { session, device } = wireSession({
-  store,
+const service: SessionService = {
+  async check(signal) {
+    const fence = await store.captureActivationFence();
+    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+    const selected = fixture ? fixtureService : transport;
+    const result = await selected.check(signal);
+    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+    activation = fence;
+    return result;
+  },
+  async signOut(signal) {
+    await transport?.signOut?.(signal);
+  },
+};
+const session = new SessionController({
+  service,
   hints,
-  transport: () => (fixture ? fixtureService : transport),
-  async settleAccount(session, accountId) {
+  async clearAccount(accountId, operation) {
+    activated = null;
+    await store.clearAccount(accountId, operation);
+  },
+  finishCleanup: (accountId) => store.finishClear(accountId),
+  async settleAccount(accountId) {
     if (!(await store.hasDrafts(accountId))) return true;
     const { settleDrafts } = await import("./logout");
     return settleDrafts(store, session, accountId, undefined, "switch");
   },
-  async prepareLogout(session) {
+  async onAccountReady(accountId, isCurrent) {
+    if (activated === accountId) return;
+    if (!activation || !isCurrent()) throw new Error("Session attempt changed");
+    await store.allowAccount(accountId, activation, isCurrent);
+    if (!isCurrent()) throw new Error("Session attempt changed");
+    activated = accountId;
+  },
+  async prepareLogout() {
     const accountId = session.getSnapshot().accountId;
     if (!accountId || !(await store.hasDrafts(accountId))) return true;
     const { settleDrafts } = await import("./logout");
@@ -74,6 +100,12 @@ const { session, device } = wireSession({
         : undefined;
     return settleDrafts(store, session, accountId, flush);
   },
+});
+store.subscribe((event) => {
+  if (!event.invalidated || !event.accountId) return;
+  // The cache blocked this account; signing in again must activate it anew.
+  if (activated === event.accountId) activated = null;
+  session.adoptInvalidation(event.accountId);
 });
 window.addEventListener("storage", (event) => {
   if (event.key !== "palladian.notes.account-hint.v1") return;
@@ -113,11 +145,7 @@ const convexURL: unknown = __NOTES_CONVEX_URL__;
 if (!fixture && typeof siteURL === "string" && siteURL) {
   void Promise.all([import("./auth-service"), import("./SignIn")])
     .then(async ([{ createAuthService }, { SignIn }]) => {
-      const connection = createAuthService(
-        siteURL,
-        typeof convexURL === "string" && convexURL ? convexURL : undefined,
-        device,
-      );
+      const connection = createAuthService(siteURL);
       transport = connection.service;
       if (typeof convexURL === "string" && convexURL) {
         const { createLive } = await import("./live");

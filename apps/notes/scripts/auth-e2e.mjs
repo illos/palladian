@@ -265,15 +265,19 @@ try {
   );
 
   await phone.reload();
-  await expect(phone.getByText(/its copies of notes were removed/)).toBeVisible(
-    {
-      timeout: 30_000,
-    },
+  await expect(
+    phone.getByRole("heading", { name: "Sign in to sync" }),
+  ).toBeVisible({
+    timeout: 30_000,
+  });
+  // This release signs other devices out without removing their copies (the
+  // wipe of D98 follows separately).
+  assert.ok(
+    (await cachedCopies(phone)) > 0,
+    "the second device keeps its copies",
   );
-  await expect(phone.getByRole("heading", { name: "Sign in" })).toBeVisible();
-  await shot(phone, "revoked");
-  await expect.poll(() => cachedCopies(phone), { timeout: 15_000 }).toBe(0);
-  step("the other device learned of the reset and removed its copies (D98)");
+  await shot(phone, "reconnect");
+  step("the other device was signed out and keeps its cached notes readable");
 
   await page.goto(`${app}/reset#${token}`);
   await page.getByLabel(/^New password/).fill(password);

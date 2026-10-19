@@ -615,17 +615,12 @@ function ResetBody({
         setBusy(true);
         setError(null);
         const since = started(session, connection);
-        void connection
-          .deviceSecret()
-          .then((device) =>
-            live.client.action(api.passwords.reset, {
-              token,
-              newPassword: password,
-              agents,
-              // This browser makes the reset and keeps its copies (D98).
-              ...(device ? { device } : {}),
-            }),
-          )
+        void live.client
+          .action(api.passwords.reset, {
+            token,
+            newPassword: password,
+            agents,
+          })
           .then(async ({ email, agentsDisconnected }) => {
             const outcome = await signInAfter(
               session,

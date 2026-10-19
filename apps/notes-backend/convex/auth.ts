@@ -25,7 +25,7 @@ export const authComponent = createClient<DataModel, typeof authSchema>(
     triggers: {
       session: {
         // Runs in the transaction that writes the session: a password reset
-        // committed since the sign-in verified the password refuses it (D98).
+        // committed since the sign-in verified the password refuses it.
         onCreate: async (ctx, session) => {
           if (typeof session.credentialEpoch !== "number") return;
           const person = await ctx.db

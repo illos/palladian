@@ -42,18 +42,6 @@ async function signedIn(t: T, email: string, password = OLD, create = true) {
   return { person, as };
 }
 
-/** Reset the password through the emailed link, optionally from a browser. */
-async function resetWith(t: T, device: string | undefined, to = NEW) {
-  relay.messages = [];
-  await requestReset(t, "ada@example.com");
-  await t.action(api.passwords.reset, {
-    token: resetToken(relay.messages[0]!),
-    newPassword: to,
-    agents: "keep",
-    ...(device ? { device } : {}),
-  });
-}
-
 async function principalOf(t: T, email: string) {
   return (await t.run((ctx) =>
     ctx.db
@@ -117,116 +105,6 @@ describe("password reset", () => {
       }),
     ).rejects.toThrow(/expired or was already used/);
     expect(await signIn(t, "ada@example.com", NEW)).toBeTruthy();
-  });
-
-  test("other browsers fall behind the reset; the resetting browser stays current", async () => {
-    const t = setup();
-    const { person, as } = await signedIn(t, "ada@example.com");
-    const accountId = person.authUserId!;
-    const status = (secret: string) =>
-      t.query(api.devices.status, { secret, accountId });
-    const laptop = "l".repeat(43);
-    const phone = "p".repeat(43);
-    await as.mutation(api.devices.bind, { secret: laptop, accountId });
-    await as.mutation(api.devices.bind, { secret: phone, accountId });
-    expect(await status(phone)).toEqual({ known: true, behind: false });
-    await resetWith(t, laptop);
-    expect(await status(laptop)).toEqual({ known: true, behind: false });
-    expect(await status(phone)).toEqual({ known: true, behind: true });
-    // Once the phone has cleared its copies and signed in again it catches up.
-    const again = await signedIn(t, "ada@example.com", NEW, false);
-    await again.as.mutation(api.devices.bind, { secret: phone, accountId });
-    expect(await status(phone)).toEqual({ known: true, behind: false });
-  });
-
-  test("a browser's own reset does not cancel clean-up it still owes", async () => {
-    const t = setup();
-    const { person, as } = await signedIn(t, "ada@example.com");
-    const accountId = person.authUserId!;
-    const laptop = "l".repeat(43);
-    const phone = "p".repeat(43);
-    await as.mutation(api.devices.bind, { secret: laptop, accountId });
-    await as.mutation(api.devices.bind, { secret: phone, accountId });
-    await resetWith(t, laptop);
-    // The phone, still holding copies from before the first reset, resets again.
-    await resetWith(t, phone, "another long password");
-    expect(
-      await t.query(api.devices.status, { secret: phone, accountId }),
-    ).toEqual({ known: true, behind: true });
-    expect(
-      await t.query(api.devices.status, { secret: laptop, accountId }),
-    ).toEqual({ known: true, behind: true });
-    // A browser unknown here stays unknown: its reset vouches for nothing.
-    const unknown = "u".repeat(43);
-    await resetWith(t, unknown);
-    expect(
-      await t.query(api.devices.status, { secret: unknown, accountId }),
-    ).toEqual({ known: false, behind: false });
-  });
-
-  test("only the browser holding a secret learns anything about it", async () => {
-    const t = setup();
-    const { person, as } = await signedIn(t, "ada@example.com");
-    const accountId = person.authUserId!;
-    await as.mutation(api.devices.bind, { secret: "l".repeat(43), accountId });
-    const unknown = { known: false, behind: false };
-    expect(
-      await t.query(api.devices.status, { secret: "x".repeat(43), accountId }),
-    ).toEqual(unknown);
-    expect(
-      await t.query(api.devices.status, { secret: "short", accountId }),
-    ).toEqual(unknown);
-    await expect(
-      t.mutation(api.devices.bind, { secret: "x".repeat(43), accountId }),
-    ).rejects.toThrow();
-    await expect(
-      as.mutation(api.devices.bind, { secret: "short", accountId }),
-    ).rejects.toThrow();
-    // A browser that checked one account cannot be recorded for another.
-    const { as: other } = await signedIn(t, "bo@example.com");
-    await expect(
-      other.mutation(api.devices.bind, { secret: "l".repeat(43), accountId }),
-    ).rejects.toThrow(/different account/);
-  });
-
-  test("records per account are bounded without dropping owed clean-up", async () => {
-    const t = setup();
-    const { person, as } = await signedIn(t, "ada@example.com");
-    const accountId = person.authUserId!;
-    const owes = "o".repeat(43);
-    await as.mutation(api.devices.bind, { secret: owes, accountId });
-    await resetWith(t, undefined);
-    const again = await signedIn(t, "ada@example.com", NEW, false);
-    const secret = (i: number) =>
-      `d${String(i).padStart(4, "0")}`.padEnd(43, "x");
-    for (let i = 0; i < 205; i++)
-      await again.as.mutation(api.devices.bind, {
-        secret: secret(i),
-        accountId,
-      });
-    const count = await t.run(
-      async (ctx) =>
-        (
-          await ctx.db
-            .query("devices")
-            .withIndex("by_principal", (q) => q.eq("principalId", person._id))
-            .collect()
-        ).length,
-    );
-    expect(count).toBe(200);
-    // The browser that still owes clean-up keeps its record; the oldest current ones go.
-    expect(
-      await t.query(api.devices.status, { secret: owes, accountId }),
-    ).toEqual({
-      known: true,
-      behind: true,
-    });
-    expect(
-      await t.query(api.devices.status, { secret: secret(0), accountId }),
-    ).toEqual({ known: false, behind: false });
-    expect(
-      await t.query(api.devices.status, { secret: secret(204), accountId }),
-    ).toEqual({ known: true, behind: false });
   });
 
   test("keeping agents leaves their connections; other devices still sign out", async () => {

@@ -334,10 +334,7 @@ export function SignIn({
             {view === "sign-in" ? "Sign in" : "Reset your password"}
           </h1>
           {snapshot.status === "revoked" && view === "sign-in" && (
-            <p className="muted">
-              The account’s password was changed, so this device was signed out
-              and its copies of notes were removed.
-            </p>
+            <p className="muted">This device was signed out.</p>
           )}
           {body}
           <p className="auth-foot">

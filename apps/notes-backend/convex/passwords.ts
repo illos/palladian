@@ -5,7 +5,6 @@ import { action, internalMutation, internalQuery } from "./_generated/server";
 import { fail } from "./access";
 import { authOptions } from "./auth";
 import { disconnectAgents } from "./connections";
-import { exemptResettingDevice } from "./devices";
 
 const EXPIRED =
   "This reset link has expired or was already used. Request a new one.";
@@ -22,13 +21,7 @@ type ResetResult = { email: string; agentsDisconnected: number };
  * commits in one transaction (finishReset), so it cannot half-apply.
  */
 export const reset = action({
-  args: {
-    token: v.string(),
-    newPassword: v.string(),
-    agents: agentChoice,
-    // The browser making the reset keeps its copies (D98 revokes the others).
-    device: v.optional(v.string()),
-  },
+  args: { token: v.string(), newPassword: v.string(), agents: agentChoice },
   returns: resetResult,
   handler: async (ctx, args): Promise<ResetResult> => {
     if (!/^[A-Za-z0-9_-]{16,100}$/.test(args.token)) fail("invalid", EXPIRED);
@@ -41,25 +34,19 @@ export const reset = action({
       token: args.token,
       hash,
       agents: args.agents,
-      ...(args.device ? { device: args.device } : {}),
     });
   },
 });
 
 /**
  * One transaction: consume the link, set the password, end every session of
- * the account (D25), count the reset so other browsers clear their copies and
- * in-flight sign-ins with the old password fail (D98, auth.ts) while this
- * browser stays current, and, if the person chose to, disconnect their agents
- * (D26). If any step fails nothing changes and the link still works.
+ * the account (D25), count the reset so a sign-in that verified the old
+ * password cannot still get a session (auth.ts), and, if the person chose to,
+ * disconnect their agents (D26). If any step fails nothing changes and the
+ * link still works.
  */
 export const finishReset = internalMutation({
-  args: {
-    token: v.string(),
-    hash: v.string(),
-    agents: agentChoice,
-    device: v.optional(v.string()),
-  },
+  args: { token: v.string(), hash: v.string(), agents: agentChoice },
   returns: resetResult,
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -133,12 +120,10 @@ export const finishReset = internalMutation({
       .query("principals")
       .withIndex("by_auth_user", (q) => q.eq("authUserId", userId))
       .unique();
-    if (person) {
-      const previousEpoch = person.resetEpoch ?? 0;
-      await ctx.db.patch(person._id, { resetEpoch: previousEpoch + 1 });
-      if (args.device)
-        await exemptResettingDevice(ctx, args.device, person, previousEpoch);
-    }
+    if (person)
+      await ctx.db.patch(person._id, {
+        resetEpoch: (person.resetEpoch ?? 0) + 1,
+      });
     const agentsDisconnected =
       args.agents === "disconnect" ? await disconnectAgents(ctx, userId) : 0;
     return { email: user.email, agentsDisconnected };

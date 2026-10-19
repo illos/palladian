@@ -13,8 +13,7 @@ export type SessionCheck =
   | { kind: "revoked"; accountId: string }
   | { kind: "transient"; message: string };
 export interface SessionService {
-  /** `accountId` is the account this device currently shows, if any. */
-  check(signal: AbortSignal, accountId?: string | null): Promise<SessionCheck>;
+  check(signal: AbortSignal): Promise<SessionCheck>;
   signOut?(signal: AbortSignal): Promise<void>;
 }
 /** Stores only an account pointer and explicit-logout intent, never credentials. */
@@ -194,9 +193,7 @@ export class SessionController {
       this.fail();
     }, this.options.deadlineMs ?? 8_000);
     void Promise.resolve()
-      .then(() =>
-        this.options.service.check(controller.signal, this.snapshot.accountId),
-      )
+      .then(() => this.options.service.check(controller.signal))
       .then(async (result) => {
         if (!current()) return;
         finish();

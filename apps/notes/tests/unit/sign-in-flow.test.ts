@@ -1,10 +1,8 @@
-import "fake-indexeddb/auto";
 // The installed Better Auth client (with the repo's cross-domain patch) over a
 // fake auth server and a fake platform authenticator.
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const SITE = "https://auth.test";
-const CONVEX = "https://convex.test";
 const memory = new Map<string, string>();
 const storage = {
   getItem: (key: string) => memory.get(key) ?? null,
@@ -59,15 +57,7 @@ const assertion = {
 const server = {
   requests: [] as string[],
   clearSessionOnOptions: false,
-  session: null as null | { createdAt: string },
-  devices: {} as Record<string, { known: boolean; behind: boolean }>,
-  statusFails: false,
-  bindAnswer: 200,
-  binds: [] as (string | null)[],
-  statusGate: null as null | Promise<void>,
   signInGate: null as null | Promise<void>,
-  tokenGate: null as null | Promise<void>,
-  sessionGate: null as null | Promise<void>,
 };
 function cookieResponse(body: unknown, cookies: string[]) {
   return new Response(JSON.stringify(body), {
@@ -82,32 +72,6 @@ const user = { id: "u", email: "ada@example.com", name: "Ada" };
 let issued = 0;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
-  if (url.origin === CONVEX) {
-    const body = JSON.parse(String(init?.body)) as {
-      path: string;
-      args: unknown;
-    };
-    const ok = (value: unknown) =>
-      new Response(JSON.stringify({ status: "success", value }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    if (body.path === "devices:bind") {
-      server.binds.push(new Headers(init?.headers).get("Authorization"));
-      if ((body.args as { accountId?: string }).accountId !== "u")
-        return new Response("wrong account", { status: 400 });
-      // The fake token belongs to account "u"; the binding commits even if
-      // the answer is then lost.
-      server.devices.u = { known: true, behind: false };
-      if (server.bindAnswer !== 200)
-        return new Response("lost", { status: server.bindAnswer });
-      return ok(null);
-    }
-    if (server.statusGate) await server.statusGate;
-    if (server.statusFails) return new Response("busy", { status: 503 });
-    const { accountId } = body.args as { accountId: string };
-    return ok(server.devices[accountId] ?? { known: false, behind: false });
-  }
   const path = url.pathname.replace("/api/auth", "");
   const method =
     init?.method ?? (input instanceof Request ? input.method : "GET");
@@ -128,21 +92,9 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
           : []),
       ],
     );
-  if (path === "/convex/token" && server.tokenGate) await server.tokenGate;
-  if (path === "/get-session" && server.sessionGate) await server.sessionGate;
-  if (path === "/convex/token")
-    return new Response(JSON.stringify({ token: "jwt" }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
   if (path === "/sign-in/email" && server.signInGate) await server.signInGate;
   if (path === "/passkey/verify-authentication" || path === "/sign-in/email")
     return cookieResponse({ user, session: { id: "s" } }, [session()]);
-  if (path === "/get-session" && server.session)
-    return new Response(
-      JSON.stringify({ user, session: { id: "s", ...server.session } }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
-    );
   return new Response("null", {
     status: 200,
     headers: { "Content-Type": "application/json" },
@@ -151,7 +103,6 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 
 const { createAuthService, authMoment } =
   await import("../../src/auth-service");
-const { NotesStore } = await import("../../src/cache");
 const { passkeyCeremony, signInAfter, started } =
   await import("../../src/sign-in-flow");
 
@@ -189,15 +140,7 @@ beforeEach(() => {
   prompt = null;
   server.requests = [];
   server.clearSessionOnOptions = false;
-  server.session = null;
-  server.devices = {};
-  server.statusFails = false;
-  server.bindAnswer = 200;
-  server.binds = [];
-  server.statusGate = null;
   server.signInGate = null;
-  server.tokenGate = null;
-  server.sessionGate = null;
 });
 afterEach(() => {
   vi.clearAllMocks();
@@ -314,241 +257,6 @@ describe("signing in after a reset or account creation", () => {
       await signInAfter(session, tab, since, "ada@example.com", "x".repeat(12)),
     ).toBe("superseded");
     expect(session.retry).not.toHaveBeenCalled();
-  });
-});
-
-describe("browsers holding copies from before a password reset (D98)", () => {
-  const signal = () => new AbortController().signal;
-  const live = { createdAt: "2026-10-18T10:00:00.000Z" };
-  const steps: string[] = [];
-  let secretFails = false;
-  let clearRefused = false;
-  let onClear: null | (() => Promise<void>) = null;
-  const device = {
-    secret: async () => {
-      if (secretFails) throw new DOMException("quota", "QuotaExceededError");
-      return "s".repeat(43);
-    },
-    lifecycle: async (accountId: string) => {
-      steps.push(`lifecycle ${accountId}`);
-      return 7;
-    },
-    clear: async (accountId: string, lifecycle: number) => {
-      steps.push(`clear ${accountId}@${lifecycle}`);
-      if (clearRefused) throw new Error("Clear superseded");
-      await onClear?.();
-    },
-  };
-  const service = () => createAuthService(SITE, CONVEX, device).service;
-  beforeEach(() => {
-    steps.length = 0;
-    secretFails = false;
-    clearRefused = false;
-    onClear = null;
-  });
-  const recorded = () => server.binds.length;
-
-  test("a new browser clears the account everywhere, then records itself, then checks again", async () => {
-    server.session = live;
-    expect(await service().check(signal(), null)).toEqual({
-      kind: "reconciled",
-    });
-    // The lifecycle is read before the server is asked, and binds the clear.
-    expect(steps).toEqual(["lifecycle u", "clear u@7"]);
-    expect(server.binds).toEqual(["Bearer jwt"]);
-    expect(await service().check(signal(), null)).toEqual({
-      kind: "ready",
-      accountId: "u",
-    });
-    expect(recorded()).toBe(1);
-  });
-
-  test("a current browser opens without clearing or recording", async () => {
-    server.session = live;
-    server.devices.u = { known: true, behind: false };
-    expect(await service().check(signal(), "u")).toEqual({
-      kind: "ready",
-      accountId: "u",
-    });
-    expect(steps).toEqual(["lifecycle u"]);
-    expect(recorded()).toBe(0);
-  });
-
-  test("behind a reset, even after signing in again, it clears every tab before recording", async () => {
-    server.session = live;
-    server.devices.u = { known: true, behind: true };
-    expect(await service().check(signal(), "u")).toEqual({
-      kind: "reconciled",
-    });
-    expect(steps).toEqual(["lifecycle u", "clear u@7"]);
-    expect(recorded()).toBe(1);
-  });
-
-  test("a clear refused because a tab began a newer lifecycle records nothing", async () => {
-    server.session = live;
-    server.devices.u = { known: true, behind: true };
-    clearRefused = true;
-    expect((await service().check(signal(), "u")).kind).toBe("transient");
-    expect(recorded()).toBe(0);
-  });
-
-  test("the account on screen is cleared before switching to another", async () => {
-    server.session = live;
-    server.devices.u = { known: true, behind: false };
-    server.devices.shown = { known: true, behind: true };
-    expect(await service().check(signal(), "shown")).toEqual({
-      kind: "ready",
-      accountId: "u",
-    });
-    expect(steps).toEqual(["lifecycle shown", "lifecycle u", "clear shown@7"]);
-  });
-
-  test("a lost answer to a committed recording is retried without skipping the clear", async () => {
-    server.session = live;
-    server.bindAnswer = 503;
-    expect((await service().check(signal(), null)).kind).toBe("transient");
-    expect(steps).toEqual(["lifecycle u", "clear u@7"]);
-    server.bindAnswer = 200;
-    expect(await service().check(signal(), null)).toEqual({
-      kind: "ready",
-      accountId: "u",
-    });
-  });
-
-  test("a sign-in elsewhere while the token waits for the auth lock records nothing", async () => {
-    server.session = live;
-    const name = "better-auth_cookie:session";
-    let releaseLock!: () => void;
-    const held = new Promise<void>((resolve) => (releaseLock = resolve));
-    // Another tab takes the cross-domain client's storage lock just as this
-    // check finishes clearing, so the token request has to wait for it.
-    onClear = () =>
-      new Promise<void>((granted) => {
-        void navigator.locks.request(name, () => {
-          granted();
-          return held;
-        });
-      });
-    try {
-      const checking = service().check(signal(), null);
-      await vi.waitFor(async () => {
-        const { pending = [] } = await navigator.locks.query();
-        expect(pending.some((lock) => lock.name === name)).toBe(true);
-      });
-      // That tab's sign-in lands while the token request waits.
-      storage.setItem("better-auth_session_generation", crypto.randomUUID());
-      releaseLock();
-      expect((await checking).kind).toBe("transient");
-      expect(recorded()).toBe(0);
-    } finally {
-      releaseLock();
-    }
-  });
-
-  test("failing to keep a device secret is retried, never taken as no copies", async () => {
-    server.session = live;
-    secretFails = true;
-    expect((await service().check(signal(), "u")).kind).toBe("transient");
-    expect(recorded()).toBe(0);
-  });
-
-  test("no session and behind a reset: every tab clears the account, then revoked", async () => {
-    server.devices.u = { known: true, behind: true };
-    expect(await service().check(signal(), "u")).toEqual({
-      kind: "revoked",
-      accountId: "u",
-    });
-    expect(steps).toEqual(["lifecycle u", "clear u@7"]);
-  });
-
-  test("no session: a clear refused for a newer lifecycle is retried, not reported", async () => {
-    server.devices.u = { known: true, behind: true };
-    clearRefused = true;
-    expect((await service().check(signal(), "u")).kind).toBe("transient");
-  });
-
-  test("no session otherwise: plain expiry keeps the copies", async () => {
-    expect(await service().check(signal(), "u")).toEqual({ kind: "expired" });
-    server.devices.u = { known: true, behind: false };
-    expect(await service().check(signal(), "u")).toEqual({ kind: "expired" });
-    server.devices.u = { known: true, behind: true };
-    expect(await service().check(signal(), null)).toEqual({ kind: "expired" });
-    expect(steps.filter((step) => step.startsWith("clear"))).toEqual([]);
-  });
-
-  test("an expiry learned before another tab's sign-in is not reported", async () => {
-    const other = createAuthService(SITE, CONVEX);
-    let release!: () => void;
-    server.sessionGate = new Promise<void>((resolve) => (release = resolve));
-    const checking = service().check(signal(), null);
-    await vi.waitFor(() =>
-      expect(server.requests).toContain("GET /get-session"),
-    );
-    server.sessionGate = null;
-    await other.auth.signIn.email({
-      email: "bo@example.com",
-      password: "x".repeat(12),
-    });
-    release();
-    expect((await checking).kind).toBe("transient");
-  });
-
-  test("a failed question is retried, never taken as revocation", async () => {
-    server.statusFails = true;
-    expect((await service().check(signal(), "u")).kind).toBe("transient");
-    server.session = live;
-    expect((await service().check(signal(), "u")).kind).toBe("transient");
-  });
-
-  test("without a device store nothing is asked", async () => {
-    server.session = live;
-    const { service: plain } = createAuthService(SITE, CONVEX);
-    expect(await plain.check(signal(), "u")).toEqual({
-      kind: "ready",
-      accountId: "u",
-    });
-    expect(recorded()).toBe(0);
-  });
-
-  for (const withSession of [false, true])
-    test(`a sign-in in another tab outranks a late answer (${withSession ? "live session" : "no session"})`, async () => {
-      server.session = withSession ? live : null;
-      server.devices.u = { known: true, behind: !withSession };
-      const other = createAuthService(SITE, CONVEX);
-      let release!: () => void;
-      server.statusGate = new Promise<void>((resolve) => (release = resolve));
-      const checking = service().check(signal(), "u");
-      await vi.waitFor(() =>
-        expect(server.requests).toContain("GET /get-session"),
-      );
-      await other.auth.signIn.email({
-        email: "bo@example.com",
-        password: "x".repeat(12),
-      });
-      release();
-      expect((await checking).kind).toBe("transient");
-    });
-});
-
-describe("the device secret lives in the notes cache", () => {
-  test("tabs creating it at once agree on one secret", async () => {
-    const name = "device-" + crypto.randomUUID();
-    const first = new NotesStore(name);
-    const second = new NotesStore(name);
-    const [a, b] = await Promise.all([
-      first.deviceSecret(),
-      second.deviceSecret(),
-    ]);
-    expect(a).toBe(b);
-    expect(a).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(await first.deviceSecret()).toBe(a);
-  });
-
-  test("a secret an earlier build kept in local storage is adopted", async () => {
-    const legacy = "L".repeat(43);
-    storage.setItem("palladian.notes.device.v1", legacy);
-    const store = new NotesStore("legacy-" + crypto.randomUUID());
-    expect(await store.deviceSecret()).toBe(legacy);
   });
 });
 

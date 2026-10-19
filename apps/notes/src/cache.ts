@@ -71,11 +71,6 @@ export interface CacheFence {
 interface CacheEvent {
   accountId?: string;
   invalidated?: boolean;
-  /**
-   * The clear came from a device check (D98), not a sign-out or revocation:
-   * tabs drop the account's copies and check their session again.
-   */
-  reconcile?: boolean;
   /** Notes this account lost access to; their content and pending work are gone. */
   revokedNotes?: string[];
   /** Notes hidden while the server confirms access; their pending work is kept. */
@@ -110,8 +105,6 @@ class NotesDatabase extends Dexie {
     },
     [string, string]
   >;
-  /** This browser's device secret (D98), kept with the copies it vouches for. */
-  device!: Table<{ key: string; secret: string }, string>;
   constructor(name: string) {
     super(name);
     this.version(1).stores({
@@ -137,27 +130,6 @@ class NotesDatabase extends Dexie {
             .table("summaries")
             .update([draft.accountId, draft.id], { source: draft.source });
     });
-    // The device secret lives in the same database as the copies it vouches
-    // for, so the two are lost together or not at all (D98).
-    this.version(5).stores({ device: "key" });
-  }
-}
-
-function newDeviceSecret(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  return btoa(String.fromCharCode(...bytes))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-}
-
-/** A secret an earlier build kept in local storage, adopted so the browser keeps its record. */
-function legacyDeviceSecret(): string | null {
-  try {
-    const value = globalThis.localStorage?.getItem("palladian.notes.device.v1");
-    return value && /^[A-Za-z0-9_-]{43}$/.test(value) ? value : null;
-  } catch {
-    return null;
   }
 }
 
@@ -165,8 +137,6 @@ function legacyDeviceSecret(): string | null {
 class SupersededClear extends Error {}
 interface ClearOperation {
   accountId: string;
-  /** Announced to other tabs as a device check's clear (D98). */
-  reconcile?: boolean;
   /** The lifecycle this clear ends: known when decided, or first read. */
   lifecycle: number | undefined;
   /** Whether it cleared (false: superseded); null while unfinished. */
@@ -272,7 +242,6 @@ export class NotesStore {
             "lifecycle" in value && typeof value.lifecycle === "number"
               ? value.lifecycle
               : null,
-            "reconcile" in value && value.reconcile === true,
           );
         }
       };
@@ -630,48 +599,17 @@ export class NotesStore {
   async clearAccount(
     accountId: string,
     operation: string = crypto.randomUUID(),
-    options: {
-      /**
-       * The lifecycle the caller decided about. It is checked under the
-       * account lock before anything is hidden or forgotten: if any tab has
-       * begun a newer lifecycle, nothing changes and the result is false.
-       */
-      lifecycle?: number;
-      /** A device check's clear (D98): other tabs check again, not sign out. */
-      reconcile?: boolean;
-    } = {},
   ): Promise<boolean> {
-    const { lifecycle, reconcile } = options;
-    if (lifecycle !== undefined && !this.clearOps.has(operation)) {
-      const held = this.accountHolds.has(accountId);
-      await this.holdAccount(accountId);
-      const stored = (await this.db.accounts.get(accountId))?.lifecycle ?? 0;
-      if (stored !== lifecycle) {
-        // Release only a hold taken here; another operation of this tab
-        // keeps its own.
-        if (
-          !held &&
-          ![...this.clearOps.values()].some(
-            (other) => other.accountId === accountId && other.result === null,
-          )
-        )
-          this.releaseAccount(accountId);
-        return false;
-      }
-      // Holding the lock, no tab can begin another lifecycle until the clear
-      // below has finished and released it.
-    }
     if (!this.clearOps.has(operation)) {
       await this.lifecyclesLoaded;
       if (!this.clearOps.has(operation)) {
         this.clearOps.set(operation, {
           accountId,
-          ...(reconcile ? { reconcile } : {}),
-          lifecycle: lifecycle ?? this.lifecycles.get(accountId),
+          lifecycle: this.lifecycles.get(accountId),
           result: null,
           attempts: 0,
         });
-        this.hideAccount(accountId, false, reconcile);
+        this.hideAccount(accountId);
       }
     }
     const op = this.clearOps.get(operation)!;
@@ -715,11 +653,7 @@ export class NotesStore {
       // Other tabs learn once, when the block is first recorded, which
       // lifecycle ended.
       if (ended !== null)
-        this.channel?.postMessage({
-          accountId,
-          lifecycle: ended,
-          ...(op.reconcile ? { reconcile: true } : {}),
-        });
+        this.channel?.postMessage({ accountId, lifecycle: ended });
       await this.deleteIfBlocked(accountId);
     } catch (error) {
       if (error instanceof SupersededClear) {
@@ -815,20 +749,12 @@ export class NotesStore {
    * Stop showing this account's content in this tab, and unless asked to keep
    * them, forget its unsaved in-memory snapshots too.
    */
-  private hideAccount(
-    accountId: string,
-    keepRecovery = false,
-    reconcile = false,
-  ) {
+  private hideAccount(accountId: string, keepRecovery = false) {
     this.activationEpoch++;
     this.blocked.add(accountId);
     if (!keepRecovery) this.forgetRecovery(accountId);
     this.epochs.set(accountId, this.epoch(accountId) + 1);
-    this.notify({
-      accountId,
-      invalidated: true,
-      ...(reconcile ? { reconcile } : {}),
-    });
+    this.notify({ accountId, invalidated: true });
   }
   /**
    * Another tab ended one of this account's lifecycles. A message about a
@@ -838,16 +764,12 @@ export class NotesStore {
    * keeps this tab's unsaved snapshots, which stay unreadable unless this
    * lifecycle is signed in to again.
    */
-  private async receiveClear(
-    accountId: string,
-    lifecycle: number | null,
-    reconcile = false,
-  ) {
+  private async receiveClear(accountId: string, lifecycle: number | null) {
     await this.lifecyclesLoaded;
     const mine = this.lifecycles.get(accountId);
     if (lifecycle === null) return this.hideAccount(accountId, true);
     if (mine !== undefined && mine > lifecycle) return;
-    this.hideAccount(accountId, false, reconcile);
+    this.hideAccount(accountId);
   }
   private accountLock(accountId: string) {
     return JSON.stringify([this.db.name, "account", accountId]);
@@ -902,26 +824,6 @@ export class NotesStore {
     );
   }
   /** Whether unsaved work is kept for this account; see `unsavedWork`. */
-  /**
-   * This browser's secret for the server's device records (D98), created once.
-   * One transaction reads and creates it, so every tab gets the same secret.
-   */
-  async deviceSecret(): Promise<string> {
-    return this.db.transaction("rw", this.db.device, async () => {
-      const stored = await this.db.device.get("secret");
-      if (stored) return stored.secret;
-      const secret = legacyDeviceSecret() ?? newDeviceSecret();
-      await this.db.device.put({ key: "secret", secret });
-      return secret;
-    });
-  }
-  /**
-   * The account's current lifecycle as stored (shared by every tab). A
-   * decision taken about this lifecycle can be enforced by `clearAccount`.
-   */
-  async lifecycleOf(accountId: string): Promise<number> {
-    return (await this.db.accounts.get(accountId))?.lifecycle ?? 0;
-  }
   async hasDrafts(accountId: string) {
     return (await this.unsavedWork(accountId)).total > 0;
   }
