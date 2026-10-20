@@ -2,7 +2,7 @@
 
 Date: 2026-10-19. Branch `feat/notes-deltos-import`, base `7c75cc6`. Owner request: "import all my notes from deltos to my palladian account", with D100–D101: only the Deltos account `jray`, trashed notes skipped, files later.
 
-This report describes the import prepared for independent review. Nothing has been imported into production yet; the production run follows review, merge and a backend deploy. Review rounds 1–3 (`notes-deltos-import-round{1,2,3}-astra-review.md`) requested changes; responses are below. Round 4 confirmed the last fix: **ACCEPTED**.
+This report describes the import, its independent review, and the production run on 2026-10-20 (results at the end of the production run section). Review rounds 1–3 (`notes-deltos-import-round{1,2,3}-astra-review.md`) requested changes; responses are below. Round 4 confirmed the last fix: **ACCEPTED**.
 
 ## Result
 
@@ -54,7 +54,7 @@ Measured on 2026-10-19 in this worktree, after the round 1 changes.
 
 No browser or iPhone check was run for this change; the production run's results and an owner look at the imported notes on the iPhone are pending.
 
-## Production run (pending)
+## Production run
 
 Run from a detached worktree at the merged `main` commit, after `pnpm install --frozen-lockfile`, in `apps/notes-backend`, with `CONVEX_DEPLOYMENT=dev:decisive-reindeer-520` and `--prod` on every runner step. Stop at the first step that exits nonzero; staged rows stay for inspection, and `clear` refuses until verification passes. If `import` or `clear` is interrupted (for example by a network error), rerun the same step. To abandon the import instead, repeat `npx convex run --prod imports:clearDeltos '{"limit":25}'` until it returns `more: false`. Keep the export file until `clear` succeeds.
 
@@ -64,6 +64,20 @@ Run from a detached worktree at the merged `main` commit, after `pnpm install --
 4. `… import --prod …`: imports in batches of 10 and verifies.
 5. `… verify --prod …` once more if desired, then `… clear --prod …`: verification, then an empty staging table.
 6. Delete the export file and its directory.
+
+Results, 2026-10-20, from a detached worktree at `main` `4163b33` (counts only):
+
+| Step                                                 | Result                                                                                                                                                                                                                                                                                             |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Backend deploy (`adamant-hound-861`)                 | Passed; added the `deltosImports.by_failure_and_note` index.                                                                                                                                                                                                                                       |
+| Export (Deltos production D1, read-only)             | 164 live notes, 33 trashed skipped, 131 exported, 27 file notes (20 with extracted text), 6 notebooks used, 22 unfiled, none in a removed notebook.                                                                                                                                                |
+| `stage --prod`                                       | Staging was empty; 131 staged, 131 convertible, no failures; warnings as in the table above.                                                                                                                                                                                                       |
+| `import --prod`                                      | 14 batches, 131 imported, 0 already imported; verification: 131 staged rows and 131 imported notes, none failing.                                                                                                                                                                                  |
+| Independent read-back (production data, counts only) | The owner has 133 notes (2 earlier plus 131 imported, distinct `deltos:` keys, all active) in 8 notebooks; imports sit in 7 (22 in the default notebook, 109 in the 6 Deltos notebooks). Created dates range 2026-06-21 to 2026-09-12 and edited dates 2026-06-25 to 2026-09-12, the Deltos dates. |
+| `clear --prod`                                       | Verification passed again; 131 staged rows deleted; staging confirmed empty.                                                                                                                                                                                                                       |
+| Export file                                          | Deleted with its directory.                                                                                                                                                                                                                                                                        |
+
+Pending: the owner's look at the imported notes in the app and on the iPhone; Deltos file bytes and `Collection` values follow those features (D101).
 
 ## Review history and responses
 
