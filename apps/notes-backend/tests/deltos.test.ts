@@ -1,5 +1,12 @@
+import { plainText } from "@palladian/notes-core";
 import { describe, expect, test } from "vitest";
-import { deltosToDoc, type DeltosNote } from "../convex/deltos";
+import {
+  collapseWhitespace,
+  deltosSourceText,
+  DeltosShapeError,
+  deltosToDoc,
+  type DeltosNote,
+} from "../convex/deltos";
 import { normalizeNewDoc } from "../convex/documents";
 
 type Segment = Record<string, unknown> & { text: string };
@@ -28,17 +35,34 @@ const seg = (text: string, marks: Record<string, unknown> = {}): Segment => ({
 });
 const para = (...segments: Segment[]) => block("paragraph", { segments });
 
-function convert(blocks: Block[], extra: Partial<DeltosNote> = {}) {
-  const result = deltosToDoc({
+function note(blocks: Block[], extra: Partial<DeltosNote> = {}): DeltosNote {
+  return {
     title: "",
     body: JSON.stringify(blocks),
     fileNote: false,
     fileExtract: null,
     ...extra,
-  });
+  };
+}
+
+function convert(blocks: Block[], extra: Partial<DeltosNote> = {}) {
+  const result = deltosToDoc(note(blocks, extra));
   // Every converted note must pass the creation path's own validation.
   normalizeNewDoc(JSON.stringify(result.doc.toJSON()));
-  return { json: result.doc.toJSON(), warnings: result.warnings };
+  return {
+    json: result.doc.toJSON(),
+    text: plainText(result.doc),
+    warnings: result.warnings,
+  };
+}
+
+/** Every piece of Deltos source text appears in the converted note. */
+function expectAllText(blocks: Block[], extra: Partial<DeltosNote> = {}) {
+  const { text } = convert(blocks, extra);
+  const stored = collapseWhitespace(text);
+  const pieces = deltosSourceText(note(blocks, extra));
+  expect(pieces.filter((piece) => !stored.includes(piece))).toEqual([]);
+  return pieces;
 }
 
 describe("Deltos conversion", () => {
@@ -244,5 +268,149 @@ describe("Deltos conversion", () => {
     expect(() =>
       deltosToDoc({ title: "", body: "{", fileNote: false, fileExtract: null }),
     ).toThrow(SyntaxError);
+  });
+  test("converts everything a quote nests, keeping block IDs", () => {
+    const code = block("code", { code: "quoted code", language: "js" });
+    const inner = block("quote", { segments: [seg("inner quote")] }, [
+      block("attachment", { name: "Inside.pdf" }),
+    ]);
+    const quote = block("quote", { segments: [seg("outer")] }, [
+      code,
+      block("list", { ordered: false }, [
+        block("item", { segments: [seg("quoted item")] }),
+      ]),
+      block("todo", { checked: true, segments: [seg("quoted task")] }),
+      block("link_card", { url: "https://example.com", title: "Quoted card" }),
+      inner,
+    ]);
+    const { json } = convert([quote]);
+    expect(json.content[0].attrs.id).toBe(quote.id);
+    expect(
+      json.content[0].content.map((n: { type: string }) => n.type),
+    ).toEqual([
+      "paragraph",
+      "code_block",
+      "bullet_list",
+      "task_list",
+      "paragraph",
+      "blockquote",
+    ]);
+    expect(json.content[0].content[1].attrs.id).toBe(code.id);
+    expect(json.content[0].content[5].attrs.id).toBe(inner.id);
+    expect(expectAllText([quote])).toHaveLength(7);
+    // A quote with only nested blocks needs no empty first paragraph.
+    const bare = convert([block("quote", {}, [para(seg("only"))])]);
+    expect(bare.json.content[0].content).toHaveLength(1);
+    const empty = convert([block("quote")]);
+    expect(empty.json.content[0].content).toEqual([
+      { type: "paragraph", attrs: { id: null } },
+    ]);
+  });
+
+  test("compares the title with the first line as Palladian derives titles", () => {
+    // "A" then a line break then "B" is the line "A", not the title "AB".
+    const split = convert([para(seg("A\nB"))], { title: "AB" });
+    expect(split.json.content[0].type).toBe("heading");
+    expect(split.text.split("\n")[0]).toBe("AB");
+    const same = convert([para(seg("Title\nmore"))], { title: "Title" });
+    expect(same.json.content[0].type).toBe("paragraph");
+    const code = convert([block("code", { code: "x\ny" })], { title: "x" });
+    expect(code.json.content[0].type).toBe("code_block");
+    const longer = convert([block("code", { code: "x\ny" })], {
+      title: "x y",
+    });
+    expect(longer.json.content[0].type).toBe("heading");
+  });
+
+  test("rejects bodies that are not Deltos block lists", () => {
+    const shapes = [
+      "{}",
+      "null",
+      '"text"',
+      "[1]",
+      "[null]",
+      '[{"type":"paragraph"}]',
+      '[{"id":"a","type":""}]',
+      '[{"id":"a","type":"paragraph","content":[]}]',
+      '[{"id":"a","type":"paragraph","children":{}}]',
+      '[{"id":"a","type":"paragraph","children":[{"id":"b"}]}]',
+      '[{"id":"a","type":"paragraph","content":{"segments":"x"}}]',
+      '[{"id":"a","type":"paragraph","content":{"segments":[{"text":1}]}}]',
+    ];
+    for (const body of shapes)
+      expect(() =>
+        deltosToDoc({ title: "T", body, fileNote: false, fileExtract: null }),
+      ).toThrow(DeltosShapeError);
+    // Open block types and missing content stay valid.
+    expect(() =>
+      deltosToDoc({
+        title: "",
+        body: '[{"id":"a","type":"divider"},{"id":"b","type":"plugin:x","content":null}]',
+        fileNote: false,
+        fileExtract: null,
+      }),
+    ).not.toThrow();
+  });
+
+  test("continues numbering across a list split by to-dos", () => {
+    const { json } = convert([
+      block("list", { ordered: true }, [
+        block("item", { segments: [seg("one")] }),
+        block("item", { segments: [seg("two")] }),
+        block("todo", { segments: [seg("task")] }),
+        block("item", { segments: [seg("three")] }),
+      ]),
+    ]);
+    expect(
+      json.content.map((n: { type: string; attrs: { order?: number } }) => [
+        n.type,
+        n.attrs.order,
+      ]),
+    ).toEqual([
+      ["ordered_list", 1],
+      ["task_list", undefined],
+      ["ordered_list", 3],
+    ]);
+  });
+
+  test("keeps children of every block type", () => {
+    const child = (text: string) => [para(seg(text))];
+    const blocks = [
+      block("code", { code: "c" }, child("under code")),
+      block("divider", {}, child("under divider")),
+      block("attachment", { name: "F.pdf" }, child("under attachment")),
+      block("link_card", { url: "https://example.com" }, child("under card")),
+      block("plugin", { code: "plugin source" }, child("under plugin")),
+    ];
+    const { warnings } = convert(blocks);
+    expect(expectAllText(blocks)).toHaveLength(9);
+    expect(warnings['"plugin" block kept as code']).toBe(1);
+  });
+
+  test("keeps all text of a note mixing every supported block", () => {
+    const blocks = [
+      block("heading", { level: 2, segments: [seg("Heading")] }),
+      para(
+        seg("plain "),
+        seg("bold", { bold: true }),
+        seg("x+1", { math: true }),
+      ),
+      block("list", { ordered: true }, [
+        block("item", { segments: [seg("first")] }, [
+          block("list", {}, [block("item", { segments: [seg("nested")] })]),
+        ]),
+        block("todo", { checked: false, segments: [seg("todo in list")] }),
+      ]),
+      block("todo", { segments: [seg("top todo")] }),
+      block("code", { code: "line 1\n  line 2", language: "bad label!" }),
+      block("divider"),
+      block("quote", { segments: [seg("said")] }),
+      block("link_card", { url: "ftp://files", title: "" }),
+    ];
+    expectAllText(blocks, {
+      title: "A title",
+      fileNote: true,
+      fileExtract: "Page one\n\nPage two",
+    });
   });
 });

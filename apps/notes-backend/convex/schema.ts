@@ -223,9 +223,10 @@ export default defineSchema({
     .index("by_inviter", ["invitedBy"]),
 
   /**
-   * Deltos notes waiting to be imported (Q15), loaded with `convex import`
-   * and removed as each becomes a Palladian note. A row that cannot convert
-   * keeps a generic `failure` reason and stays for inspection.
+   * Deltos notes for the one-off import (D100–D101), loaded with
+   * `convex import --append`. Each row is linked to its note once imported, or
+   * keeps a generic `failure` reason, and stays until verification has passed
+   * and the operator clears the table.
    */
   deltosImports: defineTable({
     deltosId: v.string(),
@@ -238,7 +239,9 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
     failure: v.optional(v.string()),
-  }).index("by_failure", ["failure"]),
+    // Set once imported; the row stays until verification and clearing.
+    noteId: v.optional(v.id("notes")),
+  }).index("by_failure_and_note", ["failure", "noteId"]),
 
   /** Recent account emails, kept briefly to limit sends per subject and overall. */
   emailSends: defineTable({

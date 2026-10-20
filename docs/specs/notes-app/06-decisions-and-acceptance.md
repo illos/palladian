@@ -133,7 +133,7 @@ Settled Q01/Q03/Q04/Q06/Q08/Q13 are retained in the ledger. The remaining IDs mi
 | Q11 | Cross-owner objects, objects referenced by other trashed notes at purge, quotas, recovery placement for invited editors and edits against merely trashed notes | Data/file lifecycle and later recovery design                                  |
 | Q12 | Sidebar providers, credentials, billing, execution, shared/private conversations                                                                               | Sidebar only                                                                   |
 | Q14 | Client versions, authentication compatibility, individual agent registration, owner-delegation representation/revocation, write limits                         | MCP/auth implementation and actual-client acceptance                           |
-| Q15 | Notes imported (D100–D101); file bytes and Collection values follow those features. Selective source reuse, deployment service accounts, email sender setup    | Separately assigned import/hosting tasks                                       |
+| Q15 | Note import approved and prepared (D100–D101), production run pending; file bytes and Collection values follow. Source reuse, service accounts, email sender   | Separately assigned import/hosting tasks                                       |
 
 Engineering must also define backup expiry, deletion propagation, idempotency windows, supported file limits, and retry-safe physical cleanup. These are not missing owner answers about the core Trash policy. No monthly budget or custom app domain is required to finish this specification.
 
