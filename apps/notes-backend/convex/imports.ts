@@ -325,7 +325,11 @@ async function verifyRow(
     .withIndex("by_note", (q) => q.eq("noteId", note._id))
     .unique();
   if (!content) return [...problems, "content missing"];
-  const text = missingSourceText(row, plainText(parseStoredDoc(content.doc)));
+  const text = missingSourceText(
+    row,
+    plainText(parseStoredDoc(content.doc)),
+    deltosToDoc(row).titleAdded,
+  );
   if (text.missing)
     problems.push(`text missing: ${text.missing} of ${text.total} pieces`);
   return problems;

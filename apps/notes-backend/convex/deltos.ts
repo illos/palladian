@@ -377,18 +377,21 @@ function firstLine(blocks: ProseMirrorNode[]) {
 export function deltosToDoc(note: DeltosNote): {
   doc: ProseMirrorNode;
   warnings: Warnings;
+  /** Whether the title was added as its own first line. */
+  titleAdded: boolean;
 } {
   const converter = new Converter();
   const blocks = converter.blocks(blocksOf(JSON.parse(note.body)));
   if (note.fileNote && note.fileExtract)
     blocks.push(...converter.extract(note.fileExtract));
   const title = collapse(note.title);
-  if (title && (!blocks.length || firstLine(blocks) !== title))
+  const titleAdded = !!title && (!blocks.length || firstLine(blocks) !== title);
+  if (titleAdded)
     blocks.unshift(node.heading.create({ level: 1 }, s.text(title)));
   if (!blocks.length) blocks.push(node.paragraph.create());
   const doc = node.doc.create(null, blocks);
   doc.check();
-  return { doc, warnings: converter.warnings };
+  return { doc, warnings: converter.warnings, titleAdded };
 }
 
 /**
@@ -437,15 +440,20 @@ export function deltosSourceText(note: DeltosNote): string[] {
  * How much of a note's Deltos source text is absent from its stored plain
  * text. The stored text must start with the title, then contain every body
  * piece in order, each after the previous one, so a repeated or moved piece
- * cannot stand in for a missing one.
+ * cannot stand in for a missing one. When conversion added the title as its
+ * own first line (`titleAdded` from deltosToDoc), body text is matched only
+ * after it.
  */
-export function missingSourceText(note: DeltosNote, storedText: string) {
+export function missingSourceText(
+  note: DeltosNote,
+  storedText: string,
+  titleAdded: boolean,
+) {
   const stored = collapse(storedText);
   const title = collapse(note.title);
   const pieces = deltosSourceText(note);
   let missing = title && !stored.startsWith(title) ? 1 : 0;
-  // Body text starts after a title that was added as its own first line.
-  let at = title && !pieces[0]?.startsWith(title) ? title.length : 0;
+  let at = titleAdded ? title.length : 0;
   for (const piece of pieces) {
     const found = stored.indexOf(piece, at);
     if (found < 0) missing++;

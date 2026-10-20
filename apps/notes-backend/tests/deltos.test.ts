@@ -59,7 +59,10 @@ function convert(blocks: Block[], extra: Partial<DeltosNote> = {}) {
 /** Every piece of Deltos source text appears, in order, in the converted note. */
 function expectAllText(blocks: Block[], extra: Partial<DeltosNote> = {}) {
   const { text } = convert(blocks, extra);
-  expect(missingSourceText(note(blocks, extra), text).missing).toBe(0);
+  const { titleAdded } = deltosToDoc(note(blocks, extra));
+  expect(missingSourceText(note(blocks, extra), text, titleAdded).missing).toBe(
+    0,
+  );
   return deltosSourceText(note(blocks, extra));
 }
 
@@ -410,5 +413,29 @@ describe("Deltos conversion", () => {
       fileNote: true,
       fileExtract: "Page one\n\nPage two",
     });
+  });
+  test("an added title line cannot stand in for missing body text", () => {
+    const missing = (blocks: Block[], title: string, drop: string) => {
+      const source = note(blocks, { title });
+      const { doc, titleAdded } = deltosToDoc(source);
+      expect(titleAdded).toBe(true);
+      const lines = plainText(doc).split("\n");
+      const kept = lines.filter((line, index) => index === 0 || line !== drop);
+      expect(kept.length).toBeLessThan(lines.length);
+      return missingSourceText(source, kept.join("\n"), titleAdded).missing;
+    };
+    // An attachment named like the title, its placeholder removed.
+    expect(
+      missing(
+        [block("attachment", { name: "Report.pdf" }), para(seg("notes"))],
+        "Report.pdf",
+        "📎 Report.pdf (file to be added)",
+      ),
+    ).toBe(1);
+    // Title "A", body "A A" shortened to "A".
+    const source = note([para(seg("A A"))], { title: "A" });
+    const { titleAdded } = deltosToDoc(source);
+    expect(missingSourceText(source, "A\nA", titleAdded).missing).toBe(1);
+    expect(missingSourceText(source, "A\nA A", titleAdded).missing).toBe(0);
   });
 });
