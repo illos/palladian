@@ -392,14 +392,14 @@ export function deltosToDoc(note: DeltosNote): {
 }
 
 /**
- * The source text of a Deltos note, gathered independently of the converter
- * the way Deltos's own search text does (spine/searchText.ts: segment runs
- * and code, through all children), plus attachment names, link-card labels,
- * the title and extracted file text. Used to verify an import kept every
- * piece; whitespace is collapsed.
+ * The source text of a Deltos note's body, in document order, gathered
+ * independently of the converter the way Deltos's own search text is
+ * (spine/searchText.ts: segment runs and code, through all children), plus
+ * attachment names, link-card labels and extracted file text. Whitespace is
+ * collapsed.
  */
 export function deltosSourceText(note: DeltosNote): string[] {
-  const out = [note.title];
+  const out: string[] = [];
   const walk = (raw: unknown) => {
     if (!Array.isArray(raw)) return;
     for (const item of raw as unknown[]) {
@@ -433,4 +433,23 @@ export function deltosSourceText(note: DeltosNote): string[] {
   return out.map(collapse).filter(Boolean);
 }
 
-export { collapse as collapseWhitespace };
+/**
+ * How much of a note's Deltos source text is absent from its stored plain
+ * text. The stored text must start with the title, then contain every body
+ * piece in order, each after the previous one, so a repeated or moved piece
+ * cannot stand in for a missing one.
+ */
+export function missingSourceText(note: DeltosNote, storedText: string) {
+  const stored = collapse(storedText);
+  const title = collapse(note.title);
+  const pieces = deltosSourceText(note);
+  let missing = title && !stored.startsWith(title) ? 1 : 0;
+  // Body text starts after a title that was added as its own first line.
+  let at = title && !pieces[0]?.startsWith(title) ? title.length : 0;
+  for (const piece of pieces) {
+    const found = stored.indexOf(piece, at);
+    if (found < 0) missing++;
+    else at = found + piece.length;
+  }
+  return { missing, total: pieces.length + (title ? 1 : 0) };
+}

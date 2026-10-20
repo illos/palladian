@@ -60,6 +60,7 @@ export function compareIds(
   label: string,
   expected: readonly string[],
   found: readonly string[],
+  allowMissing = false,
 ): string[] {
   const problems: string[] = [];
   const want = new Set(expected);
@@ -68,7 +69,7 @@ export function compareIds(
     problems.push(`${label}: ${found.length - have.size} duplicate IDs`);
   const missing = [...want].filter((id) => !have.has(id));
   const extra = [...have].filter((id) => !want.has(id));
-  if (missing.length)
+  if (missing.length && !allowMissing)
     problems.push(
       `${label}: ${missing.length} missing (${missing.slice(0, SHOWN).join(", ")})`,
     );
@@ -92,17 +93,21 @@ async function pages<T extends { continueCursor: string; isDone: boolean }>(
   }
 }
 
-/** Dry run: every exported note is staged once, pending, and converts. */
+/**
+ * Dry run: every exported note is staged once, pending, and converts. When
+ * resuming an import, notes imported by earlier batches are no longer pending.
+ */
 export async function check(
   backend: ImportBackend,
   expected: readonly string[],
+  resuming = false,
 ): Promise<Outcome> {
   const all = await pages((cursor) => backend.check({ cursor, numItems: 10 }));
   const ids = all.flatMap((page) => page.ids);
   const failed = all.flatMap((page) => page.failed);
   const warnings: Record<string, number> = {};
   for (const page of all) addAll(warnings, page.warnings);
-  const problems = compareIds("pending staged notes", expected, ids);
+  const problems = compareIds("pending staged notes", expected, ids, resuming);
   if (failed.length)
     problems.push(
       `${failed.length} notes cannot convert: ${failed
@@ -126,11 +131,16 @@ export async function check(
   };
 }
 
-/** Verification: every staged row imported and intact; the note set matches the export. */
+/**
+ * Verification: every staged row imported and intact; the note set matches
+ * the export. While clearing, rows deleted by an earlier, interrupted clear
+ * (verified before it began) may be gone.
+ */
 export async function verify(
   backend: ImportBackend,
   ownerEmail: string,
   expected: readonly string[],
+  clearing = false,
 ): Promise<Outcome> {
   const checked = await pages((cursor) =>
     backend.verify({ ownerEmail, cursor, numItems: 10 }),
@@ -142,7 +152,7 @@ export async function verify(
   const imported = keys.flatMap((page) => page.ids);
   const rows = checked.flatMap((page) => page.problems);
   const problems = [
-    ...compareIds("staged notes", expected, ids),
+    ...compareIds("staged notes", expected, ids, clearing),
     ...compareIds("imported notes", expected, imported),
   ];
   if (rows.length)
@@ -163,14 +173,17 @@ export async function verify(
   };
 }
 
-/** Check, import in batches (stopping at the first failure), then verify. */
+/**
+ * Check, import in batches (stopping at the first failure), then verify.
+ * Rerunning after an interruption continues with the rows still pending.
+ */
 export async function runImport(
   backend: ImportBackend,
   ownerEmail: string,
   expected: readonly string[],
   limit = 10,
 ): Promise<Outcome> {
-  const checked = await check(backend, expected);
+  const checked = await check(backend, expected, true);
   if (!checked.ok)
     return {
       ok: false,
@@ -215,13 +228,16 @@ export async function runImport(
   };
 }
 
-/** Empty the staging table, only after verification passes, and confirm it is empty. */
+/**
+ * Empty the staging table, only after verification passes, and confirm it is
+ * empty. Rerunning after an interruption finishes the job.
+ */
 export async function clear(
   backend: ImportBackend,
   ownerEmail: string,
   expected: readonly string[],
 ): Promise<Outcome> {
-  const verified = await verify(backend, ownerEmail, expected);
+  const verified = await verify(backend, ownerEmail, expected, true);
   if (!verified.ok)
     return {
       ok: false,

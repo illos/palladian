@@ -9,10 +9,9 @@ import {
 } from "./_generated/server";
 import type { Principal } from "./access";
 import {
-  collapseWhitespace,
-  deltosSourceText,
   deltosToDoc,
   DeltosShapeError,
+  missingSourceText,
   type Warnings,
 } from "./deltos";
 import { createNoteRecord, normalizeNewDoc, serializeDoc } from "./documents";
@@ -326,11 +325,9 @@ async function verifyRow(
     .withIndex("by_note", (q) => q.eq("noteId", note._id))
     .unique();
   if (!content) return [...problems, "content missing"];
-  const stored = collapseWhitespace(plainText(parseStoredDoc(content.doc)));
-  const pieces = deltosSourceText(row);
-  const missing = pieces.filter((piece) => !stored.includes(piece)).length;
-  if (missing)
-    problems.push(`text missing: ${missing} of ${pieces.length} pieces`);
+  const text = missingSourceText(row, plainText(parseStoredDoc(content.doc)));
+  if (text.missing)
+    problems.push(`text missing: ${text.missing} of ${text.total} pieces`);
   return problems;
 }
 

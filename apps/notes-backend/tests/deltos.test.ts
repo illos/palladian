@@ -1,10 +1,10 @@
 import { plainText } from "@palladian/notes-core";
 import { describe, expect, test } from "vitest";
 import {
-  collapseWhitespace,
   deltosSourceText,
   DeltosShapeError,
   deltosToDoc,
+  missingSourceText,
   type DeltosNote,
 } from "../convex/deltos";
 import { normalizeNewDoc } from "../convex/documents";
@@ -56,13 +56,11 @@ function convert(blocks: Block[], extra: Partial<DeltosNote> = {}) {
   };
 }
 
-/** Every piece of Deltos source text appears in the converted note. */
+/** Every piece of Deltos source text appears, in order, in the converted note. */
 function expectAllText(blocks: Block[], extra: Partial<DeltosNote> = {}) {
   const { text } = convert(blocks, extra);
-  const stored = collapseWhitespace(text);
-  const pieces = deltosSourceText(note(blocks, extra));
-  expect(pieces.filter((piece) => !stored.includes(piece))).toEqual([]);
-  return pieces;
+  expect(missingSourceText(note(blocks, extra), text).missing).toBe(0);
+  return deltosSourceText(note(blocks, extra));
 }
 
 describe("Deltos conversion", () => {

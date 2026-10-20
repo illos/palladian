@@ -34,6 +34,12 @@ if (mode === "garbage") {
 }
 const body = (text) =>
   JSON.stringify([{ id: "b", type: "paragraph", content: { segments: [{ text }] }, children: [] }]);
+// Each query must be scoped to the account and, for notes and notebooks, to live rows.
+const scoped = sql.includes("FROM usernames")
+  ? sql.includes("usernameNormalized = 'jray'")
+  : sql.includes("accountId = 'acct-1'") || sql.includes("WHERE id IN");
+if (!scoped || (!sql.includes("FROM usernames") && !sql.includes("deletedAt IS NULL")))
+  process.exit(9);
 let results = [];
 if (sql.includes("FROM usernames")) results = [{ accountId: "acct-1" }];
 else if (sql.includes("FROM notebooks")) results = [{ id: "nb-1", name: "Work" }];

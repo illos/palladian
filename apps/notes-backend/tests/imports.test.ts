@@ -520,6 +520,39 @@ describe("Deltos import functions", () => {
     });
   });
 
+  test("verification counts repeated text and checks its order", async () => {
+    const t = setup();
+    await person(t);
+    await stage(t, [
+      row("twice", null, "Twice", paragraphs("twice", ["same", "same"])),
+      row("order", null, "Order", paragraphs("order", ["first", "second"])),
+    ]);
+    await importBatch(t);
+    expect(await verifyProblems(t)).toEqual({});
+    const edit = async (
+      deltosId: string,
+      change: (content: unknown[]) => unknown[],
+    ) => {
+      const note = await noteByKey(t, deltosId);
+      await t.run(async (ctx) => {
+        const content = await ctx.db
+          .query("noteContent")
+          .withIndex("by_note", (q) => q.eq("noteId", note._id))
+          .unique();
+        const doc = JSON.parse(content!.doc);
+        doc.content = change(doc.content);
+        await ctx.db.patch(content!._id, { doc: JSON.stringify(doc) });
+      });
+    };
+    // Drop one of two identical paragraphs; swap the other note's paragraphs.
+    await edit("twice", (blocks) => blocks.slice(0, -1));
+    await edit("order", ([title, a, b]) => [title, b, a]);
+    expect(await verifyProblems(t)).toEqual({
+      twice: ["text missing: 1 of 3 pieces"],
+      order: ["text missing: 1 of 3 pieces"],
+    });
+  });
+
   test("clearing removes staged rows in batches", async () => {
     const t = setup();
     await person(t);
@@ -558,6 +591,31 @@ describe("Deltos import runner", () => {
     expect((await verify(backend(t), EMAIL, ids)).ok).toBe(true);
     const cleared = await clear(backend(t), EMAIL, ids);
     expect(cleared).toMatchObject({ ok: true, summary: { deleted: 3 } });
+    expect(await counts(t)).toMatchObject({ staged: 0, notes: 3 });
+  });
+
+  test("an interrupted import or clear finishes when rerun", async () => {
+    const t = setup();
+    await person(t);
+    const rows = [
+      row("a", null, "A"),
+      row("b", "Work", "B"),
+      row("c", null, "C"),
+    ];
+    await stage(t, rows);
+    const ids = rows.map((r) => r.deltosId);
+    // One batch committed before the interruption.
+    await importBatch(t, 1);
+    const resumed = await runImport(backend(t), EMAIL, ids, 1);
+    expect(resumed).toMatchObject({ ok: true, summary: { imported: 2 } });
+    // Rerunning a finished import only verifies.
+    expect(await runImport(backend(t), EMAIL, ids)).toMatchObject({
+      ok: true,
+      summary: { imported: 0 },
+    });
+    await t.mutation(internal.imports.clearDeltos, { limit: 1 });
+    const cleared = await clear(backend(t), EMAIL, ids);
+    expect(cleared).toMatchObject({ ok: true, summary: { deleted: 2 } });
     expect(await counts(t)).toMatchObject({ staged: 0, notes: 3 });
   });
 
