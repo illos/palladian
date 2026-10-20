@@ -2,7 +2,7 @@
 
 Date: 2026-10-19. Branch `feat/notes-deltos-import`, base `7c75cc6`. Owner request: "import all my notes from deltos to my palladian account", with D100–D101: only the Deltos account `jray`, trashed notes skipped, files later.
 
-This report describes the import prepared for independent review. Nothing has been imported into production yet; the production run follows review, merge and a backend deploy. Review rounds 1–3 (`notes-deltos-import-round{1,2,3}-astra-review.md`) requested changes; responses are below.
+This report describes the import prepared for independent review. Nothing has been imported into production yet; the production run follows review, merge and a backend deploy. Review rounds 1–3 (`notes-deltos-import-round{1,2,3}-astra-review.md`) requested changes; responses are below. Round 4 confirmed the last fix: **ACCEPTED**.
 
 ## Result
 
@@ -89,3 +89,5 @@ Round 2 (GPT-6-Astra): CHANGES REQUESTED. F1–F4, F6 and F8 resolved; F5 comple
 Round 3 (GPT-6-Astra, blocking issues only): CHANGES REQUESTED.
 
 - **H1, an added title line could stand in for missing body text**: fixed. `deltosToDoc` reports whether it added the title (`titleAdded`, the converter's own first-line decision), and verification matches body text only after an added title. Regressions: an attachment named like the title with its placeholder removed, and title "A" with body "A A" shortened to "A"; both are reported. All 131 real notes still pass.
+
+Round 4 (GPT-6-Astra, confirmation of H1): **ACCEPTED**. No new blockers.
