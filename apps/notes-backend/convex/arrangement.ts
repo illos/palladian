@@ -50,6 +50,8 @@ export const PIN_LIMIT = 100;
 export const ORDER_LIMIT = 100;
 export const POSITION_LIMIT = 500;
 export const BATCH_LIMIT = 100;
+/** Duplicate rows removed per note in one write (with BATCH_LIMIT: ≤ 2,000). */
+const DUPLICATE_LIMIT = 20;
 /** Cleanup rows per scheduled run. */
 const CLEANUP_BATCH = 200;
 /**
@@ -127,9 +129,38 @@ function positionsOf(ctx: QueryCtx, person: Person, limit: number) {
     .take(limit);
 }
 
+/** The person's arrangement version: how many writes they have made. */
+async function versionOf(ctx: QueryCtx, person: Person) {
+  const row = await ctx.db
+    .query("arrangementVersions")
+    .withIndex("by_principal", (q) => q.eq("principalId", person._id))
+    .unique();
+  return row?.version ?? 0;
+}
+
+/** Count one more write; returns the new version. */
+async function nextVersion(ctx: MutationCtx, person: Person) {
+  const row = await ctx.db
+    .query("arrangementVersions")
+    .withIndex("by_principal", (q) => q.eq("principalId", person._id))
+    .unique();
+  if (row) {
+    await ctx.db.patch(row._id, { version: row.version + 1 });
+    return row.version + 1;
+  }
+  await ctx.db.insert("arrangementVersions", {
+    principalId: person._id,
+    version: 1,
+  });
+  return 1;
+}
+
+const written = v.object({ version: v.number() });
+
 export const mine = query({
   args: {},
   returns: v.object({
+    version: v.number(),
     pins: v.array(v.object({ noteId: v.id("notes"), pinnedAt: v.number() })),
     orders: v.array(v.object({ list: v.string(), order })),
     positions: v.array(
@@ -152,20 +183,25 @@ export const mine = query({
       if (await access.listReadable(row.list))
         orders.push({ list: row.list, order: row.order });
     const positions = [];
-    for (const row of await positionsOf(ctx, person, POSITION_LIMIT))
+    // One position per note: the first row, which is the one writes update.
+    const seen = new Set<string>();
+    for (const row of await positionsOf(ctx, person, POSITION_LIMIT)) {
+      if (seen.has(row.noteId)) continue;
+      seen.add(row.noteId);
       if (await access.positionLive(row))
         positions.push({
           notebookId: row.notebookId,
           noteId: row.noteId,
           key: row.key,
         });
-    return { pins, orders, positions };
+    }
+    return { version: await versionOf(ctx, person), pins, orders, positions };
   },
 });
 
 export const setPin = mutation({
   args: { noteId: v.id("notes"), pinned: v.boolean() },
-  returns: v.null(),
+  returns: written,
   handler: async (ctx, args) => {
     const person = await requireHuman(ctx);
     const existing = await ctx.db
@@ -177,10 +213,10 @@ export const setPin = mutation({
     // Unpinning only removes the person's own row; it needs no access.
     if (!args.pinned) {
       if (existing) await ctx.db.delete(existing._id);
-      return null;
+      return { version: await nextVersion(ctx, person) };
     }
     await loadNote(ctx, person, args.noteId, "read");
-    if (existing) return null;
+    if (existing) return { version: await nextVersion(ctx, person) };
     let rows = await pinsOf(ctx, person, PIN_LIMIT);
     if (rows.length >= PIN_LIMIT) {
       const access = accessFor(ctx, person);
@@ -196,14 +232,14 @@ export const setPin = mutation({
       noteId: args.noteId,
       pinnedAt: Date.now(),
     });
-    return null;
+    return { version: await nextVersion(ctx, person) };
   },
 });
 
 /** A list's sort order: "all" for All Notes, or a notebook ID. */
 export const setOrder = mutation({
   args: { list: v.string(), order },
-  returns: v.null(),
+  returns: written,
   handler: async (ctx, args) => {
     const person = await requireHuman(ctx);
     if (args.list === "all") {
@@ -222,7 +258,7 @@ export const setOrder = mutation({
       .unique();
     if (existing) {
       await ctx.db.patch(existing._id, { order: args.order });
-      return null;
+      return { version: await nextVersion(ctx, person) };
     }
     let rows = await ordersOf(ctx, person, ORDER_LIMIT);
     if (rows.length >= ORDER_LIMIT) {
@@ -239,7 +275,7 @@ export const setOrder = mutation({
       list: args.list,
       order: args.order,
     });
-    return null;
+    return { version: await nextVersion(ctx, person) };
   },
 });
 
@@ -252,7 +288,7 @@ export const setPositions = mutation({
     notebookId: v.id("notebooks"),
     entries: v.array(v.object({ noteId: v.id("notes"), key: v.string() })),
   },
-  returns: v.null(),
+  returns: written,
   handler: async (ctx, args) => {
     const person = await requireHuman(ctx);
     if (args.entries.length > BATCH_LIMIT)
@@ -269,13 +305,16 @@ export const setPositions = mutation({
       const { note } = await loadNote(ctx, person, entry.noteId, "read");
       if (note.notebookId !== args.notebookId)
         fail("invalid", "That note is in another notebook.");
+      // One row per person and note. Duplicates (only possible from an
+      // earlier build of this branch) are removed here, the first row kept.
       const [existing, ...extra] = await ctx.db
         .query("notePositions")
         .withIndex("by_principal_and_note", (q) =>
           q.eq("principalId", person._id).eq("noteId", entry.noteId),
         )
-        .take(3);
-      // One row per person and note; repair any duplicates.
+        .take(DUPLICATE_LIMIT + 1);
+      if (extra.length >= DUPLICATE_LIMIT)
+        fail("invalid", "Too many stored positions for one note.");
       for (const row of extra) await ctx.db.delete(row._id);
       writes.push({ entry, existing: existing ?? null });
     }
@@ -309,7 +348,7 @@ export const setPositions = mutation({
           noteId: entry.noteId,
           key: entry.key,
         });
-    return null;
+    return { version: await nextVersion(ctx, person) };
   },
 });
 

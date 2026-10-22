@@ -30,6 +30,7 @@ import {
   orderOf,
   pinEdit,
   positionsEdit,
+  serialQueue,
   settleEdits,
   withEdits,
   type ArrangementEdit,
@@ -800,10 +801,14 @@ export function App({
       liveRef.current === at.live;
   }
 
+  /** One device's arrangement writes reach the server one at a time, in order. */
+  const [arrangeInOrder] = useState(serialQueue);
+
   /**
-   * Show a change at once, then save it. Until the synced arrangement
-   * includes it, it is shown on top; a failed save removes it again, and it
-   * expires after 30 seconds in any case.
+   * Show a change at once, then save it after this device's earlier changes.
+   * It stays shown until a synced arrangement reaches the version the server
+   * returned for it; a failed save removes it, and it expires after 30
+   * seconds in any case.
    */
   async function rearrange(
     edit: ArrangementEdit,
@@ -811,28 +816,29 @@ export function App({
     save: (
       client: NonNullable<typeof live>["client"],
       current: () => boolean,
-    ) => Promise<void>,
+    ) => Promise<number | undefined>,
   ) {
     const client = liveRef.current?.client;
     if (!current() || !client || !accountId) return;
     const id = ++editCount.current;
-    setPendingEdits((edits) => [
-      ...edits,
-      { id, accountId, edit, confirmed: false },
-    ]);
+    setPendingEdits((edits) => [...edits, { id, accountId, edit }]);
     const drop = () =>
       setPendingEdits((edits) => edits.filter((pending) => pending.id !== id));
     setTimeout(drop, 30_000);
+    let version: number | undefined;
     try {
-      await save(client, current);
+      version = await arrangeInOrder(() =>
+        current() ? save(client, current) : Promise.resolve(undefined),
+      );
     } catch (failure) {
       drop();
       throw failure;
     }
+    if (version === undefined) return drop();
     setPendingEdits((edits) =>
       settleEdits(
         edits.map((pending) =>
-          pending.id === id ? { ...pending, confirmed: true } : pending,
+          pending.id === id ? { ...pending, version } : pending,
         ),
         savedArrangementRef.current,
       ),
@@ -859,6 +865,7 @@ export function App({
     notebookId: string,
     noteId: string,
     beforeId: string | null,
+    ticket?: () => boolean,
   ) {
     const keys = new Map(
       (arrangement?.positions ?? [])
@@ -874,7 +881,8 @@ export function App({
         : others.findIndex((row) => row.id === beforeId);
     // The note it was dropped by has left the list meanwhile.
     if (index < 0) return;
-    const current = sessionTicket();
+    const current = ticket ?? sessionTicket();
+    if (!current()) return;
     try {
       const writes = placement(others, index, noteId);
       const { setPositions } = await import("./note-tools");
@@ -912,6 +920,8 @@ export function App({
       .filter((row) => row.id !== noteId)
       .map((row) => row.id);
     if (shownIds.some((id) => !allIds.includes(id))) return;
+    // The account and session the drag began in; a drop elsewhere does nothing.
+    const ticket = sessionTicket();
     event.preventDefault();
     const pointer = event.pointerId;
     handle.setPointerCapture(pointer);
@@ -955,8 +965,8 @@ export function App({
       moved.classList.remove("reordering");
       moved.style.transform = "";
       setReorderLine(null);
-      if (commit && index !== from)
-        void reorderRef.current(notebookId, noteId, beforeAt(index));
+      if (commit && index !== from && ticket())
+        void reorderRef.current(notebookId, noteId, beforeAt(index), ticket);
     };
     const up = (e: PointerEvent) => {
       if (e.pointerId === pointer) finish(true);

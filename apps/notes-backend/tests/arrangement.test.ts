@@ -181,6 +181,7 @@ describe("arrangement", () => {
     });
     await t.run((ctx) => ctx.db.delete(member));
     expect(await bea.as.query(api.arrangement.mine, {})).toEqual({
+      version: 3,
       pins: [],
       orders: [],
       positions: [],
@@ -532,6 +533,7 @@ describe("arrangement", () => {
       entries: [{ noteId: own, key: "V" }],
     });
     expect(await bea.as.query(api.arrangement.mine, {})).toEqual({
+      version: expect.any(Number),
       pins: [{ noteId: own, pinnedAt: expect.any(Number) }],
       orders: [{ list: bea.notebookId, order: "custom" }],
       positions: [{ notebookId: bea.notebookId, noteId: own, key: "V" }],
@@ -657,5 +659,66 @@ describe("arrangement", () => {
         entries: [{ noteId: own, key: "V" }],
       }),
     ).rejects.toThrow(/up to 500/);
+  });
+
+  test("every write counts a version, which reads report", async () => {
+    const t = setup();
+    const ada = await human(t, "Ada");
+    const first = await note(ada, "First");
+    expect((await ada.as.query(api.arrangement.mine, {})).version).toBe(0);
+    expect(
+      await ada.as.mutation(api.arrangement.setPin, {
+        noteId: first,
+        pinned: true,
+      }),
+    ).toEqual({ version: 1 });
+    expect(
+      await ada.as.mutation(api.arrangement.setOrder, {
+        list: "all",
+        order: "alpha",
+      }),
+    ).toEqual({ version: 2 });
+    expect(
+      await ada.as.mutation(api.arrangement.setPositions, {
+        notebookId: ada.notebookId,
+        entries: [{ noteId: first, key: "V" }],
+      }),
+    ).toEqual({ version: 3 });
+    expect((await ada.as.query(api.arrangement.mine, {})).version).toBe(3);
+  });
+
+  test("stored duplicates of a position read as one and are removed on write", async () => {
+    const t = setup(true);
+    const ada = await human(t, "Ada");
+    const first = await note(ada, "First");
+    await t.run(async (ctx) => {
+      for (const key of ["F", "M", "V", "k"])
+        await ctx.db.insert("notePositions", {
+          principalId: ada.id,
+          notebookId: ada.notebookId,
+          noteId: first,
+          key,
+        });
+    });
+    // Reads use the first row, the one a write updates.
+    expect((await ada.as.query(api.arrangement.mine, {})).positions).toEqual([
+      { notebookId: ada.notebookId, noteId: first, key: "F" },
+    ]);
+    await ada.as.mutation(api.arrangement.setPositions, {
+      notebookId: ada.notebookId,
+      entries: [{ noteId: first, key: "z" }],
+    });
+    const rows = await t.run((ctx) =>
+      ctx.db
+        .query("notePositions")
+        .withIndex("by_principal_and_note", (q) =>
+          q.eq("principalId", ada.id).eq("noteId", first),
+        )
+        .collect(),
+    );
+    expect(rows.map((r) => r.key)).toEqual(["z"]);
+    expect((await ada.as.query(api.arrangement.mine, {})).positions).toEqual([
+      { notebookId: ada.notebookId, noteId: first, key: "z" },
+    ]);
   });
 });

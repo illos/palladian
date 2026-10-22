@@ -60,6 +60,8 @@ export interface Draft extends NoteBody {
  * in the backend.
  */
 export interface Arrangement {
+  /** The server's count of this person's arrangement writes, when synced. */
+  version?: number;
   pins: { noteId: string; pinnedAt: number }[];
   orders: { list: string; order: "edited" | "alpha" | "created" | "custom" }[];
   positions: { notebookId: string; noteId: string; key: string }[];

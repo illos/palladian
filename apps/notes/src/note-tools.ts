@@ -24,24 +24,30 @@ export async function duplicateNote(
   return result.noteId;
 }
 
-/** Pins, sort orders and custom positions are personal (D102). */
+/**
+ * Pins, sort orders and custom positions are personal (D102). Each write
+ * returns the person's arrangement version after it.
+ */
 export async function setPin(
   client: ConvexReactClient,
   noteId: string,
   pinned: boolean,
-) {
-  await client.mutation(api.arrangement.setPin, {
-    noteId: noteId as Id<"notes">,
-    pinned,
-  });
+): Promise<number> {
+  return (
+    await client.mutation(api.arrangement.setPin, {
+      noteId: noteId as Id<"notes">,
+      pinned,
+    })
+  ).version;
 }
 
 export async function setOrder(
   client: ConvexReactClient,
   list: string,
   order: "edited" | "alpha" | "created" | "custom",
-) {
-  await client.mutation(api.arrangement.setOrder, { list, order });
+): Promise<number> {
+  return (await client.mutation(api.arrangement.setOrder, { list, order }))
+    .version;
 }
 
 /**
@@ -53,17 +59,21 @@ export async function setPositions(
   notebookId: string,
   entries: { noteId: string; key: string }[],
   current: () => boolean,
-) {
+): Promise<number | undefined> {
+  let version: number | undefined;
   for (let start = 0; start < entries.length; start += 100) {
-    if (!current()) return;
-    await client.mutation(api.arrangement.setPositions, {
-      notebookId: notebookId as Id<"notebooks">,
-      entries: entries.slice(start, start + 100).map((entry) => ({
-        noteId: entry.noteId as Id<"notes">,
-        key: entry.key,
-      })),
-    });
+    if (!current()) return undefined;
+    version = (
+      await client.mutation(api.arrangement.setPositions, {
+        notebookId: notebookId as Id<"notebooks">,
+        entries: entries.slice(start, start + 100).map((entry) => ({
+          noteId: entry.noteId as Id<"notes">,
+          key: entry.key,
+        })),
+      })
+    ).version;
   }
+  return version;
 }
 
 export function fileName(title: string, extension: string) {

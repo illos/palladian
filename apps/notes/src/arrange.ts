@@ -87,10 +87,6 @@ export function arrangeRows(
  */
 export interface ArrangementEdit {
   apply(current: Arrangement): Arrangement;
-  /** Whether a synced arrangement already includes this change. */
-  shownIn(current: Arrangement): boolean;
-  /** What it changes: a later change to the same thing replaces it. */
-  keys: string[];
 }
 
 export function pinEdit(
@@ -106,9 +102,6 @@ export function pinEdit(
         ...(pinned ? [{ noteId, pinnedAt }] : []),
       ],
     }),
-    shownIn: (current) =>
-      current.pins.some((pin) => pin.noteId === noteId) === pinned,
-    keys: ["pin:" + noteId],
   };
 }
 
@@ -121,8 +114,6 @@ export function orderEdit(list: string, order: ListOrder): ArrangementEdit {
         { list, order },
       ],
     }),
-    shownIn: (current) => orderOf(current, list) === order,
-    keys: ["order:" + list],
   };
 }
 
@@ -139,16 +130,6 @@ export function positionsEdit(
         ...writes.map((w) => ({ notebookId, ...w })),
       ],
     }),
-    shownIn: (current) =>
-      writes.every((w) =>
-        current.positions.some(
-          (p) =>
-            p.noteId === w.noteId &&
-            p.notebookId === notebookId &&
-            p.key === w.key,
-        ),
-      ),
-    keys: writes.map((w) => "position:" + w.noteId),
   };
 }
 
@@ -156,31 +137,39 @@ export interface PendingEdit {
   id: number;
   accountId: string;
   edit: ArrangementEdit;
-  /** The server accepted it; it waits for a synced copy that includes it. */
-  confirmed: boolean;
+  /**
+   * Set once the server accepted it: the person's arrangement version after
+   * the write. It waits for a synced copy at that version or later.
+   */
+  version?: number;
 }
 
 /**
- * Remove confirmed changes that a synced arrangement includes, and the older
- * changes to the same things they replaced: the server applies one device's
- * writes in order, so those are settled too.
+ * Remove changes that a synced arrangement has caught up with: one at or past
+ * the version the server returned for them. A later change from another
+ * device may already have replaced the value; the synced copy shows that.
  */
 export function settleEdits(
   pending: PendingEdit[],
   synced: Arrangement | null,
 ): PendingEdit[] {
-  if (!synced) return pending;
-  const settled = pending.filter((p) => p.confirmed && p.edit.shownIn(synced));
-  if (!settled.length) return pending;
-  return pending.filter(
-    (p) =>
-      !settled.some(
-        (done) =>
-          done.id === p.id ||
-          (p.id < done.id &&
-            p.edit.keys.some((k) => done.edit.keys.includes(k))),
-      ),
-  );
+  const at = synced?.version;
+  if (at === undefined) return pending;
+  const kept = pending.filter((p) => p.version === undefined || p.version > at);
+  return kept.length === pending.length ? pending : kept;
+}
+
+/**
+ * Runs tasks one after another in the order they were added, so one device's
+ * multi-step writes never interleave and its versions follow its changes.
+ */
+export function serialQueue() {
+  let tail: Promise<unknown> = Promise.resolve();
+  return <T>(task: () => Promise<T>): Promise<T> => {
+    const run = tail.then(task);
+    tail = run.catch(() => undefined);
+    return run;
+  };
 }
 
 /** The synced arrangement with the unconfirmed changes on top, in order. */

@@ -272,6 +272,15 @@ export default defineSchema({
     ),
   }).index("by_principal_and_list", ["principalId", "list"]),
 
+  /**
+   * Counts a person's arrangement writes, so a device can tell when a synced
+   * arrangement includes (or has moved past) a change it made.
+   */
+  arrangementVersions: defineTable({
+    principalId: v.id("principals"),
+    version: v.number(),
+  }).index("by_principal", ["principalId"]),
+
   /** A person's custom position for a note in a notebook (fractional key). */
   notePositions: defineTable({
     principalId: v.id("principals"),

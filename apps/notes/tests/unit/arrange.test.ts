@@ -5,6 +5,7 @@ import {
   orderEdit,
   pinEdit,
   positionsEdit,
+  serialQueue,
   settleEdits,
   spacedKeys,
   withEdits,
@@ -159,63 +160,57 @@ describe("unconfirmed changes", () => {
       { list: "nb", order: "custom" },
     ]);
   });
-
-  test("know when the synced copy includes them", () => {
-    const synced = arrangement({
-      pins: [{ noteId: "1", pinnedAt: 123 }],
-      orders: [{ list: "nb", order: "custom" }],
-      positions: [{ notebookId: "nb", noteId: "3", key: "V" }],
-    });
-    // The server's pin time may differ; the pin itself is what matters.
-    expect(pinEdit("1", true, 999).shownIn(synced)).toBe(true);
-    expect(pinEdit("1", false, 0).shownIn(synced)).toBe(false);
-    expect(pinEdit("2", false, 0).shownIn(synced)).toBe(true);
-    expect(orderEdit("nb", "custom").shownIn(synced)).toBe(true);
-    expect(orderEdit("all", "edited").shownIn(synced)).toBe(true);
-    expect(orderEdit("all", "alpha").shownIn(synced)).toBe(false);
-    expect(
-      positionsEdit("nb", [{ noteId: "3", key: "V" }]).shownIn(synced),
-    ).toBe(true);
-    expect(
-      positionsEdit("nb", [{ noteId: "3", key: "W" }]).shownIn(synced),
-    ).toBe(false);
-  });
 });
 
 describe("settling unconfirmed changes", () => {
-  const pending = (
-    id: number,
-    edit: PendingEdit["edit"],
-    confirmed = true,
-  ): PendingEdit => ({ id, accountId: "a", edit, confirmed });
-
-  test("a newer confirmed change retires the older ones it replaced", () => {
-    // Alphabetical, then Date created; the snapshot shows Date created.
-    const edits = [
-      pending(1, orderEdit("all", "alpha")),
-      pending(2, orderEdit("all", "created")),
-      pending(3, pinEdit("x", true, 1)),
-    ];
-    const synced = arrangement({ orders: [{ list: "all", order: "created" }] });
-    expect(settleEdits(edits, synced).map((p) => p.id)).toEqual([3]);
+  const pending = (id: number, version?: number): PendingEdit => ({
+    id,
+    accountId: "a",
+    edit: orderEdit("all", "alpha"),
+    ...(version !== undefined ? { version } : {}),
   });
 
-  test("an older change shown first leaves the newer one in place", () => {
-    const edits = [
-      pending(1, orderEdit("all", "alpha")),
-      pending(2, orderEdit("all", "created")),
-    ];
-    const synced = arrangement({ orders: [{ list: "all", order: "alpha" }] });
-    expect(settleEdits(edits, synced).map((p) => p.id)).toEqual([2]);
+  test("a synced copy at or past a change's version settles it", () => {
+    const edits = [pending(1, 4), pending(2, 5), pending(3)];
+    // Another device's later write moved the copy to version 5: both of this
+    // device's confirmed changes are in it, even if their values changed.
+    expect(
+      settleEdits(edits, arrangement({ version: 5 })).map((p) => p.id),
+    ).toEqual([3]);
+    expect(
+      settleEdits(edits, arrangement({ version: 4 })).map((p) => p.id),
+    ).toEqual([2, 3]);
   });
 
-  test("an unconfirmed change stays even if a snapshot happens to match", () => {
-    // Pin, then unpin quickly: the old snapshot already shows "not pinned".
-    const edits = [
-      pending(1, pinEdit("x", true, 1)),
-      pending(2, pinEdit("x", false, 0), false),
-    ];
-    expect(settleEdits(edits, arrangement()).map((p) => p.id)).toEqual([1, 2]);
+  test("changes not yet confirmed, or a copy without a version, stay", () => {
+    const edits = [pending(1), pending(2, 7)];
+    expect(settleEdits(edits, arrangement({ version: 3 }))).toBe(edits);
+    expect(settleEdits(edits, arrangement())).toBe(edits);
     expect(settleEdits(edits, null)).toBe(edits);
+  });
+});
+
+describe("writes in order", () => {
+  test("a later write waits for an earlier multi-step one, even if it fails", async () => {
+    const enqueue = serialQueue();
+    const log: string[] = [];
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => (release = resolve));
+    const first = enqueue(async () => {
+      log.push("first batch 1");
+      await paused;
+      log.push("first batch 2");
+      throw new Error("refused");
+    });
+    const second = enqueue(async () => {
+      log.push("second");
+      return 7;
+    });
+    await Promise.resolve();
+    expect(log).toEqual(["first batch 1"]);
+    release();
+    await expect(first).rejects.toThrow("refused");
+    await expect(second).resolves.toBe(7);
+    expect(log).toEqual(["first batch 1", "first batch 2", "second"]);
   });
 });
