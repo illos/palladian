@@ -568,7 +568,20 @@ async function setLifecycle(
 ) {
   const actor = await requirePrincipal(ctx);
   const { note } = await loadNote(ctx, actor, noteId, "edit");
-  if ((note.lifecycle === "trashed") === trashed) return null;
+  await changeLifecycle(ctx, note, trashed);
+  return null;
+}
+
+/**
+ * Move a note to Trash or back: its lifecycle, search projection and feed
+ * entry. Callers have checked edit access.
+ */
+export async function changeLifecycle(
+  ctx: MutationCtx,
+  note: Doc<"notes">,
+  trashed: boolean,
+) {
+  if ((note.lifecycle === "trashed") === trashed) return;
   await ctx.db.patch(note._id, {
     lifecycle: trashed ? "trashed" : "active",
     ...(trashed ? { trashedAt: Date.now() } : { trashedAt: undefined }),
@@ -581,7 +594,6 @@ async function setLifecycle(
   await touchNote(ctx, (await ctx.db.get(note._id))!);
   // Objects only this note uses follow it into and out of Trash (D42).
   await scheduleNoteSync(ctx, note._id);
-  return null;
 }
 
 export const trash = mutation({

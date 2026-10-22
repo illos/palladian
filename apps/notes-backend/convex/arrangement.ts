@@ -408,6 +408,35 @@ export const forgetStale = internalMutation({
   },
 });
 
+/**
+ * Remove everyone's sort order and custom positions for a deleted notebook,
+ * in batches after the deletion. Reads already leave them out: the list is
+ * no longer reachable.
+ */
+export const forgetNotebook = internalMutation({
+  args: { notebookId: v.id("notebooks") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const orders = await ctx.db
+      .query("listOrders")
+      .withIndex("by_list", (q) => q.eq("list", args.notebookId))
+      .take(CLEANUP_BATCH);
+    for (const row of orders) await ctx.db.delete(row._id);
+    const positions = await ctx.db
+      .query("notePositions")
+      .withIndex("by_notebook", (q) => q.eq("notebookId", args.notebookId))
+      .take(CLEANUP_BATCH);
+    for (const row of positions) await ctx.db.delete(row._id);
+    if (orders.length === CLEANUP_BATCH || positions.length === CLEANUP_BATCH)
+      await ctx.scheduler.runAfter(
+        0,
+        internal.arrangement.forgetNotebook,
+        args,
+      );
+    return null;
+  },
+});
+
 function positionsForNote(
   ctx: MutationCtx,
   noteId: Id<"notes">,

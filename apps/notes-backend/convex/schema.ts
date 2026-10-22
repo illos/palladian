@@ -220,7 +220,13 @@ export default defineSchema({
     revokedAt: v.optional(v.number()),
   })
     .index("by_token", ["tokenHash"])
-    .index("by_inviter", ["invitedBy"]),
+    .index("by_inviter", ["invitedBy"])
+    // Open invitations to a notebook, revoked when it is deleted.
+    .index("by_notebook_and_accepted_at_and_revoked_at", [
+      "notebookId",
+      "acceptedAt",
+      "revokedAt",
+    ]),
 
   /**
    * Deltos notes for the one-off import (D100–D101), loaded with
@@ -360,7 +366,10 @@ export default defineSchema({
       v.literal("created"),
       v.literal("custom"),
     ),
-  }).index("by_principal_and_list", ["principalId", "list"]),
+  })
+    .index("by_principal_and_list", ["principalId", "list"])
+    // Everyone's order for a notebook, removed when it is deleted.
+    .index("by_list", ["list"]),
 
   /**
    * Counts a person's arrangement writes, so a device can tell when a synced
@@ -380,5 +389,7 @@ export default defineSchema({
   })
     .index("by_principal_and_notebook", ["principalId", "notebookId"])
     .index("by_principal_and_note", ["principalId", "noteId"])
-    .index("by_note_and_notebook", ["noteId", "notebookId"]),
+    .index("by_note_and_notebook", ["noteId", "notebookId"])
+    // Everyone's positions in a notebook, removed when it is deleted.
+    .index("by_notebook", ["notebookId"]),
 });

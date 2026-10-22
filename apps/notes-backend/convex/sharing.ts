@@ -1,6 +1,11 @@
 import { v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, query, type QueryCtx } from "./_generated/server";
+import {
+  mutation,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server";
 import {
   fail,
   getPrincipal,
@@ -177,12 +182,24 @@ export const setNoteRestricted = mutation({
         "denied",
         "Only the owner, or an agent they delegated, can change sharing.",
       );
-    if (note.restricted === args.restricted) return null;
-    await ctx.db.patch(note._id, { restricted: args.restricted });
-    await touchNote(ctx, (await ctx.db.get(note._id))!);
+    await changeRestriction(ctx, note, args.restricted);
     return null;
   },
 });
+
+/**
+ * Set a note's private override: notebook members lose access unless granted
+ * explicitly. Callers have checked sharing authority.
+ */
+export async function changeRestriction(
+  ctx: MutationCtx,
+  note: Doc<"notes">,
+  restricted: boolean,
+) {
+  if (note.restricted === restricted) return;
+  await ctx.db.patch(note._id, { restricted });
+  await touchNote(ctx, (await ctx.db.get(note._id))!);
+}
 
 export const setNoteMember = mutation({
   args: {
