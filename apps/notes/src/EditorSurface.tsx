@@ -105,6 +105,7 @@ export function EditorSurface({
           <textarea
             className="draft-fallback"
             aria-label="Note content"
+            placeholder="Title"
             value={plainText}
             onChange={(event) => {
               const next = event.target.value;
