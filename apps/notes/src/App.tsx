@@ -24,9 +24,17 @@ import { PanelBoundary } from "./PanelBoundary";
 import { ActionMenu } from "./ActionMenu";
 import { SwipeRow, actionIcons } from "./SwipeRow";
 import { ToastHost, useToasts } from "./Toasts";
-import { arrangeRows, orderOf, type ListOrder } from "./arrange";
+import {
+  arrangeRows,
+  orderEdit,
+  orderOf,
+  pinEdit,
+  positionsEdit,
+  withEdits,
+  type ArrangementEdit,
+  type ListOrder,
+} from "./arrange";
 import { dropIndex, placement } from "./reorder";
-import type { ArrangementChange } from "./note-tools";
 import {
   actionLabels,
   isLocalNoteId,
@@ -217,7 +225,21 @@ export function App({
   const search = useRef<HTMLInputElement>(null);
   const [rows, setRows] = useState<NoteSummary[]>([]);
   /** This person's pins, sort orders and custom positions (D102). */
-  const [arrangement, setArrangement] = useState<Arrangement | null>(null);
+  // Pins and orders as last synced, plus changes the server has not
+  // confirmed yet (shown on top, never written to the device cache).
+  const [savedArrangement, setSavedArrangement] = useState<Arrangement | null>(
+    null,
+  );
+  const savedArrangementRef = useRef(savedArrangement);
+  savedArrangementRef.current = savedArrangement;
+  const [pendingEdits, setPendingEdits] = useState<
+    { id: number; edit: ArrangementEdit; confirmed: boolean }[]
+  >([]);
+  const editCount = useRef(0);
+  const arrangement = withEdits(
+    savedArrangement,
+    pendingEdits.map((pending) => pending.edit),
+  );
   const [notebooks, setNotebooks] = useState<CachedNotebook[]>([]);
   const [open, setOpen] = useState<OpenNote | null>(null);
   const [query, setQuery] = useState("");
@@ -302,7 +324,8 @@ export function App({
     let mounted = true;
     setRows([]);
     setNotebooks([]);
-    setArrangement(null);
+    setSavedArrangement(null);
+    setPendingEdits([]);
     setRowLimit(60);
     setOpen(null);
     setError(null);
@@ -323,7 +346,18 @@ export function App({
         ) {
           setRows(result);
           setNotebooks(books);
-          setArrangement(arranged);
+          setSavedArrangement(arranged);
+          // Confirmed changes give way once the synced copy includes them.
+          setPendingEdits((edits) =>
+            edits.filter(
+              (pending) =>
+                !(
+                  pending.confirmed &&
+                  arranged &&
+                  pending.edit.shownIn(arranged)
+                ),
+            ),
+          );
         }
       } catch {
         if (mounted)
@@ -756,38 +790,42 @@ export function App({
   const pinnedIds = new Set((arrangement?.pins ?? []).map((pin) => pin.noteId));
 
   /**
-   * Change the arrangement at once on this device, then on the server. The
-   * write carries the change as an optimistic update, so synced snapshots show
-   * it until the server confirms; if the write fails, the next snapshot puts
-   * the server's arrangement back.
+   * Show a change at once, then save it. Until the synced arrangement
+   * includes it, it is shown on top; a failed save removes it again.
    */
   async function rearrange(
-    change: ArrangementChange,
-    save: (
-      client: NonNullable<typeof live>["client"],
-      change: ArrangementChange,
-    ) => Promise<void>,
+    edit: ArrangementEdit,
+    save: (client: NonNullable<typeof live>["client"]) => Promise<void>,
   ) {
     if (!live || !accountId) return;
-    const next = change(arrangement ?? { pins: [], orders: [], positions: [] });
-    setArrangement(next);
-    const fence = await store.captureFence(accountId);
-    await store.setArrangement(accountId, next, fence);
-    await save(live.client, change);
+    const id = ++editCount.current;
+    setPendingEdits((edits) => [...edits, { id, edit, confirmed: false }]);
+    const drop = () =>
+      setPendingEdits((edits) => edits.filter((pending) => pending.id !== id));
+    try {
+      await save(live.client);
+    } catch (failure) {
+      drop();
+      throw failure;
+    }
+    const saved = savedArrangementRef.current;
+    if (saved && edit.shownIn(saved)) drop();
+    else {
+      setPendingEdits((edits) =>
+        edits.map((pending) =>
+          pending.id === id ? { ...pending, confirmed: true } : pending,
+        ),
+      );
+      // In case no snapshot ever matches it exactly.
+      setTimeout(drop, 30_000);
+    }
   }
 
   async function changeOrder(list: string, order: ListOrder) {
     try {
       const { setOrder } = await import("./note-tools");
-      await rearrange(
-        (current) => ({
-          ...current,
-          orders: [
-            ...current.orders.filter((o) => o.list !== list),
-            { list, order },
-          ],
-        }),
-        (client, change) => setOrder(client, list, order, change),
+      await rearrange(orderEdit(list, order), (client) =>
+        setOrder(client, list, order),
       );
     } catch (failure) {
       failed(failure);
@@ -817,21 +855,11 @@ export function App({
         : others.findIndex((row) => row.id === beforeId);
     // The note it was dropped by has left the list meanwhile.
     if (index < 0) return;
-    const writes = placement(others, index, noteId);
     try {
+      const writes = placement(others, index, noteId);
       const { setPositions } = await import("./note-tools");
-      await rearrange(
-        (current) => {
-          const changed = new Set(writes.map((w) => w.noteId));
-          return {
-            ...current,
-            positions: [
-              ...current.positions.filter((p) => !changed.has(p.noteId)),
-              ...writes.map((w) => ({ notebookId, ...w })),
-            ],
-          };
-        },
-        (client, change) => setPositions(client, notebookId, writes, change),
+      await rearrange(positionsEdit(notebookId, writes), (client) =>
+        setPositions(client, notebookId, writes),
       );
     } catch (failure) {
       failed(failure);
@@ -851,17 +879,27 @@ export function App({
     const handle = event.currentTarget;
     const moved = handle.closest<HTMLElement>(".note-row-wrap");
     if (!list || !moved || event.button !== 0) return;
-    event.preventDefault();
-    const pointer = event.pointerId;
-    handle.setPointerCapture(pointer);
+    // The rows on screen; a long list renders its first rows only.
     const others = [
       ...list.querySelectorAll<HTMLElement>(".note-row-wrap[data-reorder]"),
     ].filter((element) => element !== moved);
-    // The same rows as `others`, in the same order, as rendered.
-    const otherIds = reorderable
+    const shownIds = others.map((element) => element.dataset.noteId ?? "");
+    // Every other note that can move, rendered or not, in list order.
+    const allIds = reorderable
       .filter((row) => row.id !== noteId)
       .map((row) => row.id);
-    if (otherIds.length !== others.length) return;
+    if (shownIds.some((id) => !allIds.includes(id))) return;
+    event.preventDefault();
+    const pointer = event.pointerId;
+    handle.setPointerCapture(pointer);
+    /** The note a drop at `index` among the rendered rows lands before. */
+    const beforeAt = (index: number) => {
+      if (index < shownIds.length) return shownIds[index]!;
+      const last = shownIds.at(-1);
+      return last === undefined
+        ? (allIds[0] ?? null)
+        : (allIds[allIds.indexOf(last) + 1] ?? null);
+    };
     const middles = others.map((el) => el.offsetTop + el.offsetHeight / 2);
     const contentY = (clientY: number) =>
       clientY - list.getBoundingClientRect().top + list.scrollTop;
@@ -895,7 +933,7 @@ export function App({
       moved.style.transform = "";
       setReorderLine(null);
       if (commit && index !== from)
-        void reorderRef.current(notebookId, noteId, otherIds[index] ?? null);
+        void reorderRef.current(notebookId, noteId, beforeAt(index));
     };
     const up = (e: PointerEvent) => {
       if (e.pointerId === pointer) finish(true);
@@ -1054,17 +1092,9 @@ export function App({
         case "pin":
         case "unpin": {
           const pinned = action === "pin";
-          const pinnedAt = Date.now();
           const { setPin } = await import("./note-tools");
-          await rearrange(
-            (current) => ({
-              ...current,
-              pins: [
-                ...current.pins.filter((pin) => pin.noteId !== target.id),
-                ...(pinned ? [{ noteId: target.id, pinnedAt }] : []),
-              ],
-            }),
-            (client, change) => setPin(client, target.id, pinned, change),
+          await rearrange(pinEdit(target.id, pinned, Date.now()), (client) =>
+            setPin(client, target.id, pinned),
           );
           return toast(pinned ? "Pinned" : "Unpinned");
         }
@@ -1563,6 +1593,7 @@ export function App({
                   data-reorder={
                     reorderable.some((r) => r.id === row.id) ? "" : undefined
                   }
+                  data-note-id={row.id}
                 >
                   <SwipeRow
                     layout={swipeLayout(target, liveReady)}

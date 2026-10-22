@@ -1,5 +1,13 @@
 import { describe, expect, test } from "vitest";
-import { arrangeRows, keyBetween, spacedKeys } from "../../src/arrange";
+import {
+  arrangeRows,
+  keyBetween,
+  orderEdit,
+  pinEdit,
+  positionsEdit,
+  spacedKeys,
+  withEdits,
+} from "../../src/arrange";
 import type { Arrangement, NoteSummary } from "../../src/cache";
 
 const row = (
@@ -126,5 +134,48 @@ describe("position keys", () => {
       }
       expect(keyBetween(keys[0]!, keys[1] ?? null) > keys[0]!).toBe(true);
     }
+  });
+});
+
+describe("unconfirmed changes", () => {
+  test("apply over the synced arrangement, in order", () => {
+    const saved = arrangement({ pins: [{ noteId: "1", pinnedAt: 5 }] });
+    expect(withEdits(saved, [])).toBe(saved);
+    const shown = withEdits(saved, [
+      pinEdit("2", true, 9),
+      pinEdit("1", false, 0),
+      orderEdit("all", "alpha"),
+      positionsEdit("nb", [{ noteId: "3", key: "V" }]),
+    ])!;
+    expect(shown.pins).toEqual([{ noteId: "2", pinnedAt: 9 }]);
+    expect(shown.orders).toEqual([{ list: "all", order: "alpha" }]);
+    expect(shown.positions).toEqual([
+      { notebookId: "nb", noteId: "3", key: "V" },
+    ]);
+    // Nothing synced yet: they apply to an empty arrangement.
+    expect(withEdits(null, [orderEdit("nb", "custom")])!.orders).toEqual([
+      { list: "nb", order: "custom" },
+    ]);
+  });
+
+  test("know when the synced copy includes them", () => {
+    const synced = arrangement({
+      pins: [{ noteId: "1", pinnedAt: 123 }],
+      orders: [{ list: "nb", order: "custom" }],
+      positions: [{ notebookId: "nb", noteId: "3", key: "V" }],
+    });
+    // The server's pin time may differ; the pin itself is what matters.
+    expect(pinEdit("1", true, 999).shownIn(synced)).toBe(true);
+    expect(pinEdit("1", false, 0).shownIn(synced)).toBe(false);
+    expect(pinEdit("2", false, 0).shownIn(synced)).toBe(true);
+    expect(orderEdit("nb", "custom").shownIn(synced)).toBe(true);
+    expect(orderEdit("all", "edited").shownIn(synced)).toBe(true);
+    expect(orderEdit("all", "alpha").shownIn(synced)).toBe(false);
+    expect(
+      positionsEdit("nb", [{ noteId: "3", key: "V" }]).shownIn(synced),
+    ).toBe(true);
+    expect(
+      positionsEdit("nb", [{ noteId: "3", key: "W" }]).shownIn(synced),
+    ).toBe(false);
   });
 });

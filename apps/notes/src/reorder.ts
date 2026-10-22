@@ -45,14 +45,33 @@ export function placement(
   let previous: string | null = null;
   for (const row of others) {
     if (row.key !== undefined) break;
-    const key = keyBetween(previous, firstKeyed);
+    let key: string;
+    try {
+      key = keyBetween(previous, firstKeyed);
+    } catch {
+      return respace();
+    }
     keys.set(row.id, key);
     writes.push({ noteId: row.id, key });
     previous = key;
   }
-  const before = index > 0 ? keys.get(others[index - 1]!.id)! : null;
-  const after = index < others.length ? keys.get(others[index]!.id)! : null;
-  const key = keyBetween(before, after);
+  // Equal or out-of-order neighbours (two devices placing notes at once, or
+  // keys kept by a note while it was pinned) cannot take a key between them.
+  const sequence = others.map((row) => keys.get(row.id));
+  if (
+    sequence.some(
+      (key, i) => key === undefined || (i > 0 && sequence[i - 1]! >= key),
+    )
+  )
+    return respace();
+  const before = index > 0 ? sequence[index - 1]! : null;
+  const after = index < others.length ? sequence[index]! : null;
+  let key: string;
+  try {
+    key = keyBetween(before, after);
+  } catch {
+    return respace();
+  }
   if (
     key.length > KEY_LIMIT ||
     writes.some((write) => write.key.length > KEY_LIMIT)

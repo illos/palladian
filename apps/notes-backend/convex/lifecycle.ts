@@ -48,13 +48,11 @@ async function purge(ctx: MutationCtx, note: Doc<"notes">) {
     .withIndex("by_note", (q) => q.eq("noteId", note._id))
     .take(100))
     await ctx.db.delete(link._id);
-  // Everyone's pins and custom positions for the note (D102).
-  for (const pin of await ctx.db
-    .query("pins")
-    .withIndex("by_note", (q) => q.eq("noteId", note._id))
-    .take(500))
-    await ctx.db.delete(pin._id);
-  await clearPositions(ctx, note._id);
+  // Everyone's pins and custom positions for the note (D102), in batches
+  // after this transaction; until then reads leave them out.
+  await ctx.scheduler.runAfter(0, internal.arrangement.forgetStale, {
+    noteId: note._id,
+  });
   await ctx.db.insert("noteTombstones", {
     notebookId: note.notebookId,
     noteId: note._id,
@@ -64,16 +62,6 @@ async function purge(ctx: MutationCtx, note: Doc<"notes">) {
   await ctx.scheduler.runAfter(0, internal.lifecycle.purgeHistory, {
     noteId: note._id,
   });
-}
-
-/** Custom positions belong to the notebook a note was in; a move or a
- * permanent deletion ends them (D102). */
-async function clearPositions(ctx: MutationCtx, noteId: Id<"notes">) {
-  for (const position of await ctx.db
-    .query("notePositions")
-    .withIndex("by_note", (q) => q.eq("noteId", noteId))
-    .take(500))
-    await ctx.db.delete(position._id);
 }
 
 /** Remove history rows in batches after a note is permanently deleted. */
@@ -251,7 +239,11 @@ export const move = mutation({
       .unique();
     if (text) await ctx.db.patch(text._id, { notebookId: destination._id });
     // It arrives without a custom position, so it shows at the top there.
-    await clearPositions(ctx, note._id);
+    // The old notebook's positions are removed in batches afterwards; reads
+    // already ignore them.
+    await ctx.scheduler.runAfter(0, internal.arrangement.forgetStale, {
+      noteId: note._id,
+    });
     return null;
   },
 });

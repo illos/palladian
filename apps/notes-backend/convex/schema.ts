@@ -281,5 +281,5 @@ export default defineSchema({
   })
     .index("by_principal_and_notebook", ["principalId", "notebookId"])
     .index("by_principal_and_note", ["principalId", "noteId"])
-    .index("by_note", ["noteId"]),
+    .index("by_note_and_notebook", ["noteId", "notebookId"]),
 });

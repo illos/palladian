@@ -92,6 +92,31 @@ describe("reorder", () => {
     ]);
   });
 
+  test("equal or out-of-order keys respace instead of failing", () => {
+    // Two devices placed notes at once, or a note kept its key while pinned.
+    const others = [
+      { id: "a", key: "V" },
+      { id: "b", key: "V" },
+      { id: "c", key: "k" },
+    ];
+    const writes = placement(others, 1, "x");
+    expect(writes).toHaveLength(4);
+    expect(orderAfter(others, { id: "x" }, writes)).toEqual([
+      "a",
+      "x",
+      "b",
+      "c",
+    ]);
+    const unsorted = [
+      { id: "a", key: "k" },
+      { id: "b", key: "V" },
+    ];
+    expect(placement(unsorted, 2, "x")).toHaveLength(3);
+    // A note without a key below positioned ones cannot be placed between.
+    const gap = [{ id: "a", key: "V" }, { id: "b" }, { id: "c", key: "k" }];
+    expect(placement(gap, 3, "x")).toHaveLength(4);
+  });
+
   test("keys that would grow too long respace the notebook", () => {
     let others: Positioned[] = [
       { id: "a", key: "V" },

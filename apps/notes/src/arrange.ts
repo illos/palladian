@@ -78,6 +78,87 @@ export function arrangeRows(
   });
 }
 
+/* ---- Changes not yet confirmed by the server ---- */
+
+/**
+ * A change the person made that the server has not confirmed yet. It is shown
+ * over the synced arrangement, never written to the device cache, so a failed
+ * write leaves nothing behind.
+ */
+export interface ArrangementEdit {
+  apply(current: Arrangement): Arrangement;
+  /** Whether a synced arrangement already includes this change. */
+  shownIn(current: Arrangement): boolean;
+}
+
+export function pinEdit(
+  noteId: string,
+  pinned: boolean,
+  pinnedAt: number,
+): ArrangementEdit {
+  return {
+    apply: (current) => ({
+      ...current,
+      pins: [
+        ...current.pins.filter((pin) => pin.noteId !== noteId),
+        ...(pinned ? [{ noteId, pinnedAt }] : []),
+      ],
+    }),
+    shownIn: (current) =>
+      current.pins.some((pin) => pin.noteId === noteId) === pinned,
+  };
+}
+
+export function orderEdit(list: string, order: ListOrder): ArrangementEdit {
+  return {
+    apply: (current) => ({
+      ...current,
+      orders: [
+        ...current.orders.filter((o) => o.list !== list),
+        { list, order },
+      ],
+    }),
+    shownIn: (current) => orderOf(current, list) === order,
+  };
+}
+
+export function positionsEdit(
+  notebookId: string,
+  writes: { noteId: string; key: string }[],
+): ArrangementEdit {
+  const changed = new Set(writes.map((w) => w.noteId));
+  return {
+    apply: (current) => ({
+      ...current,
+      positions: [
+        ...current.positions.filter((p) => !changed.has(p.noteId)),
+        ...writes.map((w) => ({ notebookId, ...w })),
+      ],
+    }),
+    shownIn: (current) =>
+      writes.every((w) =>
+        current.positions.some(
+          (p) =>
+            p.noteId === w.noteId &&
+            p.notebookId === notebookId &&
+            p.key === w.key,
+        ),
+      ),
+  };
+}
+
+/** The synced arrangement with the unconfirmed changes on top, in order. */
+export function withEdits(
+  saved: Arrangement | null,
+  edits: ArrangementEdit[],
+): Arrangement | null {
+  if (!edits.length) return saved;
+  return edits.reduce(
+    (current, edit) => edit.apply(current),
+    saved ?? { pins: [], orders: [], positions: [] },
+  );
+}
+
 /* ---- Fractional position keys (after rocicorp/fractional-indexing) ---- */
 
 const DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";

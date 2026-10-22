@@ -113,6 +113,8 @@ export class LiveController {
   private feeds = new Map<string, () => void>();
   private accessQueue: Promise<unknown> = Promise.resolve();
   private arrangementQueue: Promise<unknown> = Promise.resolve();
+  /** Changes whenever sync starts or stops, so queued work can tell. */
+  private syncGeneration = 0;
   private visibleNotebooks: Set<string> | null = null;
   private fetchQueue = new Map<string, number>();
   private fetching = 0;
@@ -271,15 +273,21 @@ export class LiveController {
       }),
     );
     // The person's pins, sort orders and positions (D102), cached so lists
-    // arrange the same way offline. Snapshots apply in order.
+    // arrange the same way offline. Snapshots apply in order, each under the
+    // cache fence taken when it arrived and only while this sync still runs:
+    // a cleared or restarted account never receives an older snapshot.
+    const generation = ++this.syncGeneration;
+    const arranging = () => current() && this.syncGeneration === generation;
     this.stops.push(
       this.watch(api.arrangement.mine, {}, (arrangement) => {
-        if (!current()) return;
+        if (!arranging()) return;
+        const fence = this.store.captureFence(accountId);
+        fence.catch(() => undefined);
         this.arrangementQueue = this.arrangementQueue
           .then(async () => {
-            if (!current()) return;
-            const fence = await this.store.captureFence(accountId);
-            await this.store.setArrangement(accountId, arrangement, fence);
+            const captured = await fence;
+            if (!arranging()) return;
+            await this.store.setArrangement(accountId, arrangement, captured);
           })
           .catch(() => undefined);
       }),
@@ -288,6 +296,7 @@ export class LiveController {
   }
 
   private stopSync() {
+    this.syncGeneration++;
     for (const stop of this.stops) stop();
     this.stops = [];
     for (const stop of this.feeds.values()) stop();

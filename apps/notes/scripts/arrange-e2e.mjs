@@ -274,6 +274,39 @@ try {
   await expectOrder(phone, ["Charlie", "Bravo", "Alpha", "Delta"]);
   await expectOrder(page, ["Charlie", "Bravo", "Alpha", "Delta"]);
   step("on the phone, a touch drag on the handle reorders, seen on both");
+
+  // A notebook longer than the first rendered rows still reorders (review F8).
+  const big = await convex(page, "mutation", "notebooks:create", {
+    name: "Big",
+  });
+  for (let i = 1; i <= 62; i++)
+    await convex(page, "mutation", "notes:createFromMarkdown", {
+      notebookId: big,
+      markdown: `Item ${String(i).padStart(2, "0")}\n\nNumber ${i}.`,
+    });
+  await page
+    .locator(".navigation")
+    .getByRole("button", { name: "Big", exact: true })
+    .click();
+  await sort.selectOption("custom");
+  // Newest first: Item 62, Item 61, …
+  await expect
+    .poll(async () => (await titles(page)).slice(0, 3), { timeout: 20_000 })
+    .toEqual(["Item 62", "Item 61", "Item 60"]);
+  await handle("Item 62").hover();
+  await page.mouse.down();
+  const third = await page
+    .getByRole("button", { name: /^Item 60\b/ })
+    .first()
+    .boundingBox();
+  await page.mouse.move(third.x + 20, third.y + third.height - 4, {
+    steps: 12,
+  });
+  await page.mouse.up();
+  await expect
+    .poll(async () => (await titles(page)).slice(0, 3), { timeout: 20_000 })
+    .toEqual(["Item 61", "Item 60", "Item 62"]);
+  step("a notebook of 62 notes reorders by dragging, beyond the rendered rows");
 } catch (failure) {
   // A picture of each page at the failure, for the person debugging it.
   for (const [i, open] of browser
