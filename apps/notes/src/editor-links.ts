@@ -9,6 +9,7 @@ import {
   type Transaction,
 } from "prosemirror-state";
 import { InputRule } from "prosemirror-inputrules";
+import type { Mapping } from "prosemirror-transform";
 
 const link = notesSchema.marks.link!;
 
@@ -303,6 +304,29 @@ export type LinkUi = {
 } | null;
 export const linkUiKey = new PluginKey<LinkUi>("linkUi");
 
+/**
+ * Whether a real edit in `mapping` changed the text in [from, to]: a change
+ * inside the range or an insertion strictly within it. A rebase's undone and
+ * replayed local steps are mirror pairs, not edits, and are skipped.
+ */
+function overlaps(mapping: Mapping, range: { from: number; to: number }) {
+  return mapping.maps.some((map, index) => {
+    if (mapping.getMirror(index) !== undefined) return false;
+    const before = mapping.slice(0, index);
+    const from = before.map(range.from, 1);
+    const to = Math.max(from, before.map(range.to, -1));
+    let found = false;
+    map.forEach((start, end) => {
+      if (
+        (end > from && start < to) ||
+        (start === end && start > from && start < to)
+      )
+        found = true;
+    });
+    return found;
+  });
+}
+
 export const linkUi = new Plugin<LinkUi>({
   key: linkUiKey,
   state: {
@@ -313,20 +337,12 @@ export const linkUi = new Plugin<LinkUi>({
       if (!value) return null;
       if (!tr.docChanged && (value.mode === "form" || !tr.selectionSet))
         return value;
-      let { from, to } = value;
-      let touched = value.touched ?? false;
-      for (const map of tr.mapping.maps) {
-        // A change inside the range, or an insertion strictly within it.
-        map.forEach((start, end) => {
-          if (
-            (end > from && start < to) ||
-            (start === end && start > from && start < to)
-          )
-            touched = true;
-        });
-        from = map.map(from, 1);
-        to = Math.max(from, map.map(to, -1));
-      }
+      // The whole mapping, so positions in local text that a collaboration
+      // rebase undoes and replays are recovered (its mirror pairs).
+      const from = tr.mapping.map(value.from, 1);
+      const to = Math.max(from, tr.mapping.map(value.to, -1));
+      const touched =
+        value.mode === "form" && (value.touched || overlaps(tr.mapping, value));
       if (value.mode === "menu") {
         if (tr.docChanged && tr.getMeta("rebased") === undefined) return null;
         const { selection } = state;

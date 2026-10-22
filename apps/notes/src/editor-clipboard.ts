@@ -51,11 +51,35 @@ const LINE = "\ue000";
 const LINE_BREAK = / ?\ue000 ?/;
 // A marked line end after parsing, where the line break itself became a space.
 const MARKED_END = / \ue000(?= |$)/g;
-// Code fences, also inside quotes and list items.
-const FENCE = /^(?:\s*>)*\s*(?:(?:[-+*]|\d{1,9}[.)])\s+)?\s*(`{3,}|~{3,})/;
 // Thematic breaks and setext heading underlines.
 const RULE =
   /^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|=+[ \t]*)$/;
+
+/** Index of the first character at or after `index` that is not a space or tab. */
+function skipBlanks(line: string, index: number) {
+  while (line[index] === " " || line[index] === "\t") index++;
+  return index;
+}
+
+/**
+ * The code fence a line opens or closes, also inside quotes and list items,
+ * and what follows it. A plain left-to-right scan: no regular expression
+ * can backtrack over long runs of spaces.
+ */
+function fenceOf(line: string) {
+  let index = skipBlanks(line, 0);
+  while (line[index] === ">") index = skipBlanks(line, index + 1);
+  const item = /^(?:[-+*]|\d{1,9}[.)])[ \t]/.exec(
+    line.slice(index, index + 11),
+  );
+  if (item) index = skipBlanks(line, index + item[0].length);
+  const char = line[index];
+  if (char !== "`" && char !== "~") return null;
+  let end = index;
+  while (line[end] === char) end++;
+  if (end - index < 3) return null;
+  return { marker: line.slice(index, end), rest: line.slice(end) };
+}
 
 /**
  * Mark line ends that Markdown would join with the next line: not in code,
@@ -66,14 +90,14 @@ function markLines(text: string) {
   let fence: string | null = null;
   return lines
     .map((line, index) => {
-      const match = FENCE.exec(line);
-      const marker = match?.[1];
+      const found = fenceOf(line);
+      const marker = found?.marker;
       if (fence) {
         const closes =
           marker !== undefined &&
           marker[0] === fence[0] &&
           marker.length >= fence.length &&
-          !line.slice(match!.index + match![0].length).trim();
+          !found!.rest.trim();
         if (closes) fence = null;
         return line;
       }
@@ -116,7 +140,13 @@ function withoutMarkers(fragment: Fragment): Fragment {
  * plain one, so delimiters, code and literal text stay as parsed.
  */
 function keepLines(text: string, parsed: Fragment, markdown: MarkdownCodec) {
-  if (text.includes(LINE)) return parsed;
+  // The marker character must not occur in the parsed text in any form,
+  // including from an entity such as `&#xE000;`.
+  if (
+    text.includes(LINE) ||
+    parsed.textBetween(0, parsed.size, "", "").includes(LINE)
+  )
+    return parsed;
   const marked = markLines(text);
   if (!marked.includes(LINE)) return parsed;
   try {

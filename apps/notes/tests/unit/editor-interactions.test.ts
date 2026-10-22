@@ -1289,3 +1289,118 @@ describe("review round 1", () => {
     ]);
   });
 });
+
+describe("review round 2", () => {
+  const link = marks.link!;
+  function linkedText(doc: ProseMirrorNode) {
+    let text = "";
+    doc.descendants((node) => {
+      if (node.isText && link.isInSet(node.marks)) text += node.text;
+    });
+    return text;
+  }
+  /** A collaborative editor at version 0 of `doc`, with the link form plugin. */
+  function client(doc: ProseMirrorNode) {
+    return EditorState.create({
+      doc,
+      plugins: [collab({ version: 0, clientID: "me" }), linkUi],
+    });
+  }
+  /** Open the link form on `word`, as the editor does. */
+  function openForm(state: EditorState, word: string) {
+    const from = at(state.doc, word);
+    const to = from + word.length;
+    return state.apply(
+      state.tr
+        .setSelection(TextSelection.create(state.doc, from, to))
+        .setMeta(linkUiKey, { mode: "form", from, to }),
+    );
+  }
+  /** A collaborator's steps, built on the last confirmed document. */
+  function receive(
+    state: EditorState,
+    confirmed: ProseMirrorNode,
+    change: (tr: Transform) => void,
+  ) {
+    const tr = new Transform(confirmed);
+    change(tr);
+    const clients = tr.steps.map(() => "them");
+    return state.apply(receiveTransaction(state, tr.steps, clients));
+  }
+  function applyForm(state: EditorState, text: string, textEdited: boolean) {
+    const target = linkUiKey.getState(state)!;
+    return applyLink(state, target.from, target.to, text, "https://e.com", {
+      textEdited,
+      touched: !!target.touched,
+    });
+  }
+
+  test("R2-1: the form keeps unconfirmed text it was opened on through a rebase", () => {
+    const confirmed = markdownToDoc("say  there");
+    let state = client(confirmed);
+    // Typed locally, not yet confirmed by the server.
+    state = state.apply(state.tr.insertText("hello", at(confirmed, "say ", 4)));
+    state = openForm(state, "hello");
+    const opened = linkUiKey.getState(state)!;
+    state = receive(state, confirmed, (tr) =>
+      tr.insert(1, notesSchema.text("Oh, ")),
+    );
+    expect(linkUiKey.getState(state)).toEqual({
+      mode: "form",
+      from: opened.from + 4,
+      to: opened.to + 4,
+      touched: false,
+    });
+    const after = state.apply(applyForm(state, "hello", false)!);
+    expect(after.doc.textContent).toBe("Oh, say hello there");
+    expect(linkedText(after.doc)).toBe("hello");
+  });
+
+  test("R2-1: a pending local edit inside the range is not a collaborator's change", () => {
+    const confirmed = markdownToDoc("say hello there");
+    let state = client(confirmed);
+    state = state.apply(state.tr.insertText("X", at(confirmed, "hello", 2)));
+    state = openForm(state, "heXllo");
+    state = receive(state, confirmed, (tr) =>
+      tr.insert(1, notesSchema.text("Oh, ")),
+    );
+    expect(linkUiKey.getState(state)!.touched).toBe(false);
+    // An edited label may replace it, since nobody else changed it.
+    const after = state.apply(applyForm(state, "Greetings", true)!);
+    expect(after.doc.textContent).toBe("Oh, say Greetings there");
+    expect(linkedText(after.doc)).toBe("Greetings");
+  });
+
+  test("R2-1: a collaborator's change inside the range still counts with local steps pending", () => {
+    const confirmed = markdownToDoc("say hello there");
+    let state = client(confirmed);
+    state = state.apply(state.tr.insertText("X", at(confirmed, "hello", 2)));
+    state = openForm(state, "heXllo");
+    const inside = at(confirmed, "hello", 4);
+    state = receive(state, confirmed, (tr) =>
+      tr.insert(inside, notesSchema.text("R")),
+    );
+    expect(linkUiKey.getState(state)!.touched).toBe(true);
+    expect(applyForm(state, "Greetings", true)).toBeNull();
+    const after = state.apply(applyForm(state, "heXllo", false)!);
+    expect(after.doc.textContent).toBe("say heXllRo there");
+    expect(linkedText(after.doc)).toBe("heXllRo");
+  });
+
+  test("R2-2: a paste with a very long run of spaces is parsed quickly", () => {
+    const text = "**x**\n" + " ".repeat(64_000) + "code";
+    const started = performance.now();
+    const slice = markdownSlice(text, codec);
+    expect(performance.now() - started).toBeLessThan(1_000);
+    expect(slice).not.toBeNull();
+  });
+
+  test.each([
+    ["hexadecimal", "**a**&#xE000;b\nnext"],
+    ["decimal", "**a**&#57344;b\nnext"],
+  ])("R2-3: a U+E000 written as a %s entity is kept", (_name, text) => {
+    const slice = markdownSlice(text, codec)!;
+    expect(slice.content.childCount).toBe(1);
+    expect(slice.content.firstChild!.textContent).toBe("a\ue000b next");
+  });
+});
