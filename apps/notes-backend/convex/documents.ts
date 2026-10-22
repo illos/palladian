@@ -16,6 +16,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { fail, type Principal } from "./access";
+import { recordReferences } from "./references";
 
 /** Collaboration limits; requests beyond them are rejected, not truncated. */
 export const MAX_STEPS_PER_PUSH = 500;
@@ -121,6 +122,12 @@ export async function createNoteRecord(
     text: plainText(args.doc),
   });
   await ctx.db.insert("noteCheckpoints", { noteId, revision: 0, doc: json });
+  await recordReferences(ctx, {
+    note: { _id: noteId, lifecycle: "active" },
+    actor: args.actor,
+    before: null,
+    after: args.doc,
+  });
   await ctx.db.insert("noteVersions", {
     noteId,
     baseRevision: 0,
@@ -153,7 +160,8 @@ export async function commitSteps(
 ): Promise<{ revision: number; doc: ProseMirrorNode }> {
   if (args.note.lifecycle !== "active")
     fail("trashed", "Restore this note from Trash before editing it.");
-  let doc = parseStoredDoc(args.content.doc);
+  const before = parseStoredDoc(args.content.doc);
+  let doc = before;
   let revision = args.content.revision;
   // Checkpoints land on every interval boundary, even inside a large batch, so
   // any revision is rebuilt from at most one interval of steps.
@@ -197,6 +205,14 @@ export async function commitSteps(
     fail("invalid", "The edit would produce an invalid or unsafe note.");
   }
   const json = serializeDoc(doc);
+  // Which objects the accepted document references (B1); may refuse an edit
+  // that exceeds the per-note attachment limit, before anything is written.
+  await recordReferences(ctx, {
+    note: args.note,
+    actor: args.actor,
+    before,
+    after: doc,
+  });
 
   const now = Date.now();
   let stepRevision = args.content.revision;

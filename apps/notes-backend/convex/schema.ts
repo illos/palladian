@@ -243,6 +243,72 @@ export default defineSchema({
     noteId: v.optional(v.id("notes")),
   }).index("by_failure_and_note", ["failure", "noteId"]),
 
+  /**
+   * Uploaded files (B1). The bytes live in the private R2 bucket under
+   * `objects/<_id>` and are served only by the Worker after `files.ts` says
+   * the caller may read them. Keyed by this ID, never by content hash, so
+   * objects in shared notebooks cannot collide (Q11).
+   */
+  objects: defineTable({
+    /** The owner of the note or notebook it was uploaded for (whose Trash retention applies). */
+    ownerId: v.id("principals"),
+    uploaderId: v.id("principals"),
+    /** What it was uploaded for: exactly one of the two. */
+    noteId: v.optional(v.id("notes")),
+    notebookId: v.optional(v.id("notebooks")),
+    name: v.string(),
+    mimeType: v.string(),
+    size: v.number(),
+    /** Lowercase hex SHA-256 of the bytes, declared at ticket time and checked by the Worker. */
+    sha256: v.string(),
+    state: v.union(
+      v.literal("pending"),
+      v.literal("ready"),
+      v.literal("failed"),
+    ),
+    /** SHA-256 of each upload ticket issued for it (a retried request adds one). */
+    ticketHashes: v.array(v.string()),
+    /** Pending: when its tickets stop working. Failed: when the record is removed. */
+    expiresAt: v.optional(v.number()),
+    requestId: v.optional(v.string()),
+    requestDigest: v.optional(v.string()),
+    createdAt: v.number(),
+    readyAt: v.optional(v.number()),
+    /** Since when no active note references it; retention counts from here. */
+    trashedAt: v.optional(v.number()),
+  })
+    .index("by_state_and_expires_at", ["state", "expiresAt"])
+    .index("by_state_and_trashed_at", ["state", "trashedAt"])
+    .index("by_uploader_and_request", ["uploaderId", "requestId"])
+    .index("by_uploader_and_state_and_expires_at", [
+      "uploaderId",
+      "state",
+      "expiresAt",
+    ]),
+
+  /**
+   * Which notes reference which objects. `current`: the note's accepted
+   * document references it now (otherwise only an earlier revision did).
+   * `live`: current and the note is active. An object with no live reference
+   * is in Trash (D41, D42).
+   */
+  objectRefs: defineTable({
+    noteId: v.id("notes"),
+    objectId: v.id("objects"),
+    current: v.boolean(),
+    live: v.boolean(),
+  })
+    .index("by_note_and_object", ["noteId", "objectId"])
+    .index("by_note_and_current_and_live", ["noteId", "current", "live"])
+    .index("by_object_and_live", ["objectId", "live"])
+    .index("by_object_and_current", ["objectId", "current"]),
+
+  /** R2 keys whose bytes the Worker still has to delete (retry-safe queue). */
+  objectDeletions: defineTable({
+    key: v.string(),
+    requestedAt: v.number(),
+  }),
+
   /** Recent account emails, kept briefly to limit sends per subject and overall. */
   emailSends: defineTable({
     key: v.string(),

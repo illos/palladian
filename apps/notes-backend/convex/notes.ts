@@ -41,6 +41,7 @@ import {
   STEP_PAGE,
   touchNote,
 } from "./documents";
+import { scheduleNoteSync } from "./references";
 import { accessRole, noteEdit, noteSummary, toSummary } from "./validators";
 
 /** Pick the destination notebook, requiring edit access. */
@@ -539,6 +540,8 @@ async function setLifecycle(
     .unique();
   if (text) await ctx.db.patch(text._id, { trashed });
   await touchNote(ctx, (await ctx.db.get(note._id))!);
+  // Objects only this note uses follow it into and out of Trash (D42).
+  await scheduleNoteSync(ctx, note._id);
   return null;
 }
 

@@ -14,4 +14,17 @@ crons.daily(
   internal.email.prune,
   {},
 );
+crons.hourly(
+  "expire file uploads",
+  { minuteUTC: 29 },
+  internal.files.expireUploads,
+  {},
+);
+// After the note purge, so objects only purged notes used are already gone.
+crons.daily(
+  "purge expired file objects",
+  { hourUTC: 4, minuteUTC: 53 },
+  internal.files.purgeExpired,
+  {},
+);
 export default crons;

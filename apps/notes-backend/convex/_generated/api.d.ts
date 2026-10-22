@@ -19,6 +19,7 @@ import type * as deltos from "../deltos.js";
 import type * as devices from "../devices.js";
 import type * as documents from "../documents.js";
 import type * as email from "../email.js";
+import type * as files from "../files.js";
 import type * as history from "../history.js";
 import type * as http from "../http.js";
 import type * as imports from "../imports.js";
@@ -30,6 +31,7 @@ import type * as notes from "../notes.js";
 import type * as passwords from "../passwords.js";
 import type * as provision from "../provision.js";
 import type * as publishing from "../publishing.js";
+import type * as references from "../references.js";
 import type * as sharing from "../sharing.js";
 import type * as validators from "../validators.js";
 
@@ -51,6 +53,7 @@ declare const fullApi: ApiFromModules<{
   devices: typeof devices;
   documents: typeof documents;
   email: typeof email;
+  files: typeof files;
   history: typeof history;
   http: typeof http;
   imports: typeof imports;
@@ -62,6 +65,7 @@ declare const fullApi: ApiFromModules<{
   passwords: typeof passwords;
   provision: typeof provision;
   publishing: typeof publishing;
+  references: typeof references;
   sharing: typeof sharing;
   validators: typeof validators;
 }>;

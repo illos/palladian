@@ -18,6 +18,7 @@ import {
   requirePrincipal,
 } from "./access";
 import { nextSeq } from "./documents";
+import { scheduleNoteSync } from "./references";
 
 const DAY_MS = 86_400_000;
 export const RETENTION_CHOICES = [1, 7, 30, 90, 0] as const;
@@ -62,6 +63,9 @@ async function purge(ctx: MutationCtx, note: Doc<"notes">) {
   await ctx.scheduler.runAfter(0, internal.lifecycle.purgeHistory, {
     noteId: note._id,
   });
+  // Its object references, in batches; objects only it ever used are
+  // permanently deleted with it (files.syncNote).
+  await scheduleNoteSync(ctx, note._id);
 }
 
 /** Remove history rows in batches after a note is permanently deleted. */
