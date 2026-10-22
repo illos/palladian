@@ -215,3 +215,95 @@ test("phones: a long press on a notebook in the navigation opens its sheet", asy
     page.getByRole("textbox", { name: "Note content" }),
   ).toBeVisible();
 });
+
+/** Replace the cached notebooks, as an access snapshot would. */
+async function listNotebooks(page: Page, ids: string[]) {
+  await page.evaluate(async (keep) => {
+    type Store = {
+      captureFence(accountId: string): Promise<unknown>;
+      setNotebooks(
+        accountId: string,
+        notebooks: unknown[],
+        fence: unknown,
+      ): Promise<void>;
+    };
+    const store = (window as unknown as { __notesHarness: { store: Store } })
+      .__notesHarness.store;
+    const all = [
+      ["book-journal", "Journal", "owner", false],
+      ["book-notes", "Notes", "owner", true],
+      ["book-team", "Team", "edit", false],
+      ["book-recipes", "Recipes", "read", false],
+    ] as const;
+    await store.setNotebooks(
+      "fixture-account",
+      all
+        .filter(([id]) => keep.includes(id))
+        .map(([id, name, role, isDefault]) => ({
+          id,
+          name,
+          description: "",
+          role,
+          ownerName: "Ada",
+          isDefault,
+        })),
+      await store.captureFence("fixture-account"),
+    );
+  }, ids);
+}
+
+test("review round 1, F1: a notebook removed elsewhere stops being shown", async ({
+  page,
+}, info) => {
+  await seed(page);
+  const phone = info.project.name.includes("mobile");
+  const nav = await navigation(page, phone);
+  await nav.getByRole("button", { name: "Journal", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Journal");
+  // Another device deleted Journal: the next access snapshot leaves it out.
+  await listNotebooks(page, ["book-notes", "book-team", "book-recipes"]);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("All notes");
+  await expect(
+    page.getByRole("button", { name: "Notebook actions" }),
+  ).toHaveCount(0);
+});
+
+test("review round 1, F1: a new note never goes to a notebook that does not take it", async ({
+  page,
+}, info) => {
+  await seed(page);
+  const phone = info.project.name.includes("mobile");
+  const nav = await navigation(page, phone);
+  await nav.getByRole("button", { name: /^Recipes/ }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Recipes");
+  // The read-only notebook's list stays open; the new note is a draft for
+  // the default notebook, not for Recipes.
+  if (phone)
+    await page
+      .locator(".mobile-home-actions")
+      .getByRole("button", { name: "New note" })
+      .click();
+  else
+    await page
+      .locator(".welcome")
+      .getByRole("button", { name: "New note" })
+      .click();
+  await expect(
+    page.getByText("Draft saved on this device — not saved to server"),
+  ).toBeVisible();
+  if (!phone)
+    await expect(
+      nav.locator(".nav-row", { hasText: "Recipes" }).locator(".nav-count"),
+    ).toHaveText("0");
+  const drafts = await page.evaluate(async () => {
+    type Store = {
+      list(accountId: string): Promise<{ kind: string; notebookId?: string }[]>;
+    };
+    const store = (window as unknown as { __notesHarness: { store: Store } })
+      .__notesHarness.store;
+    return (await store.list("fixture-account"))
+      .filter((row) => row.kind === "draft")
+      .map((row) => row.notebookId ?? null);
+  });
+  expect(drafts).toEqual([null]);
+});

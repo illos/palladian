@@ -1,7 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
+  newNoteNotebook,
   notebookActions,
   notebookCounts,
+  previewMatches,
   type NotebookTarget,
 } from "../../src/notebook-actions";
 
@@ -69,5 +71,32 @@ describe("notebook counts", () => {
       ["b", 1],
     ]);
     expect(counts.get("c")).toBeUndefined();
+  });
+});
+
+describe("review round 1", () => {
+  const listed = [
+    { id: "mine", role: "owner" as const },
+    { id: "team", role: "edit" as const },
+    { id: "recipes", role: "read" as const },
+  ];
+
+  test("F1: a new note goes only to a listed notebook that takes the person's notes", () => {
+    expect(newNoteNotebook("mine", listed)).toBe("mine");
+    expect(newNoteNotebook("team", listed)).toBe("team");
+    // Read-only, gone from this device (deleted or unshared elsewhere), or
+    // All Notes: none, so the default notebook takes it.
+    expect(newNoteNotebook("recipes", listed)).toBeUndefined();
+    expect(newNoteNotebook("deleted", listed)).toBeUndefined();
+    expect(newNoteNotebook(null, listed)).toBeUndefined();
+  });
+
+  test("F5: deleting waits for the preview of the destination and choice now selected", () => {
+    const preview = { destinationId: "archive", trash: false };
+    expect(previewMatches(undefined, "archive", false)).toBe(false);
+    expect(previewMatches(null, "archive", false)).toBe(false);
+    expect(previewMatches(preview, "archive", false)).toBe(true);
+    expect(previewMatches(preview, "notes", false)).toBe(false);
+    expect(previewMatches(preview, "archive", true)).toBe(false);
   });
 });

@@ -73,3 +73,33 @@ export function notebookCounts(
       counts.set(row.notebookId, (counts.get(row.notebookId) ?? 0) + 1);
   return counts;
 }
+
+/**
+ * The notebook a new note goes to: the one shown, while it is still on this
+ * device and takes this person's notes. Otherwise none, and the caller uses
+ * the default notebook (review round 1, F1): a notebook deleted or unshared
+ * elsewhere must not receive new work.
+ */
+export function newNoteNotebook(
+  shownId: string | null,
+  notebooks: readonly { id: string; role: NoteRole }[],
+): string | undefined {
+  const shown = notebooks.find((notebook) => notebook.id === shownId);
+  return shown && shown.role !== "read" ? shown.id : undefined;
+}
+
+/**
+ * Whether the deletion preview answers the destination and choice now
+ * selected; deleting waits for it (review round 1, F5).
+ */
+export function previewMatches(
+  preview: { destinationId: string; trash: boolean } | null | undefined,
+  destinationId: string,
+  trash: boolean,
+): boolean {
+  return (
+    !!preview &&
+    preview.destinationId === destinationId &&
+    preview.trash === trash
+  );
+}

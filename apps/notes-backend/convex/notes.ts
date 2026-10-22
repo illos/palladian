@@ -44,14 +44,28 @@ import {
 import { MAX_SOURCE_NOTES, scheduleNoteSync } from "./references";
 import { accessRole, noteEdit, noteSummary, toSummary } from "./validators";
 
-/** Pick the destination notebook, requiring edit access. */
+/**
+ * Pick the destination notebook, requiring edit access.
+ *
+ * A person's note for a notebook that no longer exists or no longer takes
+ * their notes (deleted, membership removed, or read-only now) goes where a
+ * note without a notebook goes: their default notebook. Work typed against a
+ * notebook that went away meanwhile, on this device or offline on another,
+ * is therefore kept rather than refused (plan 08 A5, review round 1; a
+ * recovery-placement decision for review, Q11). Agents are refused as before.
+ */
 async function destination(
   ctx: MutationCtx,
   actor: Principal,
   notebookId: Id<"notebooks"> | undefined,
 ): Promise<Doc<"notebooks">> {
-  if (notebookId)
+  if (notebookId && actor.kind !== "human")
     return (await loadNotebook(ctx, actor, notebookId, "edit")).notebook;
+  if (notebookId) {
+    const named = await ctx.db.get(notebookId);
+    if (named && atLeast(await notebookRole(ctx, actor, named), "edit"))
+      return named;
+  }
   if (actor.kind === "human" && actor.defaultNotebookId) {
     const notebook = await ctx.db.get(actor.defaultNotebookId);
     if (notebook && atLeast(await notebookRole(ctx, actor, notebook), "edit"))

@@ -3,8 +3,10 @@
 // iPhone with real touch input. Covers the notebook menu (right-click, hover
 // "…", the list header and a phone long press), name and description, set as
 // default, new note here, deleting with the notes moved (a member losing
-// access, with the warning first) and deleting to Trash, and the default
-// notebook asking for another default first. Disposable @example.test
+// access, with the warning first) and deleting to Trash, the default
+// notebook asking for another default first, and (review round 1) a member's
+// device leaving the deleted notebook and a note typed offline in a deleted
+// notebook landing in the default notebook. Disposable @example.test
 // accounts; prints no secrets.
 //
 // CONVEX_DEPLOYMENT selects the development deployment, CONVEX_SITE_URL and
@@ -264,6 +266,9 @@ try {
   });
   await expect(menu("Diary").getByRole("menuitem")).toHaveText(["Members…"]);
   await bea.keyboard.press("Escape");
+  // Bea keeps Diary's list open while Ada deletes it.
+  await beaNav.getByRole("button", { name: /^Diary/ }).click();
+  await expect(bea.getByRole("heading", { level: 1 })).toHaveText("Diary");
   step("Bea joins Diary as a reader; her menu offers only Members");
 
   // Ada deletes Diary, moving its notes to Archive; Bea is warned about.
@@ -294,7 +299,13 @@ try {
   await expect(bea.getByRole("button", { name: /^Monday\b/ })).toHaveCount(0, {
     timeout: 20_000,
   });
-  step("Delete with move: the warning names Bea; notes land in Archive");
+  // Review round 1, F1: Bea's device stops showing the deleted notebook.
+  await expect(bea.getByRole("heading", { level: 1 })).toHaveText("All notes", {
+    timeout: 20_000,
+  });
+  step(
+    "Delete with move: the warning names Bea; notes land in Archive; Bea's list leaves Diary",
+  );
 
   // Delete to Trash: notes go to Trash and restore into the chosen notebook.
   const scratch = await convex(page, "mutation", "notebooks:create", {
@@ -384,6 +395,58 @@ try {
   });
   await members.getByRole("button", { name: "Done" }).click();
   step("phone: a long press on a notebook opens its sheet; Sharing opens");
+
+  // Review round 1, F1/F3: a note typed offline in a notebook that is
+  // deleted meanwhile lands in the default notebook instead of being lost.
+  await convex(page, "mutation", "notebooks:create", { name: "Later" });
+  await phone.getByRole("button", { name: "Menu" }).click();
+  const laterItem = sheet.getByRole("button", { name: "Later", exact: true });
+  await expect(laterItem).toBeVisible({ timeout: 20_000 });
+  await laterItem.click();
+  await expect(phone.getByRole("heading", { level: 1 })).toHaveText("Later");
+  await phoneContext.setOffline(true);
+  await phone
+    .locator(".mobile-home-actions")
+    .getByRole("button", { name: "New note" })
+    .click();
+  const offlineText = phone.getByRole("textbox", { name: "Note content" });
+  await expect(offlineText).toBeVisible({ timeout: 20_000 });
+  await offlineText.click();
+  await phone.keyboard.type("Offline in Later");
+  await expect(
+    phone.getByText(
+      /Offline — changes kept on this device|Draft saved on this device|Saving…/,
+    ),
+  ).toBeVisible({ timeout: 15_000 });
+  await phone.waitForTimeout(800); // journal writes are batched for 200 ms
+  await navItem("Later").click({ button: "right" });
+  await menu("Later")
+    .getByRole("menuitem", { name: "Delete notebook…" })
+    .click();
+  const deleteLater = page.getByRole("dialog", { name: "Delete “Later”" });
+  await deleteLater.getByRole("button", { name: "Delete notebook" }).click();
+  await expect(page.getByText("Deleted “Later”")).toBeVisible({
+    timeout: 30_000,
+  });
+  await phoneContext.setOffline(false);
+  await expect
+    .poll(
+      async () =>
+        (
+          await convex(page, "query", "library:recent", {
+            notebookId: notesId,
+          })
+        ).notes.map((n) => n.title),
+      { timeout: 60_000 },
+    )
+    .toContain("Offline in Later");
+  await expect(phone.getByRole("heading", { level: 1 })).toHaveText(
+    "All notes",
+    { timeout: 20_000 },
+  );
+  step(
+    "phone: a note typed offline in a notebook deleted meanwhile lands in Notes",
+  );
 } finally {
   await browser.close();
 }

@@ -42,6 +42,7 @@ import {
 } from "./arrange";
 import { dropIndex, placement } from "./reorder";
 import {
+  newNoteNotebook,
   notebookActionLabels,
   notebookActions,
   notebookCounts,
@@ -182,6 +183,10 @@ const statusLabels = {
   "signed-out": "Signed out",
 };
 
+function withNotebook(notebookId: string | undefined) {
+  return notebookId ? { notebookId } : {};
+}
+
 function randomId() {
   return crypto.randomUUID().replace(/-/g, "");
 }
@@ -253,6 +258,8 @@ export function App({
   const [notebookMenu, setNotebookMenu] = useState<NotebookMenu | null>(null);
   /** A notebook whose "New note here" waits for its list to show. */
   const [newNoteIn, setNewNoteIn] = useState<string | null>(null);
+  /** Notebooks this device has listed, to tell a removed one from a new one. */
+  const listedNotebooks = useRef(new Set<string>());
   /** The note row resting open after a swipe; one at a time. */
   const [openSwipe, setOpenSwipe] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -742,9 +749,12 @@ export function App({
       const id = "local-" + randomId();
       const doc = JSON.stringify(emptyDoc().toJSON());
       const notebookId =
-        section.kind === "notebook"
-          ? section.id
-          : (liveState.profile?.defaultNotebookId ?? undefined);
+        newNoteNotebook(
+          section.kind === "notebook" ? section.id : null,
+          notebooks,
+        ) ??
+        liveState.profile?.defaultNotebookId ??
+        undefined;
       const request = openRequest.current;
       const channel = await makeChannel(
         {
@@ -806,7 +816,13 @@ export function App({
         document,
         text,
         updatedAt: Date.now(),
-        ...(section.kind === "notebook" ? { notebookId: section.id } : {}),
+        // Without one, the server files it in the default notebook.
+        ...withNotebook(
+          newNoteNotebook(
+            section.kind === "notebook" ? section.id : null,
+            notebooks,
+          ),
+        ),
       });
       if (
         snapshotRef.current.accountId === note.accountId &&
@@ -1580,6 +1596,19 @@ export function App({
       failed(failure);
     }
   }
+
+  // A notebook that leaves this device's list (deleted or unshared, here or
+  // on another device) stops being shown; All Notes shows instead. One just
+  // created, not listed yet, stays shown (review round 1, F1).
+  useEffect(() => {
+    for (const notebook of notebooks) listedNotebooks.current.add(notebook.id);
+    if (
+      section.kind === "notebook" &&
+      listedNotebooks.current.has(section.id) &&
+      !notebooks.some((notebook) => notebook.id === section.id)
+    )
+      setSection({ kind: "all" });
+  }, [notebooks, section]);
 
   // "New note here" starts once that notebook's list shows, so the note is
   // made there: on the server, or as a draft on this device.

@@ -401,7 +401,13 @@ describe("notebook deletion", () => {
         destinationId: ada.notebookId,
         trash: true,
       }),
-    ).toEqual({ lost: [], destinationShared: true });
+    ).toEqual({
+      destinationId: ada.notebookId,
+      trash: true,
+      lost: [],
+      destinationShared: true,
+      complete: true,
+    });
     await removeAll(ada, diary, ada.notebookId, true);
     expect(await row(t, secret)).toMatchObject({
       notebookId: ada.notebookId,
@@ -451,7 +457,8 @@ describe("notebook deletion", () => {
     const plain = await note(ada, journal, "Plain");
     const binned = await note(ada, journal, "Binned");
     await ada.as.mutation(api.notes.trash, { noteId: binned });
-    // Bea is also in the destination; Cy is not.
+    // Bea is also in the destination, but loses the note already in Trash,
+    // which becomes private there; Cy is not in the destination.
     expect(
       await ada.as.query(api.notebooks.deletePreview, {
         notebookId: journal,
@@ -459,8 +466,14 @@ describe("notebook deletion", () => {
         trash: false,
       }),
     ).toEqual({
-      lost: [{ principalId: cy.id, name: "Cy" }],
+      destinationId: ada.notebookId,
+      trash: false,
+      lost: [
+        { principalId: bea.id, name: "Bea" },
+        { principalId: cy.id, name: "Cy" },
+      ],
       destinationShared: true,
+      complete: true,
     });
     expect(
       (await ada.as.query(api.notebooks.deletePreview, {
@@ -743,7 +756,13 @@ describe("notebook deletion", () => {
       done: true,
       notes: 0,
     });
-    await expect(note(bea, journal, "Too late")).rejects.toThrow(/not found/);
+    // A person's note for the deleted notebook goes to their own default
+    // notebook (review round 1), not into anything of Ada's.
+    const tooLate = await note(bea, journal, "Too late");
+    expect(await row(t, tooLate)).toMatchObject({
+      notebookId: bea.notebookId,
+      ownerId: bea.id,
+    });
   });
 
   test("the preview is only for the owner and a valid destination", async () => {
@@ -757,9 +776,21 @@ describe("notebook deletion", () => {
       destinationId: ada.notebookId,
       trash: false,
     };
+    // An empty notebook takes nothing from anyone.
     expect(await ada.as.query(api.notebooks.deletePreview, args)).toEqual({
+      destinationId: ada.notebookId,
+      trash: false,
+      lost: [],
+      destinationShared: false,
+      complete: true,
+    });
+    await note(ada, journal, "Plans");
+    expect(await ada.as.query(api.notebooks.deletePreview, args)).toEqual({
+      destinationId: ada.notebookId,
+      trash: false,
       lost: [{ principalId: bea.id, name: "Bea" }],
       destinationShared: false,
+      complete: true,
     });
     expect(await bea.as.query(api.notebooks.deletePreview, args)).toBeNull();
     expect(
@@ -777,5 +808,291 @@ describe("notebook deletion", () => {
     await expect(t.query(api.notebooks.deletePreview, args)).rejects.toThrow(
       /Sign in/,
     );
+  });
+});
+
+/** A stored document whose single paragraph is `text`. */
+function docOf(text: string) {
+  return JSON.stringify({
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+  });
+}
+
+describe("review round 1 regressions", () => {
+  test("F1/F3: a person's note for a deleted notebook goes to their default notebook", async () => {
+    const t = setup();
+    const ada = await human(t, "Ada");
+    const journal = await notebook(ada, "Journal");
+    await removeAll(ada, journal, ada.notebookId, false);
+    // A draft typed in Journal on another device, created after it went.
+    const created = await ada.as.mutation(api.notes.create, {
+      notebookId: journal,
+      clientKey: "local-offline",
+      doc: docOf("Written offline"),
+    });
+    expect(created.replayed).toBe(false);
+    expect(await row(t, created.noteId)).toMatchObject({
+      notebookId: ada.notebookId,
+      ownerId: ada.id,
+      creatorId: ada.id,
+    });
+    // Its retry is the same note, not another.
+    expect(
+      await ada.as.mutation(api.notes.create, {
+        notebookId: journal,
+        clientKey: "local-offline",
+        doc: docOf("Written offline"),
+      }),
+    ).toEqual({ noteId: created.noteId, revision: 0, replayed: true });
+    // The Markdown path behaves the same for people.
+    const markdown = await ada.as.mutation(api.notes.createFromMarkdown, {
+      notebookId: journal,
+      markdown: "From Markdown",
+    });
+    expect(markdown.notebookId).toBe(ada.notebookId);
+  });
+
+  test("F1/F3: a person whose membership was removed or made read-only keeps their note in their own default", async () => {
+    const t = setup();
+    const ada = await human(t, "Ada");
+    const bea = await human(t, "Bea");
+    const team = await notebook(ada, "Team");
+    const member = await share(t, team, bea.id, "edit", ada.id);
+    await t.run((ctx) => ctx.db.delete(member));
+    const removed = await bea.as.mutation(api.notes.create, {
+      notebookId: team,
+      clientKey: "local-removed",
+      doc: docOf("Typed before removal"),
+    });
+    expect(await row(t, removed.noteId)).toMatchObject({
+      notebookId: bea.notebookId,
+      ownerId: bea.id,
+    });
+    await share(t, team, bea.id, "read", ada.id);
+    const readOnly = await bea.as.mutation(api.notes.create, {
+      notebookId: team,
+      clientKey: "local-read",
+      doc: docOf("Typed before becoming a reader"),
+    });
+    expect(await row(t, readOnly.noteId)).toMatchObject({
+      notebookId: bea.notebookId,
+      ownerId: bea.id,
+    });
+    // Nothing reached Ada's notebook.
+    const inTeam = await t.run((ctx) =>
+      ctx.db
+        .query("notes")
+        .withIndex("by_notebook_and_seq", (q) => q.eq("notebookId", team))
+        .collect(),
+    );
+    expect(inTeam).toEqual([]);
+  });
+
+  test("F1/F3: agents, replays and conflict copies of unreadable notes are refused as before", async () => {
+    const t = setup();
+    const ada = await human(t, "Ada");
+    const bea = await human(t, "Bea");
+    const claude = await agent(t, ada.id, ["share", "move", "delete"]);
+    const journal = await notebook(ada, "Journal");
+    await share(t, journal, claude.id, "edit", ada.id);
+    await share(t, ada.notebookId, claude.id, "read", ada.id);
+    await removeAll(ada, journal, ada.notebookId, false);
+    // Agents: a missing notebook and a read-only one still refuse.
+    await expect(
+      claude.as.mutation(api.notes.create, {
+        notebookId: journal,
+        clientKey: "agent-missing",
+        doc: docOf("Agent note"),
+      }),
+    ).rejects.toThrow(/not found/);
+    await expect(
+      claude.as.mutation(api.notes.createFromMarkdown, {
+        notebookId: ada.notebookId,
+        markdown: "Agent note",
+      }),
+    ).rejects.toThrow(/edit access/);
+    // A replay of a note the person can no longer open reveals nothing.
+    const team = await notebook(ada, "Team");
+    const member = await share(t, team, bea.id, "edit", ada.id);
+    await bea.as.mutation(api.notes.create, {
+      notebookId: team,
+      clientKey: "local-team",
+      doc: docOf("Team note"),
+    });
+    await t.run((ctx) => ctx.db.delete(member));
+    await expect(
+      bea.as.mutation(api.notes.create, {
+        notebookId: team,
+        clientKey: "local-team",
+        doc: docOf("Team note"),
+      }),
+    ).rejects.toThrow(/not found/);
+    // A conflict copy of a note the person cannot open is still refused,
+    // whatever its notebook.
+    const source = await note(ada, team, "Source");
+    await expect(
+      bea.as.mutation(api.notes.create, {
+        notebookId: team,
+        clientKey: "local-copy",
+        doc: docOf("Copy"),
+        sourceNoteId: source,
+      }),
+    ).rejects.toThrow(/not found/);
+  });
+
+  test("F1/F3: a conflict copy of a note the person can open goes to their default when its notebook went", async () => {
+    const t = setup();
+    const ada = await human(t, "Ada");
+    const bea = await human(t, "Bea");
+    const shared = await notebook(ada, "Shared");
+    await share(t, shared, bea.id, "edit", ada.id);
+    const open = await note(ada, shared, "Open source");
+    await ada.as.mutation(api.sharing.setNoteMember, {
+      noteId: open,
+      principalId: bea.id,
+      role: "edit",
+    });
+    await removeAll(ada, shared, ada.notebookId, false);
+    const copy = await bea.as.mutation(api.notes.create, {
+      notebookId: shared,
+      clientKey: "local-open-copy",
+      doc: docOf("Open source, my version"),
+      sourceNoteId: open,
+    });
+    expect((await row(t, copy.noteId))!.notebookId).toBe(bea.notebookId);
+  });
+
+  test("F2: large notes are deleted in calls bounded by bytes, within transaction limits", async () => {
+    const t = setup(true);
+    const ada = await human(t, "Ada");
+    const journal = await notebook(ada, "Journal");
+    const body = "word ".repeat(80_000); // 400,000 characters
+    const ids: Id<"notes">[] = [];
+    for (let i = 0; i < 24; i++)
+      ids.push(await note(ada, journal, `Large ${i}\n\n${body}`));
+    const calls = await removeAll(ada, journal, ada.notebookId, true);
+    const filed = calls.filter((call) => call.notes > 0);
+    expect(filed.reduce((sum, call) => sum + call.notes, 0)).toBe(24);
+    // Each note costs about 1.2 MB of reads in Trash: several calls.
+    expect(filed.length).toBeGreaterThan(3);
+    expect(Math.max(...filed.map((call) => call.notes))).toBeLessThan(10);
+    for (const id of ids)
+      expect(await row(t, id)).toMatchObject({
+        notebookId: ada.notebookId,
+        lifecycle: "trashed",
+      });
+  });
+
+  test("F2: one note of the largest size always fits in a call", async () => {
+    const t = setup(true);
+    const ada = await human(t, "Ada");
+    const journal = await notebook(ada, "Journal");
+    // The largest document the app accepts, in ASCII.
+    const largest = await ada.as.mutation(api.notes.create, {
+      notebookId: journal,
+      clientKey: "largest",
+      doc: docOf("x".repeat(699_000)),
+    });
+    // A search text at Convex's 1 MiB document limit, in multi-byte text,
+    // more than any accepted note can produce.
+    const widest = await note(ada, journal, "Widest");
+    await t.run(async (ctx) => {
+      const text = await ctx.db
+        .query("noteText")
+        .withIndex("by_note", (q) => q.eq("noteId", widest))
+        .unique();
+      await ctx.db.patch(text!._id, { text: "€".repeat(349_000) });
+    });
+    const calls = await removeAll(ada, journal, ada.notebookId, true);
+    expect(calls.filter((call) => call.notes > 0).length).toBeGreaterThan(0);
+    for (const id of [largest.noteId, widest])
+      expect(await row(t, id)).toMatchObject({
+        notebookId: ada.notebookId,
+        lifecycle: "trashed",
+      });
+  });
+
+  test("F4: the preview counts notes already in Trash, per-note grants and incomplete scans", async () => {
+    const t = setup();
+    const ada = await human(t, "Ada");
+    const bea = await human(t, "Bea");
+    const cy = await human(t, "Cy");
+    const journal = await notebook(ada, "Journal");
+    for (const person of [bea, cy]) {
+      await share(t, journal, person.id, "edit", ada.id);
+      await share(t, ada.notebookId, person.id, "edit", ada.id);
+    }
+    const binned = await note(ada, journal, "Binned");
+    await ada.as.mutation(api.notes.trash, { noteId: binned });
+    // Cy keeps the binned note through an explicit grant; Bea does not.
+    await ada.as.mutation(api.sharing.setNoteMember, {
+      noteId: binned,
+      principalId: cy.id,
+      role: "read",
+    });
+    const args = {
+      notebookId: journal,
+      destinationId: ada.notebookId,
+      trash: false,
+    };
+    expect(
+      (await ada.as.query(api.notebooks.deletePreview, args))!.lost,
+    ).toEqual([{ principalId: bea.id, name: "Bea" }]);
+    await removeAll(ada, journal, ada.notebookId, false);
+    expect(await bea.as.query(api.notes.get, { noteId: binned })).toBeNull();
+    expect(
+      (await cy.as.query(api.notes.get, { noteId: binned }))!.summary.role,
+    ).toBe("read");
+
+    // A "No access" override means nothing to lose; a restricted note too.
+    const diary = await notebook(ada, "Diary");
+    await share(t, diary, bea.id, "read", ada.id);
+    const hidden = await note(ada, diary, "Hidden");
+    await ada.as.mutation(api.sharing.setNoteMember, {
+      noteId: hidden,
+      principalId: bea.id,
+      role: "none",
+    });
+    const privateNote = await note(ada, diary, "Private");
+    await ada.as.mutation(api.sharing.setNoteRestricted, {
+      noteId: privateNote,
+      restricted: true,
+    });
+    const archive = await notebook(ada, "Archive");
+    expect(
+      await ada.as.query(api.notebooks.deletePreview, {
+        notebookId: diary,
+        destinationId: archive,
+        trash: false,
+      }),
+    ).toMatchObject({ lost: [], complete: true });
+
+    // More members than the preview examines: it says so.
+    const crowd = await notebook(ada, "Crowd");
+    await note(ada, crowd, "Notice");
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 201; i++) {
+        const principalId = await ctx.db.insert("principals", {
+          kind: "human",
+          name: `Member ${i}`,
+          createdAt: Date.now(),
+        });
+        await ctx.db.insert("notebookMembers", {
+          notebookId: crowd,
+          principalId,
+          role: "read",
+          grantedBy: ada.id,
+          createdAt: Date.now(),
+        });
+      }
+    });
+    const crowded = (await ada.as.query(api.notebooks.deletePreview, {
+      notebookId: crowd,
+      destinationId: archive,
+      trash: false,
+    }))!;
+    expect(crowded.complete).toBe(false);
+    expect(crowded.lost).toHaveLength(200);
   });
 });

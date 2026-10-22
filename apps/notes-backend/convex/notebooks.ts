@@ -15,7 +15,7 @@ import {
   requirePrincipal,
   type Principal,
 } from "./access";
-import { membersLosingAccess, moveNote } from "./lifecycle";
+import { moveNote } from "./lifecycle";
 import { changeLifecycle } from "./notes";
 import { changeRestriction } from "./sharing";
 
@@ -155,6 +155,28 @@ export const setDefault = mutation({
  */
 const NOTE_BATCH = 50;
 const ROW_BATCH = 400;
+/**
+ * Bytes of search text one call may read. Measuring a note reads its search
+ * text (noteText) once, moving it reads and rewrites it, and putting it in
+ * Trash does so again, so a note costs its text two or three times over in
+ * reads, and once or twice in writes. 8 MiB leaves half of Convex's 16 MiB
+ * read and write limits for everything else, including measuring the next
+ * note before stopping. One note always fits, so every call makes progress:
+ * no document exceeds Convex's 1 MiB, so the largest note costs about 3 MiB
+ * read and 2 MiB written.
+ */
+const BYTE_BUDGET = 8 * 1024 * 1024;
+/** The note, its tombstone, sequence counters and feed entries. */
+const NOTE_OVERHEAD = 8 * 1024;
+
+/** The UTF-8 size of a note's search text, which a move rewrites. */
+async function searchTextBytes(ctx: MutationCtx, noteId: Id<"notes">) {
+  const row = await ctx.db
+    .query("noteText")
+    .withIndex("by_note", (q) => q.eq("noteId", noteId))
+    .unique();
+  return row ? new TextEncoder().encode(row.text).length : 0;
+}
 
 async function deletionTarget(
   ctx: MutationCtx,
@@ -189,11 +211,25 @@ async function hasMembers(
   return member !== null;
 }
 
+/** How much the deletion preview examines before saying it is not exact. */
+const PREVIEW_MEMBERS = 200;
+const PREVIEW_NOTES = 500;
+const PREVIEW_GRANTS = 5000;
+
 /**
- * What deleting a notebook would do, shown before confirming: who would lose
- * what they open through it (as the Move dialog warns), and whether notes put
- * in Trash would be made private in the destination. Null for anyone but the
- * owner, or an invalid destination.
+ * What deleting a notebook would do, shown before confirming: which of its
+ * members would lose access to a note they can open now, and whether the
+ * destination has members (notes in Trash then become private there).
+ *
+ * A member loses a note they open through the notebook (not restricted, no
+ * explicit grant of theirs) when they are not a member of the destination,
+ * or when the note ends up private in Trash there. Explicit grants, "No
+ * access" included, keep deciding as before; restricted notes are opened
+ * only through them. Up to 200 members and 500 notes are examined; beyond
+ * that, or with unusually many grants, `complete` is false and the app says
+ * the list may not be exact. Null for anyone but the owner, or an invalid
+ * destination. The answer names its destination and choice, so the app can
+ * tell it belongs to what is selected.
  */
 export const deletePreview = query({
   args: {
@@ -204,10 +240,13 @@ export const deletePreview = query({
   returns: v.union(
     v.null(),
     v.object({
+      destinationId: v.id("notebooks"),
+      trash: v.boolean(),
       lost: v.array(
         v.object({ principalId: v.id("principals"), name: v.string() }),
       ),
       destinationShared: v.boolean(),
+      complete: v.boolean(),
     }),
   ),
   handler: async (ctx, args) => {
@@ -220,14 +259,77 @@ export const deletePreview = query({
         : await ctx.db.get(args.destinationId);
     if (!destination || destination.ownerId !== person._id) return null;
     const destinationShared = await hasMembers(ctx, destination._id);
-    // Notes in Trash are private in a shared destination, so its members
-    // keep nothing through it either.
-    const lost = await membersLosingAccess(
-      ctx,
-      notebook._id,
-      args.trash ? null : destination._id,
-    );
-    return { lost, destinationShared };
+    const members = await ctx.db
+      .query("notebookMembers")
+      .withIndex("by_notebook_and_principal", (q) =>
+        q.eq("notebookId", notebook._id),
+      )
+      .take(PREVIEW_MEMBERS + 1);
+    const notes = await ctx.db
+      .query("notes")
+      .withIndex("by_notebook_and_seq", (q) => q.eq("notebookId", notebook._id))
+      .take(PREVIEW_NOTES + 1);
+    const candidates = members.slice(0, PREVIEW_MEMBERS);
+    const staying = new Set<Id<"principals">>();
+    for (const member of candidates) {
+      const there = await ctx.db
+        .query("notebookMembers")
+        .withIndex("by_notebook_and_principal", (q) =>
+          q
+            .eq("notebookId", destination._id)
+            .eq("principalId", member.principalId),
+        )
+        .unique();
+      if (there) staying.add(member.principalId);
+    }
+    const losing = new Set<Id<"principals">>();
+    // Notes not examined could add names; a cut-off grant list could add a
+    // name wrongly. Either makes the answer inexact.
+    let unexamined = notes.length > PREVIEW_NOTES;
+    let grantsCut = false;
+    let grantsRead = 0;
+    for (const note of notes.slice(0, PREVIEW_NOTES)) {
+      // Once everyone examined loses something, more notes add nothing.
+      if (losing.size === candidates.length) break;
+      if (note.restricted) continue;
+      if (grantsRead > PREVIEW_GRANTS) {
+        unexamined = true;
+        break;
+      }
+      const grants = await ctx.db
+        .query("noteMembers")
+        .withIndex("by_note_and_principal", (q) => q.eq("noteId", note._id))
+        .take(PREVIEW_MEMBERS + 1);
+      grantsRead += grants.length;
+      if (grants.length > PREVIEW_MEMBERS) grantsCut = true;
+      const explicit = new Set(grants.map((grant) => grant.principalId));
+      const privateInTrash =
+        destinationShared && (args.trash || note.lifecycle === "trashed");
+      for (const member of candidates)
+        if (
+          !explicit.has(member.principalId) &&
+          (privateInTrash || !staying.has(member.principalId))
+        )
+          losing.add(member.principalId);
+    }
+    const everyone = losing.size === candidates.length;
+    const lost = [];
+    for (const member of candidates)
+      if (losing.has(member.principalId))
+        lost.push({
+          principalId: member.principalId,
+          name: (await ctx.db.get(member.principalId))?.name ?? "Unknown",
+        });
+    return {
+      destinationId: destination._id,
+      trash: args.trash,
+      lost,
+      destinationShared,
+      complete:
+        members.length <= PREVIEW_MEMBERS &&
+        !grantsCut &&
+        (everyone || !unexamined),
+    };
   },
 });
 
@@ -258,12 +360,22 @@ export const remove = mutation({
       .take(NOTE_BATCH);
     if (notes.length) {
       const shared = await hasMembers(ctx, destination._id);
+      let spent = 0;
+      let filed = 0;
       for (const note of notes) {
         if (note.ownerId !== person._id)
           fail(
             "conflict",
             "This notebook holds a note owned by someone else, so it cannot be deleted.",
           );
+        const trashing = args.trash || note.lifecycle === "trashed";
+        const cost =
+          (await searchTextBytes(ctx, note._id)) * (trashing ? 3 : 2) +
+          NOTE_OVERHEAD;
+        // At least one note per call, so a call always makes progress.
+        if (filed > 0 && spent + cost > BYTE_BUDGET) break;
+        spent += cost;
+        filed++;
         await moveNote(ctx, note, destination._id);
         let moved = (await ctx.db.get(note._id))!;
         if (args.trash || moved.lifecycle === "trashed") {
@@ -274,7 +386,7 @@ export const remove = mutation({
           await changeLifecycle(ctx, moved, true);
         }
       }
-      return { done: false, notes: notes.length };
+      return { done: false, notes: filed };
     }
 
     let budget = ROW_BATCH;

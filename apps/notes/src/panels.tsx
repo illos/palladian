@@ -21,6 +21,7 @@ import type { AuthClient } from "./auth-service";
 import type { LiveController } from "./live";
 import { transportError } from "./live";
 import { deviceName, passkeyOffer, passkeysSupported } from "./passkeys";
+import { previewMatches } from "./notebook-actions";
 import { PasswordInput } from "./SignIn";
 
 type Panel =
@@ -883,6 +884,10 @@ function DeleteNotebook({
       ? { notebookId, destinationId: destination.id, trash }
       : "skip",
   );
+  // Deleting waits for the warning about the destination and choice now
+  // selected (review round 1, F5).
+  const warned =
+    !!destination && previewMatches(preview, destination.id, trash);
   const name = notebook?.name ?? "this notebook";
   const close = () => {
     if (!busy) onClose();
@@ -940,6 +945,7 @@ function DeleteNotebook({
           className="stacked-form notebook-delete"
           onSubmit={(event) => {
             event.preventDefault();
+            if (!warned || busy) return;
             void run(async () => {
               onStart(trash);
               let moved = 0;
@@ -1007,11 +1013,28 @@ function DeleteNotebook({
               ))}
             </select>
           </label>
+          {!busy && preview === null && (
+            <p role="alert" className="error">
+              This notebook cannot be deleted this way now. Close this and try
+              again.
+            </p>
+          )}
+          {!busy && preview !== null && !warned && (
+            <p className="muted" role="status">
+              Checking who would lose access…
+            </p>
+          )}
           <AccessLoss
-            people={preview?.lost}
+            people={warned ? preview?.lost : undefined}
             what={`the notes they open through “${name}”`}
           />
-          {preview?.destinationShared && (trash || trashed > 0) && (
+          {warned && preview && !preview.complete && (
+            <p className="error">
+              “{name}” has more members or notes than were checked, so this may
+              not name everyone who would lose access.
+            </p>
+          )}
+          {warned && preview?.destinationShared && (trash || trashed > 0) && (
             <p className="muted">
               {trash ? "Its notes become" : "Its notes already in Trash become"}{" "}
               private in “{destination.name}”, so that notebook's members do not
@@ -1022,7 +1045,7 @@ function DeleteNotebook({
             Its members and open invitations are removed. The notebook itself
             cannot be restored.
           </p>
-          <button className="danger" disabled={busy}>
+          <button className="danger" disabled={busy || !warned}>
             Delete notebook
           </button>
           {progress !== null && (

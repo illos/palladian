@@ -156,43 +156,34 @@ export const purgeExpired = internalMutation({
   },
 });
 
-/**
- * Members of a notebook who would lose what they open through it: everyone
- * except those also in `destination` and, for one note, those with an
- * explicit grant on it (which governs instead).
- */
-export async function membersLosingAccess(
+async function accessLoss(
   ctx: QueryCtx | MutationCtx,
-  notebookId: Id<"notebooks">,
-  destination: Id<"notebooks"> | null,
-  noteId?: Id<"notes">,
+  note: Doc<"notes">,
+  destination: Id<"notebooks">,
 ) {
   const lost: { principalId: Id<"principals">; name: string }[] = [];
+  if (note.restricted) return lost;
   const members = await ctx.db
     .query("notebookMembers")
     .withIndex("by_notebook_and_principal", (q) =>
-      q.eq("notebookId", notebookId),
+      q.eq("notebookId", note.notebookId),
     )
     .take(200);
   for (const member of members) {
-    if (noteId) {
-      const explicit = await ctx.db
-        .query("noteMembers")
-        .withIndex("by_note_and_principal", (q) =>
-          q.eq("noteId", noteId).eq("principalId", member.principalId),
-        )
-        .unique();
-      if (explicit) continue;
-    }
-    if (destination) {
-      const stays = await ctx.db
-        .query("notebookMembers")
-        .withIndex("by_notebook_and_principal", (q) =>
-          q.eq("notebookId", destination).eq("principalId", member.principalId),
-        )
-        .unique();
-      if (stays) continue;
-    }
+    const explicit = await ctx.db
+      .query("noteMembers")
+      .withIndex("by_note_and_principal", (q) =>
+        q.eq("noteId", note._id).eq("principalId", member.principalId),
+      )
+      .unique();
+    if (explicit) continue;
+    const stays = await ctx.db
+      .query("notebookMembers")
+      .withIndex("by_notebook_and_principal", (q) =>
+        q.eq("notebookId", destination).eq("principalId", member.principalId),
+      )
+      .unique();
+    if (stays) continue;
     const principal = await ctx.db.get(member.principalId);
     lost.push({
       principalId: member.principalId,
@@ -200,15 +191,6 @@ export async function membersLosingAccess(
     });
   }
   return lost;
-}
-
-async function accessLoss(
-  ctx: QueryCtx | MutationCtx,
-  note: Doc<"notes">,
-  destination: Id<"notebooks">,
-) {
-  if (note.restricted) return [];
-  return await membersLosingAccess(ctx, note.notebookId, destination, note._id);
 }
 
 /** Who would lose access if the note moved; shown before confirming. */
