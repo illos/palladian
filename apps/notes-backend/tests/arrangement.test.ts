@@ -319,12 +319,22 @@ describe("arrangement", () => {
     await expect(
       ada.as.mutation(api.arrangement.setPositions, {
         notebookId: ada.notebookId,
-        entries: Array.from({ length: 201 }, () => ({
+        entries: Array.from({ length: 101 }, () => ({
           noteId: first,
           key: "V",
         })),
       }),
-    ).rejects.toThrow(/At most 200/);
+    ).rejects.toThrow(/At most 100/);
+    // One position per note in a write.
+    await expect(
+      ada.as.mutation(api.arrangement.setPositions, {
+        notebookId: ada.notebookId,
+        entries: [
+          { noteId: first, key: "V" },
+          { noteId: first, key: "k" },
+        ],
+      }),
+    ).rejects.toThrow(/one position/);
     // Keys never end in 0, as the app generates them.
     await expect(
       ada.as.mutation(api.arrangement.setPositions, {
@@ -473,20 +483,20 @@ describe("arrangement", () => {
     const shared = await note(ada, "Shared");
     const own = await note(bea, "Own");
     await t.run(async (ctx) => {
-      for (let i = 0; i < 200; i++)
+      for (let i = 0; i < 100; i++)
         await ctx.db.insert("pins", {
           principalId: bea.id,
           noteId: shared,
           pinnedAt: i,
         });
-      for (let i = 0; i < 1000; i++)
+      for (let i = 0; i < 500; i++)
         await ctx.db.insert("notePositions", {
           principalId: bea.id,
           notebookId: ada.notebookId,
           noteId: shared,
           key: "V",
         });
-      for (let i = 0; i < 500; i++)
+      for (let i = 0; i < 100; i++)
         await ctx.db.insert("listOrders", {
           principalId: bea.id,
           list: "gone-" + i,
@@ -496,13 +506,13 @@ describe("arrangement", () => {
     // While they are still usable, the quotas hold.
     await expect(
       bea.as.mutation(api.arrangement.setPin, { noteId: own, pinned: true }),
-    ).rejects.toThrow(/up to 200/);
+    ).rejects.toThrow(/up to 100/);
     await expect(
       bea.as.mutation(api.arrangement.setPositions, {
         notebookId: bea.notebookId,
         entries: [{ noteId: own, key: "V" }],
       }),
-    ).rejects.toThrow(/up to 1000/);
+    ).rejects.toThrow(/up to 500/);
     // Lists that are gone are reclaimed at once.
     await bea.as.mutation(api.arrangement.setOrder, {
       list: bea.notebookId,
@@ -528,29 +538,124 @@ describe("arrangement", () => {
     });
   });
 
-  test("a full arrangement of shared notes reads within Convex limits", async () => {
-    const t = setup(true);
+  test("a note shared on its own does not keep its notebook's positions", async () => {
+    const t = setup();
     const ada = await human(t, "Ada");
     const bea = await human(t, "Bea");
-    await share(t, ada.notebookId, bea.id, "read", ada.id);
-    const shared = await note(ada, "Shared");
+    const member = await share(t, ada.notebookId, bea.id, "read", ada.id);
+    const first = await note(ada, "First");
+    await bea.as.mutation(api.arrangement.setPositions, {
+      notebookId: ada.notebookId,
+      entries: [{ noteId: first, key: "V" }],
+    });
+    // Bea keeps the note through an explicit grant, but not the notebook.
     await t.run(async (ctx) => {
-      for (let i = 0; i < 200; i++)
-        await ctx.db.insert("pins", {
-          principalId: bea.id,
-          noteId: shared,
-          pinnedAt: i,
-        });
-      for (let i = 0; i < 1000; i++)
+      await ctx.db.insert("noteMembers", {
+        noteId: first,
+        principalId: bea.id,
+        role: "read",
+        grantedBy: ada.id,
+        createdAt: Date.now(),
+      });
+      await ctx.db.delete(member);
+    });
+    expect((await bea.as.query(api.arrangement.mine, {})).positions).toEqual(
+      [],
+    );
+    // At the quota, such positions are reclaimed.
+    const own = await note(bea, "Own");
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 499; i++)
         await ctx.db.insert("notePositions", {
           principalId: bea.id,
           notebookId: ada.notebookId,
-          noteId: shared,
+          noteId: first,
           key: "V",
         });
     });
+    await bea.as.mutation(api.arrangement.setPositions, {
+      notebookId: bea.notebookId,
+      entries: [{ noteId: own, key: "V" }],
+    });
+    const left = await t.run((ctx) =>
+      ctx.db
+        .query("notePositions")
+        .withIndex("by_principal_and_notebook", (q) =>
+          q.eq("principalId", bea.id),
+        )
+        .collect(),
+    );
+    expect(left.map((p) => p.noteId)).toEqual([own]);
+  });
+
+  test("a full arrangement across many shared notebooks reads within Convex limits", async () => {
+    const t = setup(true);
+    const ada = await human(t, "Ada");
+    const bea = await human(t, "Bea");
+    // 100 notebooks shared with Bea, five notes each: 500 positions on
+    // distinct notes, 100 pins and 100 list orders, all on shared content.
+    await t.run(async (ctx) => {
+      const now = Date.now();
+      let seq = 0;
+      for (let b = 0; b < 100; b++) {
+        const notebookId = await ctx.db.insert("notebooks", {
+          ownerId: ada.id,
+          name: "Shared " + b,
+          description: "",
+          createdAt: now,
+          updatedAt: now,
+        });
+        await ctx.db.insert("notebookMembers", {
+          notebookId,
+          principalId: bea.id,
+          role: "read",
+          grantedBy: ada.id,
+          createdAt: now,
+        });
+        await ctx.db.insert("listOrders", {
+          principalId: bea.id,
+          list: notebookId,
+          order: "custom",
+        });
+        for (let n = 0; n < 5; n++) {
+          const noteId = await ctx.db.insert("notes", {
+            notebookId,
+            ownerId: ada.id,
+            creatorId: ada.id,
+            title: `Note ${b}.${n}`,
+            preview: "",
+            createdAt: now,
+            editedAt: now,
+            lifecycle: "active",
+            restricted: false,
+            seq: ++seq,
+          });
+          await ctx.db.insert("notePositions", {
+            principalId: bea.id,
+            notebookId,
+            noteId,
+            key: "V",
+          });
+          if (n === 0)
+            await ctx.db.insert("pins", {
+              principalId: bea.id,
+              noteId,
+              pinnedAt: now,
+            });
+        }
+      }
+    });
     const mine = await bea.as.query(api.arrangement.mine, {});
-    expect(mine.pins).toHaveLength(200);
-    expect(mine.positions).toHaveLength(1000);
+    expect(mine.pins).toHaveLength(100);
+    expect(mine.orders).toHaveLength(100);
+    expect(mine.positions).toHaveLength(500);
+    // At the quota, a new position checks every row and is refused in time.
+    const own = await note(bea, "Own");
+    await expect(
+      bea.as.mutation(api.arrangement.setPositions, {
+        notebookId: bea.notebookId,
+        entries: [{ noteId: own, key: "V" }],
+      }),
+    ).rejects.toThrow(/up to 500/);
   });
 });

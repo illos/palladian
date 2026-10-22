@@ -44,20 +44,26 @@ export async function setOrder(
   await client.mutation(api.arrangement.setOrder, { list, order });
 }
 
-/** Writes positions in batches the server accepts. */
+/**
+ * Writes positions in batches the server accepts, stopping if the account
+ * or session changed in between.
+ */
 export async function setPositions(
   client: ConvexReactClient,
   notebookId: string,
   entries: { noteId: string; key: string }[],
+  current: () => boolean,
 ) {
-  for (let start = 0; start < entries.length; start += 200)
+  for (let start = 0; start < entries.length; start += 100) {
+    if (!current()) return;
     await client.mutation(api.arrangement.setPositions, {
       notebookId: notebookId as Id<"notebooks">,
-      entries: entries.slice(start, start + 200).map((entry) => ({
+      entries: entries.slice(start, start + 100).map((entry) => ({
         noteId: entry.noteId as Id<"notes">,
         key: entry.key,
       })),
     });
+  }
 }
 
 export function fileName(title: string, extension: string) {

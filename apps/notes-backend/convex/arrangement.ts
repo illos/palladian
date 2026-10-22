@@ -13,7 +13,7 @@ import {
   loadNote,
   loadNotebook,
   noteRole,
-  notebookInventory,
+  notebookRole,
   requireHuman,
   type Principal,
 } from "./access";
@@ -38,10 +38,18 @@ const order = v.union(
 
 type Person = Principal;
 
-export const PIN_LIMIT = 200;
-export const ORDER_LIMIT = 500;
-export const POSITION_LIMIT = 1000;
-export const BATCH_LIMIT = 200;
+/*
+ * Quotas keep every function within Convex's transaction limits (4,096
+ * `db.get`/`db.query` calls) with headroom. `mine` checks each row: a pin
+ * costs up to 3 calls (the note and `noteRole`); an order or position adds
+ * at most 2 per distinct notebook (memoized); a position up to 3 more. Worst
+ * case: 100 pins (300) + 100 orders (200) + 500 positions (1,500 + 1,000
+ * for 500 notebooks) ≈ 3,000.
+ */
+export const PIN_LIMIT = 100;
+export const ORDER_LIMIT = 100;
+export const POSITION_LIMIT = 500;
+export const BATCH_LIMIT = 100;
 /** Cleanup rows per scheduled run. */
 const CLEANUP_BATCH = 200;
 /**
@@ -50,29 +58,50 @@ const CLEANUP_BATCH = 200;
  */
 const KEY = /^[0-9A-Za-z]{0,63}[1-9A-Za-z]$/;
 
-/** The note if the person can still open it. */
-async function readable(
-  ctx: QueryCtx,
-  person: Person,
-  noteId: Id<"notes">,
-): Promise<Doc<"notes"> | null> {
-  const note = await ctx.db.get(noteId);
-  return note && (await noteRole(ctx, person, note)) ? note : null;
-}
-
-/** A position counts while its note is readable and still in that notebook. */
-async function positionLive(
-  ctx: QueryCtx,
-  person: Person,
-  row: Doc<"notePositions">,
-): Promise<boolean> {
-  const note = await readable(ctx, person, row.noteId);
-  return !!note && note.notebookId === row.notebookId;
-}
-
-async function reachableLists(ctx: QueryCtx, person: Person) {
-  const { entries } = await notebookInventory(ctx, person);
-  return new Set<string>(["all", ...entries.map((e) => e.notebook._id)]);
+/**
+ * Access checks for one function run. Notebook access is looked up directly
+ * (never inferred from a bounded inventory) and remembered per notebook.
+ */
+function accessFor(ctx: QueryCtx, person: Person) {
+  const notebooks = new Map<string, Promise<boolean>>();
+  const notebookReadable = (id: Id<"notebooks">) => {
+    let known = notebooks.get(id);
+    if (!known) {
+      known = (async () => {
+        const notebook = await ctx.db.get(id);
+        return !!notebook && !!(await notebookRole(ctx, person, notebook));
+      })();
+      notebooks.set(id, known);
+    }
+    return known;
+  };
+  /** The note if the person can still open it. */
+  const noteReadable = async (noteId: Id<"notes">) => {
+    const note = await ctx.db.get(noteId);
+    return note && (await noteRole(ctx, person, note)) ? note : null;
+  };
+  return {
+    noteReadable,
+    /** "all", or a notebook the person can read. */
+    listReadable: async (list: string) => {
+      if (list === "all") return true;
+      const id = ctx.db.normalizeId("notebooks", list);
+      return !!id && (await notebookReadable(id));
+    },
+    /**
+     * A position counts while its note is readable, still in that notebook,
+     * and the notebook itself is readable (a note shared on its own does not
+     * make its notebook's custom order usable).
+     */
+    positionLive: async (row: Doc<"notePositions">) => {
+      const note = await noteReadable(row.noteId);
+      return (
+        !!note &&
+        note.notebookId === row.notebookId &&
+        (await notebookReadable(row.notebookId))
+      );
+    },
+  };
 }
 
 function pinsOf(ctx: QueryCtx, person: Person, limit: number) {
@@ -113,17 +142,18 @@ export const mine = query({
   }),
   handler: async (ctx) => {
     const person = await requireHuman(ctx);
+    const access = accessFor(ctx, person);
     const pins = [];
     for (const pin of await pinsOf(ctx, person, PIN_LIMIT))
-      if (await readable(ctx, person, pin.noteId))
+      if (await access.noteReadable(pin.noteId))
         pins.push({ noteId: pin.noteId, pinnedAt: pin.pinnedAt });
-    const lists = await reachableLists(ctx, person);
-    const orders = (await ordersOf(ctx, person, ORDER_LIMIT))
-      .filter((row) => lists.has(row.list))
-      .map((row) => ({ list: row.list, order: row.order }));
+    const orders = [];
+    for (const row of await ordersOf(ctx, person, ORDER_LIMIT))
+      if (await access.listReadable(row.list))
+        orders.push({ list: row.list, order: row.order });
     const positions = [];
     for (const row of await positionsOf(ctx, person, POSITION_LIMIT))
-      if (lists.has(row.notebookId) && (await positionLive(ctx, person, row)))
+      if (await access.positionLive(row))
         positions.push({
           notebookId: row.notebookId,
           noteId: row.noteId,
@@ -153,8 +183,9 @@ export const setPin = mutation({
     if (existing) return null;
     let rows = await pinsOf(ctx, person, PIN_LIMIT);
     if (rows.length >= PIN_LIMIT) {
+      const access = accessFor(ctx, person);
       for (const row of rows)
-        if (!(await readable(ctx, person, row.noteId)))
+        if (!(await access.noteReadable(row.noteId)))
           await ctx.db.delete(row._id);
       rows = await pinsOf(ctx, person, PIN_LIMIT);
     }
@@ -195,9 +226,10 @@ export const setOrder = mutation({
     }
     let rows = await ordersOf(ctx, person, ORDER_LIMIT);
     if (rows.length >= ORDER_LIMIT) {
-      const lists = await reachableLists(ctx, person);
+      const access = accessFor(ctx, person);
       for (const row of rows)
-        if (!lists.has(row.list)) await ctx.db.delete(row._id);
+        if (!(await access.listReadable(row.list)))
+          await ctx.db.delete(row._id);
       rows = await ordersOf(ctx, person, ORDER_LIMIT);
     }
     if (rows.length >= ORDER_LIMIT)
@@ -225,6 +257,8 @@ export const setPositions = mutation({
     const person = await requireHuman(ctx);
     if (args.entries.length > BATCH_LIMIT)
       fail("too_large", `At most ${BATCH_LIMIT} positions at once.`);
+    if (new Set(args.entries.map((e) => e.noteId)).size < args.entries.length)
+      fail("invalid", "Each note can have one position.");
     await loadNotebook(ctx, person, args.notebookId, "read");
     const writes: {
       entry: { noteId: Id<"notes">; key: string };
@@ -235,24 +269,24 @@ export const setPositions = mutation({
       const { note } = await loadNote(ctx, person, entry.noteId, "read");
       if (note.notebookId !== args.notebookId)
         fail("invalid", "That note is in another notebook.");
-      const existing = await ctx.db
+      const [existing, ...extra] = await ctx.db
         .query("notePositions")
         .withIndex("by_principal_and_note", (q) =>
           q.eq("principalId", person._id).eq("noteId", entry.noteId),
         )
-        .unique();
-      writes.push({ entry, existing });
+        .take(3);
+      // One row per person and note; repair any duplicates.
+      for (const row of extra) await ctx.db.delete(row._id);
+      writes.push({ entry, existing: existing ?? null });
     }
     const added = writes.filter((w) => !w.existing).length;
     if (added) {
       let rows = await positionsOf(ctx, person, POSITION_LIMIT + 1);
       if (rows.length + added > POSITION_LIMIT) {
-        const updating = new Set(writes.map((w) => w.entry.noteId));
+        const updating = new Set<string>(writes.map((w) => w.entry.noteId));
+        const access = accessFor(ctx, person);
         for (const row of rows)
-          if (
-            !updating.has(row.noteId) &&
-            !(await positionLive(ctx, person, row))
-          )
+          if (!updating.has(row.noteId) && !(await access.positionLive(row)))
             await ctx.db.delete(row._id);
         rows = await positionsOf(ctx, person, POSITION_LIMIT + 1);
       }

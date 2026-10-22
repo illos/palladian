@@ -89,6 +89,8 @@ export interface ArrangementEdit {
   apply(current: Arrangement): Arrangement;
   /** Whether a synced arrangement already includes this change. */
   shownIn(current: Arrangement): boolean;
+  /** What it changes: a later change to the same thing replaces it. */
+  keys: string[];
 }
 
 export function pinEdit(
@@ -106,6 +108,7 @@ export function pinEdit(
     }),
     shownIn: (current) =>
       current.pins.some((pin) => pin.noteId === noteId) === pinned,
+    keys: ["pin:" + noteId],
   };
 }
 
@@ -119,6 +122,7 @@ export function orderEdit(list: string, order: ListOrder): ArrangementEdit {
       ],
     }),
     shownIn: (current) => orderOf(current, list) === order,
+    keys: ["order:" + list],
   };
 }
 
@@ -144,7 +148,39 @@ export function positionsEdit(
             p.key === w.key,
         ),
       ),
+    keys: writes.map((w) => "position:" + w.noteId),
   };
+}
+
+export interface PendingEdit {
+  id: number;
+  accountId: string;
+  edit: ArrangementEdit;
+  /** The server accepted it; it waits for a synced copy that includes it. */
+  confirmed: boolean;
+}
+
+/**
+ * Remove confirmed changes that a synced arrangement includes, and the older
+ * changes to the same things they replaced: the server applies one device's
+ * writes in order, so those are settled too.
+ */
+export function settleEdits(
+  pending: PendingEdit[],
+  synced: Arrangement | null,
+): PendingEdit[] {
+  if (!synced) return pending;
+  const settled = pending.filter((p) => p.confirmed && p.edit.shownIn(synced));
+  if (!settled.length) return pending;
+  return pending.filter(
+    (p) =>
+      !settled.some(
+        (done) =>
+          done.id === p.id ||
+          (p.id < done.id &&
+            p.edit.keys.some((k) => done.edit.keys.includes(k))),
+      ),
+  );
 }
 
 /** The synced arrangement with the unconfirmed changes on top, in order. */

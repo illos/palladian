@@ -5,8 +5,10 @@ import {
   orderEdit,
   pinEdit,
   positionsEdit,
+  settleEdits,
   spacedKeys,
   withEdits,
+  type PendingEdit,
 } from "../../src/arrange";
 import type { Arrangement, NoteSummary } from "../../src/cache";
 
@@ -177,5 +179,43 @@ describe("unconfirmed changes", () => {
     expect(
       positionsEdit("nb", [{ noteId: "3", key: "W" }]).shownIn(synced),
     ).toBe(false);
+  });
+});
+
+describe("settling unconfirmed changes", () => {
+  const pending = (
+    id: number,
+    edit: PendingEdit["edit"],
+    confirmed = true,
+  ): PendingEdit => ({ id, accountId: "a", edit, confirmed });
+
+  test("a newer confirmed change retires the older ones it replaced", () => {
+    // Alphabetical, then Date created; the snapshot shows Date created.
+    const edits = [
+      pending(1, orderEdit("all", "alpha")),
+      pending(2, orderEdit("all", "created")),
+      pending(3, pinEdit("x", true, 1)),
+    ];
+    const synced = arrangement({ orders: [{ list: "all", order: "created" }] });
+    expect(settleEdits(edits, synced).map((p) => p.id)).toEqual([3]);
+  });
+
+  test("an older change shown first leaves the newer one in place", () => {
+    const edits = [
+      pending(1, orderEdit("all", "alpha")),
+      pending(2, orderEdit("all", "created")),
+    ];
+    const synced = arrangement({ orders: [{ list: "all", order: "alpha" }] });
+    expect(settleEdits(edits, synced).map((p) => p.id)).toEqual([2]);
+  });
+
+  test("an unconfirmed change stays even if a snapshot happens to match", () => {
+    // Pin, then unpin quickly: the old snapshot already shows "not pinned".
+    const edits = [
+      pending(1, pinEdit("x", true, 1)),
+      pending(2, pinEdit("x", false, 0), false),
+    ];
+    expect(settleEdits(edits, arrangement()).map((p) => p.id)).toEqual([1, 2]);
+    expect(settleEdits(edits, null)).toBe(edits);
   });
 });

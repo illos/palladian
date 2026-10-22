@@ -30,9 +30,11 @@ import {
   orderOf,
   pinEdit,
   positionsEdit,
+  settleEdits,
   withEdits,
   type ArrangementEdit,
   type ListOrder,
+  type PendingEdit,
 } from "./arrange";
 import { dropIndex, placement } from "./reorder";
 import {
@@ -232,14 +234,8 @@ export function App({
   );
   const savedArrangementRef = useRef(savedArrangement);
   savedArrangementRef.current = savedArrangement;
-  const [pendingEdits, setPendingEdits] = useState<
-    { id: number; edit: ArrangementEdit; confirmed: boolean }[]
-  >([]);
+  const [pendingEdits, setPendingEdits] = useState<PendingEdit[]>([]);
   const editCount = useRef(0);
-  const arrangement = withEdits(
-    savedArrangement,
-    pendingEdits.map((pending) => pending.edit),
-  );
   const [notebooks, setNotebooks] = useState<CachedNotebook[]>([]);
   const [open, setOpen] = useState<OpenNote | null>(null);
   const [query, setQuery] = useState("");
@@ -278,7 +274,16 @@ export function App({
   openRef.current = open;
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
+  const liveRef = useRef(live);
+  liveRef.current = live;
   const accountId = snapshot.accountId;
+  // Unconfirmed changes show only in the account they were made in.
+  const arrangement = withEdits(
+    savedArrangement,
+    pendingEdits
+      .filter((pending) => pending.accountId === accountId)
+      .map((pending) => pending.edit),
+  );
   const permitted =
     accountId !== null &&
     snapshot.status !== "revoked" &&
@@ -348,16 +353,7 @@ export function App({
           setNotebooks(books);
           setSavedArrangement(arranged);
           // Confirmed changes give way once the synced copy includes them.
-          setPendingEdits((edits) =>
-            edits.filter(
-              (pending) =>
-                !(
-                  pending.confirmed &&
-                  arranged &&
-                  pending.edit.shownIn(arranged)
-                ),
-            ),
-          );
+          setPendingEdits((edits) => settleEdits(edits, arranged));
         }
       } catch {
         if (mounted)
@@ -790,41 +786,64 @@ export function App({
   const pinnedIds = new Set((arrangement?.pins ?? []).map((pin) => pin.noteId));
 
   /**
+   * The account and session an action starts in. A slow action (a lazy
+   * import, several writes) checks it before changing anything, so it never
+   * lands in an account the person switched to meanwhile.
+   */
+  function sessionTicket() {
+    const at = { accountId, generation: snapshotRef.current.generation, live };
+    return () =>
+      !!at.accountId &&
+      !!at.live &&
+      snapshotRef.current.accountId === at.accountId &&
+      snapshotRef.current.generation === at.generation &&
+      liveRef.current === at.live;
+  }
+
+  /**
    * Show a change at once, then save it. Until the synced arrangement
-   * includes it, it is shown on top; a failed save removes it again.
+   * includes it, it is shown on top; a failed save removes it again, and it
+   * expires after 30 seconds in any case.
    */
   async function rearrange(
     edit: ArrangementEdit,
-    save: (client: NonNullable<typeof live>["client"]) => Promise<void>,
+    current: () => boolean,
+    save: (
+      client: NonNullable<typeof live>["client"],
+      current: () => boolean,
+    ) => Promise<void>,
   ) {
-    if (!live || !accountId) return;
+    const client = liveRef.current?.client;
+    if (!current() || !client || !accountId) return;
     const id = ++editCount.current;
-    setPendingEdits((edits) => [...edits, { id, edit, confirmed: false }]);
+    setPendingEdits((edits) => [
+      ...edits,
+      { id, accountId, edit, confirmed: false },
+    ]);
     const drop = () =>
       setPendingEdits((edits) => edits.filter((pending) => pending.id !== id));
+    setTimeout(drop, 30_000);
     try {
-      await save(live.client);
+      await save(client, current);
     } catch (failure) {
       drop();
       throw failure;
     }
-    const saved = savedArrangementRef.current;
-    if (saved && edit.shownIn(saved)) drop();
-    else {
-      setPendingEdits((edits) =>
+    setPendingEdits((edits) =>
+      settleEdits(
         edits.map((pending) =>
           pending.id === id ? { ...pending, confirmed: true } : pending,
         ),
-      );
-      // In case no snapshot ever matches it exactly.
-      setTimeout(drop, 30_000);
-    }
+        savedArrangementRef.current,
+      ),
+    );
   }
 
   async function changeOrder(list: string, order: ListOrder) {
+    const current = sessionTicket();
     try {
       const { setOrder } = await import("./note-tools");
-      await rearrange(orderEdit(list, order), (client) =>
+      await rearrange(orderEdit(list, order), current, (client) =>
         setOrder(client, list, order),
       );
     } catch (failure) {
@@ -855,11 +874,15 @@ export function App({
         : others.findIndex((row) => row.id === beforeId);
     // The note it was dropped by has left the list meanwhile.
     if (index < 0) return;
+    const current = sessionTicket();
     try {
       const writes = placement(others, index, noteId);
       const { setPositions } = await import("./note-tools");
-      await rearrange(positionsEdit(notebookId, writes), (client) =>
-        setPositions(client, notebookId, writes),
+      await rearrange(
+        positionsEdit(notebookId, writes),
+        current,
+        (client, stillCurrent) =>
+          setPositions(client, notebookId, writes, stillCurrent),
       );
     } catch (failure) {
       failed(failure);
@@ -1092,9 +1115,12 @@ export function App({
         case "pin":
         case "unpin": {
           const pinned = action === "pin";
+          const current = sessionTicket();
           const { setPin } = await import("./note-tools");
-          await rearrange(pinEdit(target.id, pinned, Date.now()), (client) =>
-            setPin(client, target.id, pinned),
+          await rearrange(
+            pinEdit(target.id, pinned, Date.now()),
+            current,
+            (client) => setPin(client, target.id, pinned),
           );
           return toast(pinned ? "Pinned" : "Unpinned");
         }

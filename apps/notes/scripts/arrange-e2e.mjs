@@ -140,6 +140,7 @@ const browser = await chromium.launch({ headless: true });
 try {
   const desk = await browser.newContext();
   const page = await desk.newPage();
+  page.on("pageerror", (error) => console.log("page error:", error.message));
   const email = `arrange-${randomBytes(4).toString("hex")}@example.test`;
   const password = randomBytes(18).toString("base64url");
   await page.goto(setupLink(email));
