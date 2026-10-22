@@ -97,4 +97,14 @@ Accepted. Its one note, R6-1, suggests keeping a regression that runs the instal
 
 Observation, not a change: with the virtual authenticator, a passkey sign-in can complete both the autofill request and the button's request, leaving two sessions for one browser. The sign-in code already aborts the autofill request when the button is used; on a real device the autofill request needs the person to choose a passkey. The devices list makes such duplicates visible; the e2e no longer assumes exactly one.
 
-Pending for the owner, on the iPhone: the phone Settings list and Back gestures, the formatting bar above the keyboard (bug 4), and the Signed-in devices labels for the installed app. Production deployment follows acceptance of the independent review.
+## Production release
+
+Deployed on 2026-10-22 from `main` at `0773f03` in a fresh detached worktree, under D94: Convex production (`adamant-hound-861`), then the `palladian` Worker (`notes.parabolic.studio`). As in earlier releases, `wrangler deploy` ended with "No access" on the zone routes call after uploading; the Cloudflare API confirmed version `7da0ff18` at 100%, the custom domain and the `23 4 * * *` cron.
+
+| Check (production)                        | Result                                                                                                                                                                                                                                     |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/`, `/settings`, `/settings/about`       | 200; the served `sw.js` routes Settings links to the shell and has no skip-waiting handler                                                                                                                                                 |
+| `apps/notes/scripts/live-e2e.mjs`         | All 11 checks passed (sync, collaboration, offline typing, invitations, revocation), disposable `@example.test` accounts                                                                                                                   |
+| `apps/notes-edge/scripts/browser-e2e.mjs` | PASS, 8 steps. It first failed at Connected agents because the script clicked the old one-step Disconnect; the script now confirms (`91e1034`, script only, no redeploy). Disconnect in Settings made the agent's next call fail with 401. |
+
+Pending for the owner, on the iPhone: the phone Settings list and Back gestures, the formatting bar above the keyboard (bug 4), and the Signed-in devices labels for the installed app.
