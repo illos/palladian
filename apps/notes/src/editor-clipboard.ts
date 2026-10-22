@@ -49,21 +49,32 @@ export function hasMarkdownStructure(fragment: Fragment) {
 const LINE = "\ue000";
 // The marker follows a space so link detection never takes it into a URL.
 const LINE_BREAK = / ?\ue000 ?/;
+// A marked line end after parsing, where the line break itself became a space.
+const MARKED_END = / \ue000(?= |$)/g;
+// Code fences, also inside quotes and list items.
+const FENCE = /^(?:\s*>)*\s*(?:(?:[-+*]|\d{1,9}[.)])\s+)?\s*(`{3,}|~{3,})/;
+// Thematic breaks and setext heading underlines.
+const RULE =
+  /^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|=+[ \t]*)$/;
 
 /**
- * Mark single line breaks outside fenced and indented code, so lines the
- * person pasted stay separate lines (Deltos's paste was line-based).
+ * Mark line ends that Markdown would join with the next line: not in code,
+ * not next to a rule or heading underline, not at an explicit line break.
  */
 function markLines(text: string) {
-  if (text.includes(LINE)) return text;
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
   let fence: string | null = null;
   return lines
     .map((line, index) => {
-      const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+      const match = FENCE.exec(line);
+      const marker = match?.[1];
       if (fence) {
-        if (marker?.startsWith(fence) && !line.trim().slice(marker.length))
-          fence = null;
+        const closes =
+          marker !== undefined &&
+          marker[0] === fence[0] &&
+          marker.length >= fence.length &&
+          !line.slice(match!.index + match![0].length).trim();
+        if (closes) fence = null;
         return line;
       }
       if (marker) {
@@ -71,10 +82,49 @@ function markLines(text: string) {
         return line;
       }
       const next = lines[index + 1];
-      if (!next?.trim() || !line.trim() || /^( {4}|\t)/.test(line)) return line;
+      if (
+        !next?.trim() ||
+        !line.trim() ||
+        /^( {4}|\t)/.test(line) ||
+        RULE.test(line) ||
+        RULE.test(next) ||
+        / {2}$|\\$/.test(line)
+      )
+        return line;
       return line + " " + LINE;
     })
     .join("\n");
+}
+
+/** A parse of marked text as it reads without the markers. */
+function withoutMarkers(fragment: Fragment): Fragment {
+  const nodes: ProseMirrorNode[] = [];
+  fragment.forEach((node) => {
+    if (node.isText) {
+      const text = node.text!.replace(MARKED_END, "");
+      if (text) nodes.push(notesSchema.text(text, node.marks));
+    } else
+      nodes.push(node.isLeaf ? node : node.copy(withoutMarkers(node.content)));
+  });
+  return Fragment.fromArray(nodes);
+}
+
+/**
+ * Keep the pasted lines as separate lines where Markdown would join them
+ * (Deltos's paste was line-based). The text is parsed again with line ends
+ * marked, and that parse is used only if, markers aside, it is exactly the
+ * plain one, so delimiters, code and literal text stay as parsed.
+ */
+function keepLines(text: string, parsed: Fragment, markdown: MarkdownCodec) {
+  if (text.includes(LINE)) return parsed;
+  const marked = markLines(text);
+  if (!marked.includes(LINE)) return parsed;
+  try {
+    const lines = markdown.parseMarkdownFragment(marked);
+    return withoutMarkers(lines).eq(parsed) ? splitLines(lines) : parsed;
+  } catch {
+    return parsed;
+  }
 }
 
 /** Marked line ends split paragraphs; anywhere else they are dropped. */
@@ -114,11 +164,12 @@ function splitLines(fragment: Fragment): Fragment {
 export function markdownSlice(text: string, markdown: MarkdownCodec) {
   let fragment: Fragment;
   try {
-    fragment = splitLines(markdown.parseMarkdownFragment(markLines(text)));
+    fragment = markdown.parseMarkdownFragment(text);
   } catch {
     return null;
   }
   if (!fragment.childCount || !hasMarkdownStructure(fragment)) return null;
+  fragment = keepLines(text, fragment, markdown);
   return safeSlice(
     new Slice(
       fragment,

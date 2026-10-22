@@ -613,14 +613,16 @@ describe("links", () => {
   test("applying the form links new text, keeps formatting, and edits links", () => {
     const empty = new Harness(paragraphs("go "));
     const { from } = empty.state.selection;
-    empty.dispatch(applyLink(empty.state, from, from, "site", "https://e.com"));
+    empty.dispatch(
+      applyLink(empty.state, from, from, "site", "https://e.com")!,
+    );
     expect(empty.state.doc.firstChild!.child(1).text).toBe("site");
     expect(empty.state.selection.from).toBe(from + 4);
 
     const bold = new Harness(markdownToDoc("a **word**"));
     const start = at(bold.state.doc, "word");
     bold.dispatch(
-      applyLink(bold.state, start, start + 4, "word", "https://w.dev"),
+      applyLink(bold.state, start, start + 4, "word", "https://w.dev")!,
     );
     expect(
       bold.state.doc
@@ -632,7 +634,7 @@ describe("links", () => {
     const edit = new Harness(markdownToDoc("[old](https://old.com)"));
     const range = linkRangeAt(edit.state.doc, 2)!;
     edit.dispatch(
-      applyLink(edit.state, range.from, range.to, "new", "https://new.com"),
+      applyLink(edit.state, range.from, range.to, "new", "https://new.com")!,
     );
     expect(docToMarkdown(edit.state.doc)).toBe("[new](https://new.com)");
     const again = linkRangeAt(edit.state.doc, 2)!;
@@ -661,10 +663,12 @@ describe("links", () => {
     h.dispatch(h.state.tr.setMeta(linkUiKey, { mode: "form", from, to }));
     h.dispatch(h.state.tr.insertText("Hi ", 1).setMeta("rebased", 0));
     h.dispatch(h.state.tr.insertText("!", h.state.doc.content.size - 1));
+    // Edits outside the range leave it untouched.
     expect(linkUiKey.getState(h.state)).toEqual({
       mode: "form",
       from: from + 3,
       to: to + 3,
+      touched: false,
     });
     h.dispatch(h.state.tr.setMeta(linkUiKey, null));
     expect(linkUiKey.getState(h.state)).toBeNull();
@@ -909,7 +913,7 @@ describe("collaboration", () => {
     );
     h.run(insertDivider);
     const word = at(h.state.doc, "Title");
-    h.dispatch(applyLink(h.state, word, word + 5, "Title", "https://t.dev"));
+    h.dispatch(applyLink(h.state, word, word + 5, "Title", "https://t.dev")!);
     h.dispatch(removeLink(h.state, word, word + 5));
     h.state = h.state.apply(
       h.state.tr.setSelection(TextSelection.atEnd(h.state.doc)),
@@ -1110,6 +1114,178 @@ describe("review round fixes", () => {
       { paragraph: ["Above"] },
       "horizontal_rule",
       "paragraph",
+    ]);
+  });
+});
+
+describe("review round 1", () => {
+  /** A collaborative editor with the link form open on `word`. */
+  function formOn(markdown: string, word: string) {
+    const doc = markdownToDoc(markdown);
+    const from = at(doc, word);
+    const to = from + word.length;
+    const state = EditorState.create({
+      doc,
+      selection: TextSelection.create(doc, from, to),
+      plugins: [collab({ version: 0, clientID: "me" }), linkUi],
+    });
+    return state.apply(state.tr.setMeta(linkUiKey, { mode: "form", from, to }));
+  }
+  /** A collaborator's change arriving while the form is open. */
+  function remote(state: EditorState, change: (tr: Transform) => void) {
+    const tr = new Transform(state.doc);
+    change(tr);
+    const clients = tr.steps.map(() => "them");
+    return state.apply(receiveTransaction(state, tr.steps, clients));
+  }
+  /** Apply the form as the editor does. */
+  function applyForm(state: EditorState, text: string, textEdited: boolean) {
+    const target = linkUiKey.getState(state)!;
+    return applyLink(state, target.from, target.to, text, "https://e.com", {
+      textEdited,
+      touched: !!target.touched,
+    });
+  }
+  function linkedText(doc: ProseMirrorNode) {
+    let text = "";
+    doc.descendants((node) => {
+      if (node.isText && marks.link!.isInSet(node.marks)) text += node.text;
+    });
+    return text;
+  }
+
+  test("F1: an unchanged label links the text as collaborators left it", () => {
+    const base = formOn("say hello there", "hello");
+    const start = at(base.doc, "hello");
+    const changes: [string, (tr: Transform) => void, string][] = [
+      [
+        "insertion",
+        (tr) => tr.insert(start + 2, notesSchema.text("REMOTE")),
+        "heREMOTEllo",
+      ],
+      ["deletion", (tr) => tr.delete(start + 1, start + 4), "ho"],
+      [
+        "replacement",
+        (tr) => tr.replaceWith(start + 1, start + 4, notesSchema.text("ELL")),
+        "hELLo",
+      ],
+    ];
+    for (const [, change, expected] of changes) {
+      const state = remote(base, change);
+      const after = state.apply(applyForm(state, "hello", false)!);
+      expect(after.doc.textContent).toBe(`say ${expected} there`);
+      expect(linkedText(after.doc)).toBe(expected);
+      expect(linkUiKey.getState(state)!.touched).toBe(true);
+    }
+  });
+
+  test("F1: an edited label is not written over a collaborator's change", () => {
+    const base = formOn("say hello there", "hello");
+    const start = at(base.doc, "hello");
+    const changed = remote(base, (tr) =>
+      tr.insert(start + 2, notesSchema.text("REMOTE")),
+    );
+    expect(applyForm(changed, "Greetings", true)).toBeNull();
+    // With no overlapping change, the edited label replaces the text.
+    const quiet = remote(base, (tr) => tr.insert(1, notesSchema.text("Oh, ")));
+    expect(linkUiKey.getState(quiet)!.touched).toBe(false);
+    const after = quiet.apply(applyForm(quiet, "Greetings", true)!);
+    expect(after.doc.textContent).toBe("Oh, say Greetings there");
+    expect(linkedText(after.doc)).toBe("Greetings");
+  });
+
+  test("F1: text deleted while the form was open is not brought back", () => {
+    const base = formOn("say hello there", "hello");
+    const start = at(base.doc, "hello");
+    const gone = remote(base, (tr) => tr.delete(start, start + 5));
+    expect(applyForm(gone, "hello", false)).toBeNull();
+    expect(gone.doc.textContent).toBe("say  there");
+  });
+
+  test.each([
+    [
+      "the first item of a list starting at 1,000,000",
+      "1000000. a\n2. b",
+      "a",
+      "checklist",
+    ],
+    [
+      "a middle item near the ceiling",
+      "999999. a\n2. b\n3. c",
+      "b",
+      "checklist",
+    ],
+    [
+      "numbering turned off for the first item",
+      "1000000. a\n2. b",
+      "a",
+      "ordered",
+    ],
+  ] as const)(
+    "F2: %s stays within the server's list start",
+    (_name, markdown, word, kind) => {
+      const start = markdownToDoc(markdown);
+      const h = new Harness(start, caret(word));
+      expect(h.run(applyListType(kind))).toBe(true);
+      h.state.doc.descendants((node) => {
+        if (node.type === nodes.ordered_list)
+          expect(node.attrs.order).toBeLessThanOrEqual(1_000_000);
+      });
+      h.replay(start);
+    },
+  );
+
+  test("F3: a thematic break after a heading stays a divider", () => {
+    expect(
+      shape(
+        nodes.doc!.create(
+          null,
+          markdownSlice("# Title\n\n---\nbelow", codec)!.content,
+        ),
+      ),
+    ).toEqual([
+      { heading: ["Title"] },
+      "horizontal_rule",
+      { paragraph: ["below"] },
+    ]);
+  });
+
+  test("F3: code fenced inside a quote or a list item keeps its exact text", () => {
+    const quoted = markdownSlice(
+      "> ```js\n> let a = 1;\n> let b = 2;\n> ```\n\n**x**",
+      codec,
+    )!;
+    const quote = quoted.content.firstChild!;
+    expect(quote.type.name).toBe("blockquote");
+    expect(quote.firstChild!.textContent).toBe("let a = 1;\nlet b = 2;");
+    const listed = markdownSlice(
+      "- item\n\n  ```\n  code\n  more\n  ```",
+      codec,
+    )!;
+    let code = "";
+    listed.content.descendants((node) => {
+      if (node.type === nodes.code_block) code = node.textContent;
+    });
+    expect(code).toBe("code\nmore");
+  });
+
+  test("F3: literal U+E000 characters and explicit line breaks are kept", () => {
+    const literal = markdownSlice("**a** \ue000 b\nnext", codec)!;
+    expect(literal.content.textBetween(0, literal.content.size, "|")).toBe(
+      "a \ue000 b next",
+    );
+    const broken = markdownSlice("foo  \nbar **x**", codec)!;
+    expect(shape(nodes.doc!.create(null, broken.content))).toEqual([
+      { paragraph: ["foo", "hard_break", "bar ", "x"] },
+    ]);
+  });
+
+  test("F3: ordinary lines still stay separate lines", () => {
+    const slice = markdownSlice("first line\nsecond **line**\n- item", codec)!;
+    expect(slice.content.content.map((node) => node.textContent)).toEqual([
+      "first line",
+      "second line",
+      "item",
     ]);
   });
 });

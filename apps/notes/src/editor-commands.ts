@@ -28,6 +28,9 @@ import {
   wrapIn,
 } from "prosemirror-commands";
 
+/** The highest list start the server accepts (notes-core `assertSafeNode`). */
+const MAX_LIST_START = 1_000_000;
+
 const nodes = notesSchema.nodes;
 const paragraph = nodes.paragraph!;
 const blockquote = nodes.blockquote!;
@@ -194,7 +197,12 @@ function liftItems(tr: Transaction, range: NodeRange) {
   const end = start + item.nodeSize;
   const after = list.type.create(
     list.type === orderedList
-      ? { order: Number(list.attrs.order) + range.endIndex }
+      ? {
+          order: Math.min(
+            Number(list.attrs.order) + range.endIndex,
+            MAX_LIST_START,
+          ),
+        }
       : null,
   );
   tr.step(

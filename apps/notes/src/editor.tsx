@@ -618,7 +618,13 @@ function plugins(
   return list;
 }
 
-type LinkForm = { text: string; href: string; error: string };
+/** The link form's fields; `textEdited` once the person changes the Text field. */
+type LinkForm = {
+  text: string;
+  href: string;
+  error: string;
+  textEdited: boolean;
+};
 
 /** The link element a click landed on, if it is in this editor. */
 function linkElement(view: EditorView, event: MouseEvent) {
@@ -663,7 +669,12 @@ export function NoteEditor({
     );
     // Render now so focus moves within the tap or key press (iOS keyboard).
     flushSync(() =>
-      setLinkForm({ text: draft.text, href: draft.href, error: "" }),
+      setLinkForm({
+        text: draft.text,
+        href: draft.href,
+        error: "",
+        textEdited: false,
+      }),
     );
     (draft.text ? linkHref : linkText).current?.focus();
   };
@@ -908,14 +919,28 @@ export function NoteEditor({
       return;
     }
     const text = linkForm.text.trim() ? linkForm.text : linkForm.href.trim();
-    editor.dispatch(
-      editor.editable
-        ? applyLink(editor.state, target.from, target.to, text, href).setMeta(
-            linkUiKey,
-            null,
-          )
-        : editor.state.tr.setMeta(linkUiKey, null),
-    );
+    const tr = editor.editable
+      ? applyLink(editor.state, target.from, target.to, text, href, {
+          textEdited: linkForm.textEdited,
+          touched: !!target.touched,
+        })
+      : editor.state.tr;
+    if (!tr) {
+      // Someone changed the text while the form was open: show it as it is
+      // now, rather than overwrite their edit.
+      editor.dispatch(
+        editor.state.tr.setMeta(linkUiKey, { ...target, touched: false }),
+      );
+      setLinkForm({
+        ...linkForm,
+        text: editor.state.doc.textBetween(target.from, target.to),
+        textEdited: false,
+        error:
+          "This text changed while the form was open. Check it and apply again.",
+      });
+      return;
+    }
+    editor.dispatch(tr.setMeta(linkUiKey, null));
     setLinkForm(null);
     editor.focus();
   };
@@ -1021,7 +1046,11 @@ export function NoteEditor({
               placeholder="Text"
               value={linkForm.text}
               onChange={(event) =>
-                setLinkForm({ ...linkForm, text: event.target.value })
+                setLinkForm({
+                  ...linkForm,
+                  text: event.target.value,
+                  textEdited: true,
+                })
               }
             />
             <input

@@ -254,8 +254,12 @@ export function linkDraftFor(state: EditorState): LinkDraft | null {
 }
 
 /**
- * Apply the link form: the range becomes `text` linked to `href`. Unchanged
- * text keeps its other formatting; an empty text shows the address.
+ * Apply the link form to the range it targets. When the person did not edit
+ * the Text field, the link goes on whatever text the range holds now, so a
+ * collaborator's edits there stay. Edited text replaces the range, unless the
+ * range changed while the form was open (`touched`): then, as when text the
+ * form was opened on has been deleted, this returns null and the form must be
+ * checked again. An empty text shows the address.
  */
 export function applyLink(
   state: EditorState,
@@ -263,12 +267,15 @@ export function applyLink(
   to: number,
   text: string,
   href: string,
-): Transaction {
+  options: { textEdited?: boolean; touched?: boolean } = {},
+): Transaction | null {
+  const textEdited = options.textEdited ?? true;
+  if (options.touched && (textEdited || from === to)) return null;
   const label = text.trim() ? text : href;
   const mark = link.create({ href });
   const tr = state.tr;
   let end = to;
-  if (from < to && state.doc.textBetween(from, to) === label)
+  if (from < to && (!textEdited || state.doc.textBetween(from, to) === label))
     tr.addMark(from, to, mark);
   else {
     tr.insertText(label, from, to);
@@ -287,7 +294,13 @@ export function removeLink(state: EditorState, from: number, to: number) {
  * Open · Edit · Remove popover after a tap; it closes on local typing or when
  * the caret leaves the link. "form" is the link form's target range.
  */
-export type LinkUi = { mode: "menu" | "form"; from: number; to: number } | null;
+export type LinkUi = {
+  mode: "menu" | "form";
+  from: number;
+  to: number;
+  /** The form's text changed (by anyone) since it opened. */
+  touched?: boolean;
+} | null;
 export const linkUiKey = new PluginKey<LinkUi>("linkUi");
 
 export const linkUi = new Plugin<LinkUi>({
@@ -300,15 +313,28 @@ export const linkUi = new Plugin<LinkUi>({
       if (!value) return null;
       if (!tr.docChanged && (value.mode === "form" || !tr.selectionSet))
         return value;
-      const from = tr.mapping.map(value.from, 1);
-      const to = Math.max(from, tr.mapping.map(value.to, -1));
+      let { from, to } = value;
+      let touched = value.touched ?? false;
+      for (const map of tr.mapping.maps) {
+        // A change inside the range, or an insertion strictly within it.
+        map.forEach((start, end) => {
+          if (
+            (end > from && start < to) ||
+            (start === end && start > from && start < to)
+          )
+            touched = true;
+        });
+        from = map.map(from, 1);
+        to = Math.max(from, map.map(to, -1));
+      }
       if (value.mode === "menu") {
         if (tr.docChanged && tr.getMeta("rebased") === undefined) return null;
         const { selection } = state;
         if (selection.from < from || selection.to > to || from === to)
           return null;
+        return { mode: "menu", from, to };
       }
-      return { mode: value.mode, from, to };
+      return { mode: "form", from, to, touched };
     },
   },
   props: {
