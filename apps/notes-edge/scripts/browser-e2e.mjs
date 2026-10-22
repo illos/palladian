@@ -157,7 +157,9 @@ try {
   await expect(
     page.getByRole("heading", { name: "Consent Test Agent" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Disconnect" }).first().click();
+  // Disconnect asks first.
+  await page.getByRole("button", { name: "Disconnect…" }).first().click();
+  await page.getByRole("button", { name: "Disconnect", exact: true }).click();
   await expect(page.getByText("Disconnected")).toBeVisible({ timeout: 10_000 });
   const after = await fetch(`${WORKER}/mcp`, {
     method: "POST",
