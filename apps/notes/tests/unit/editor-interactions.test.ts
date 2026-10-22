@@ -1,4 +1,5 @@
 import {
+  applySafeStep,
   assignBlockIds,
   blockIdPlugin,
   blockToMarkdown,
@@ -10,7 +11,7 @@ import {
 import { Slice, type Node as ProseMirrorNode } from "prosemirror-model";
 import { baseKeymap, chainCommands } from "prosemirror-commands";
 import { history } from "prosemirror-history";
-import { Transform } from "prosemirror-transform";
+import { Transform, type Step } from "prosemirror-transform";
 import {
   AllSelection,
   EditorState,
@@ -85,9 +86,19 @@ class Harness {
   get view() {
     return this as unknown as EditorView;
   }
+  /** Every step applied, including appended ID repairs, as collab sends them. */
+  steps: Step[] = [];
   dispatch = (tr: Transaction) => {
-    this.state = this.state.apply(tr);
+    const { state, transactions } = this.state.applyTransaction(tr);
+    for (const applied of transactions) this.steps.push(...applied.steps);
+    this.state = state;
   };
+  /** Replay the steps through the server's per-step validation. */
+  replay(start: ProseMirrorNode) {
+    let doc = start;
+    for (const step of this.steps) doc = applySafeStep(doc, step);
+    expect(doc.eq(this.state.doc)).toBe(true);
+  }
   focus() {}
   endOfTextblock(direction: string, state: EditorState) {
     const $cursor = state.selection.$from;
@@ -855,5 +866,79 @@ describe("slash palette", () => {
     expect(checklist.state.doc.firstChild!.type.name).toBe("task_list");
     const quote = new Harness(paragraphs("")).type("/quote").key("Enter");
     expect(quote.state.doc.firstChild!.type.name).toBe("blockquote");
+  });
+});
+
+describe("collaboration", () => {
+  test("every new command's steps pass the server's step validation", async () => {
+    await loadMarkdown();
+    const start = paragraphs("Title", "One", "Two", "");
+    const h = new Harness(start, caret("Two", 3));
+    h.type(" example.com ");
+    h.run(insertHardBreak);
+    h.type("https://palladian.dev/x");
+    h.run(chainCommands(keys.Enter!, baseKeymap.Enter!));
+    h.type("## ");
+    h.run(backspace);
+    h.dispatch(
+      h.state.tr.delete(h.state.selection.from - 3, h.state.selection.from),
+    );
+    h.type("---").type("- item ");
+    h.run(backspace);
+    h.state = h.state.apply(
+      h.state.tr.setSelection(
+        TextSelection.create(
+          h.state.doc,
+          at(h.state.doc, "One"),
+          at(h.state.doc, "Two", 3),
+        ),
+      ),
+    );
+    for (const kind of ["bullet", "checklist", "ordered", "ordered"] as const)
+      h.run(applyListType(kind));
+    h.run(applyListType("checklist"));
+    h.run(toggleBlock(nodes.heading!, { level: 2 }));
+    h.run(toggleBlock(nodes.heading!, { level: 2 }));
+    h.state = h.state.apply(
+      h.state.tr.setSelection(
+        TextSelection.create(h.state.doc, at(h.state.doc, "Title", 5)),
+      ),
+    );
+    h.run(insertDivider);
+    const word = at(h.state.doc, "Title");
+    h.dispatch(applyLink(h.state, word, word + 5, "Title", "https://t.dev"));
+    h.dispatch(removeLink(h.state, word, word + 5));
+    h.state = h.state.apply(
+      h.state.tr.setSelection(TextSelection.atEnd(h.state.doc)),
+    );
+    pasteMarkdown(
+      h.view,
+      {
+        clipboardData: {
+          getData: (type: string) =>
+            type === "text/plain" ? "# Pasted\n\n- [ ] task\n\n> quote" : "",
+        },
+      } as unknown as ClipboardEvent,
+      Slice.empty,
+    );
+    h.run(chainCommands(keys.Enter!, baseKeymap.Enter!));
+    h.type("/divider").key("Enter");
+    h.run(selectEnd);
+    const types = new Set<string>();
+    h.state.doc.descendants((node) => {
+      types.add(node.type.name);
+      for (const mark of node.marks) types.add(mark.type.name);
+    });
+    for (const name of [
+      "task_list",
+      "bullet_list",
+      "heading",
+      "blockquote",
+      "horizontal_rule",
+      "hard_break",
+      "link",
+    ])
+      expect(types).toContain(name);
+    h.replay(start);
   });
 });
