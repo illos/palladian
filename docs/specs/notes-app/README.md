@@ -15,6 +15,7 @@ Palladian is the working name in this conversation; final branding remains open.
 | [05 — Identity and MCP](05-identity-and-mcp.md)                 | Session reliability, authorization, and efficient agent operations                |
 | [06 — Decisions and acceptance](06-decisions-and-acceptance.md) | Missing information, recommended defaults, build gates, and evidence requirements |
 | [07 — Delivery plan](07-delivery-plan.md)                       | First-release architecture and order of work (adopted 2026-10-14)                 |
+| [08 — Deltos feature port](08-deltos-feature-port.md)           | Plan to bring over Deltos's missing UI features (proposed 2026-10-22)             |
 
 ## How to interpret this draft
 
