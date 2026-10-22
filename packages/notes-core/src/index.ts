@@ -46,3 +46,19 @@ export {
   applySafeStep,
   DOC_JSON_LIMIT,
 } from "./document.ts";
+export {
+  ATTACHMENT_SCHEME,
+  attachmentObjectId,
+  attachmentSource,
+  isObjectId,
+  isImageWidth,
+  isFileName,
+  isMimeType,
+  isFileSize,
+  isSafeFileAttrs,
+  IMAGE_WIDTH_MIN,
+  IMAGE_WIDTH_MAX,
+  FILE_NAME_LIMIT,
+  FILE_SIZE_LIMIT,
+} from "./schema.ts";
+export { attachmentIds } from "./attachments.ts";

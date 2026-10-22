@@ -25,10 +25,93 @@ export function isSafeHref(href: unknown): href is string {
   if (typeof href !== "string" || href.length > 2048) return false;
   return /^(https?:|mailto:)/i.test(href.trim());
 }
+
+/**
+ * Uploaded objects (B1) are referenced as `attachment:<objectId>`. Object IDs
+ * are opaque backend document IDs: lowercase letters and digits only, so a
+ * reference can never smuggle a path, query or other scheme.
+ */
+export const ATTACHMENT_SCHEME = "attachment:";
+const OBJECT_ID_PATTERN = /^[a-z0-9]{16,64}$/;
+export function isObjectId(value: unknown): value is string {
+  return typeof value === "string" && OBJECT_ID_PATTERN.test(value);
+}
+export function attachmentSource(objectId: string): string {
+  return ATTACHMENT_SCHEME + objectId;
+}
+/** The object ID an `attachment:` reference names, or null for anything else. */
+export function attachmentObjectId(src: unknown): string | null {
+  if (typeof src !== "string" || !src.startsWith(ATTACHMENT_SCHEME))
+    return null;
+  const objectId = src.slice(ATTACHMENT_SCHEME.length);
+  return isObjectId(objectId) ? objectId : null;
+}
+
 /** Images reference uploaded objects or public web addresses; no inline data. */
 export function isSafeImageSource(src: unknown): src is string {
   if (typeof src !== "string" || src.length > 2048) return false;
-  return /^(https:|attachment:)/i.test(src.trim());
+  return /^https:/i.test(src.trim()) || attachmentObjectId(src) !== null;
+}
+
+/** A resized image's display width in CSS pixels; null shows natural size. */
+export const IMAGE_WIDTH_MIN = 32;
+export const IMAGE_WIDTH_MAX = 4096;
+export function isImageWidth(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= IMAGE_WIDTH_MIN &&
+    value <= IMAGE_WIDTH_MAX
+  );
+}
+
+/** File names: 1–255 characters, no control characters, no outer spaces. */
+export const FILE_NAME_LIMIT = 255;
+export function isFileName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= 1 &&
+    value.length <= FILE_NAME_LIMIT &&
+    value === value.trim() &&
+    !/\p{Cc}/u.test(value)
+  );
+}
+
+/**
+ * A media type as stored on file blocks: lowercase `type/subtype` from a
+ * conservative character set, so it also survives the Markdown attribute
+ * syntax unescaped. Parameters (`; charset=…`) are not kept.
+ */
+const MIME_TYPE_PATTERN =
+  /^[a-z0-9][a-z0-9.+-]{0,126}\/[a-z0-9][a-z0-9.+-]{0,126}$/;
+export function isMimeType(value: unknown): value is string {
+  return typeof value === "string" && MIME_TYPE_PATTERN.test(value);
+}
+
+/** Recorded file sizes, in bytes; bounded well above any upload limit. */
+export const FILE_SIZE_LIMIT = 1_000_000_000_000;
+export function isFileSize(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= FILE_SIZE_LIMIT
+  );
+}
+
+/** Whether a file block's attributes are acceptable (see `assertSafeNode`). */
+export function isSafeFileAttrs(attrs: {
+  objectId: unknown;
+  name: unknown;
+  mimeType: unknown;
+  size: unknown;
+}): boolean {
+  return (
+    isObjectId(attrs.objectId) &&
+    isFileName(attrs.name) &&
+    (attrs.mimeType === "" || isMimeType(attrs.mimeType)) &&
+    (attrs.size === null || isFileSize(attrs.size))
+  );
 }
 
 const nodes: Record<string, NodeSpec> = {
@@ -168,7 +251,13 @@ const nodes: Record<string, NodeSpec> = {
   },
   image: {
     group: "block",
-    attrs: { ...id, src: {}, alt: { default: null }, title: { default: null } },
+    attrs: {
+      ...id,
+      src: {},
+      alt: { default: null },
+      title: { default: null },
+      width: { default: null },
+    },
     draggable: true,
     parseDOM: [
       {
@@ -177,11 +266,13 @@ const nodes: Record<string, NodeSpec> = {
           if (typeof dom === "string") return false;
           const src = dom.getAttribute("src");
           if (!isSafeImageSource(src)) return false;
+          const width = Number(dom.getAttribute("width"));
           return {
             id: readId(dom),
             src,
             alt: dom.getAttribute("alt"),
             title: dom.getAttribute("title"),
+            width: isImageWidth(width) ? width : null,
           };
         },
       },
@@ -194,8 +285,65 @@ const nodes: Record<string, NodeSpec> = {
         ...(isSafeImageSource(node.attrs.src) ? { src: node.attrs.src } : {}),
         alt: node.attrs.alt,
         title: node.attrs.title,
+        ...(isImageWidth(node.attrs.width)
+          ? { width: String(node.attrs.width) }
+          : {}),
       },
     ],
+  },
+  /**
+   * An uploaded file other than an inline image: a reference to the object
+   * plus the name, media type and size shown before its bytes load. In
+   * Markdown it is a link to `attachment:<objectId>` labelled with the name.
+   */
+  file: {
+    group: "block",
+    atom: true,
+    draggable: true,
+    attrs: {
+      ...id,
+      objectId: {},
+      name: {},
+      mimeType: { default: "" },
+      size: { default: null },
+    },
+    parseDOM: [
+      {
+        tag: "div[data-object-id]",
+        getAttrs: (dom) => {
+          if (typeof dom === "string") return false;
+          const size = dom.getAttribute("data-size");
+          const attrs = {
+            id: readId(dom),
+            objectId: dom.getAttribute("data-object-id"),
+            name: dom.getAttribute("data-name"),
+            mimeType: dom.getAttribute("data-mime-type") ?? "",
+            size: size === null ? null : Number(size),
+          };
+          return isSafeFileAttrs(attrs) ? attrs : false;
+        },
+      },
+    ],
+    toDOM: (node): DOMOutputSpec => {
+      // Never render attributes the schema would not accept.
+      const { objectId, name, mimeType, size } = node.attrs;
+      const safe = isSafeFileAttrs({ objectId, name, mimeType, size });
+      return [
+        "div",
+        {
+          ...blockAttrs(node),
+          ...(safe
+            ? {
+                "data-object-id": objectId,
+                "data-name": name,
+                "data-mime-type": mimeType,
+                ...(size === null ? {} : { "data-size": String(size) }),
+              }
+            : {}),
+        },
+        safe ? String(name) : "",
+      ];
+    },
   },
   text: { group: "inline" },
   hard_break: {
@@ -334,7 +482,15 @@ export function assertSafeNode(node: ProseMirrorNode): void {
         !optionalText(node.attrs.title, 500)
       )
         unsafe("Invalid image text.");
+      if (node.attrs.width !== null && !isImageWidth(node.attrs.width))
+        unsafe("Invalid image width.");
       break;
+    case "file": {
+      const { objectId, name, mimeType, size } = node.attrs;
+      if (!isSafeFileAttrs({ objectId, name, mimeType, size }))
+        unsafe("Invalid file attachment.");
+      break;
+    }
     case "heading":
       if (![1, 2, 3].includes(node.attrs.level))
         unsafe("Invalid heading level.");

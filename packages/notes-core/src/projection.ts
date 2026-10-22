@@ -5,6 +5,8 @@ export const PREVIEW_LIMIT = 160;
 
 function leafText(node: ProseMirrorNode) {
   if (node.type.name === "image") return String(node.attrs.alt ?? "");
+  // A file's name is searchable text, like an image's description.
+  if (node.type.name === "file") return String(node.attrs.name ?? "");
   if (node.type.name === "hard_break") return "\n";
   return "";
 }

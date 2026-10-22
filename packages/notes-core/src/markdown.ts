@@ -8,7 +8,17 @@ import {
 import { Fragment, type Node as ProseMirrorNode } from "prosemirror-model";
 import { Transform } from "prosemirror-transform";
 import { assignBlockIds } from "./ids.ts";
-import { isSafeHref, isSafeImageSource, notesSchema } from "./schema.ts";
+import {
+  attachmentObjectId,
+  attachmentSource,
+  FILE_NAME_LIMIT,
+  isFileSize,
+  isImageWidth,
+  isMimeType,
+  isSafeHref,
+  isSafeImageSource,
+  notesSchema,
+} from "./schema.ts";
 
 /** Markdown accepted from agents and imports; raw HTML is treated as text. */
 export const MARKDOWN_LIMIT = 500_000;
@@ -82,18 +92,157 @@ function convertTaskLists(tokens: Token[]) {
   }
 }
 
-/** Images are blocks in notes: lift them out of paragraphs. */
-function liftImages(state: { tokens: Token[]; Token: typeof Token }) {
+/**
+ * Attributes written directly after an image or attachment link, in the
+ * Pandoc style: `![chart](attachment:…){width=480}` and
+ * `[report.pdf](attachment:…){type=application/pdf size=24576}`. Only known
+ * keys with valid values are read; anything else stays literal text.
+ */
+const ATTRIBUTES = /^\{([^{}\n]{1,300})\}/;
+type Readers = Record<string, (value: string) => boolean>;
+const IMAGE_ATTRIBUTES: Readers = {
+  width: (value) => /^\d{1,5}$/.test(value) && isImageWidth(Number(value)),
+};
+const FILE_ATTRIBUTES: Readers = {
+  type: (value) => isMimeType(value),
+  size: (value) => /^\d{1,13}$/.test(value) && isFileSize(Number(value)),
+};
+
+/**
+ * Literal text. This rule runs before markdown-it joins text, so an escaped
+ * character is still its own `text_special` token.
+ */
+function isText(token: Token) {
+  return token.type === "text" || token.type === "text_special";
+}
+
+/** Read and remove an attribute block starting at `children[index]`. */
+function takeAttributes(
+  children: Token[],
+  index: number,
+  readers: Readers,
+): Record<string, string> {
+  let end = index;
+  let text = "";
+  while (end < children.length && isText(children[end]!))
+    text += children[end++]!.content;
+  const match = ATTRIBUTES.exec(text);
+  if (!match) return {};
+  const values: Record<string, string> = {};
+  for (const pair of match[1]!.trim().split(/\s+/)) {
+    const [, key, value] = /^([a-z]+)=(\S+)$/.exec(pair) ?? [];
+    if (!key || !value || key in values || !readers[key]?.(value)) return {};
+    values[key] = value;
+  }
+  let remove = match[0].length;
+  for (let k = index; k < end && remove > 0; k++) {
+    const token = children[k]!;
+    const cut = Math.min(remove, token.content.length);
+    token.content = token.content.slice(cut);
+    remove -= cut;
+  }
+  for (let k = end - 1; k >= index; k--)
+    if (!children[k]!.content) children.splice(k, 1);
+  return values;
+}
+
+/** A link label as plain text, made into an acceptable file name. */
+function fileName(tokens: Token[]) {
+  const text = tokens
+    .map((token) =>
+      isText(token) || token.type === "code_inline"
+        ? token.content
+        : token.type === "softbreak" || token.type === "hardbreak"
+          ? " "
+          : "",
+    )
+    .join("")
+    .replace(/\p{Cc}/gu, " ")
+    .trim()
+    .slice(0, FILE_NAME_LIMIT)
+    .trim();
+  return text || "Attachment";
+}
+
+/**
+ * Turn each link to `attachment:<objectId>` into one `file_ref` token with its
+ * name and attributes, and read image attributes, before unsafe links are
+ * dropped: an attachment link is a file block, not a web link.
+ */
+function collectAttachments(children: Token[], TokenClass: typeof Token) {
+  const result = [...children];
+  for (let i = 0; i < result.length; i++) {
+    const token = result[i]!;
+    if (token.type === "image") {
+      const { width } = takeAttributes(result, i + 1, IMAGE_ATTRIBUTES);
+      if (width) token.attrSet("width", width);
+      continue;
+    }
+    if (token.type !== "link_open") continue;
+    const objectId = attachmentObjectId(token.attrGet("href"));
+    if (!objectId) continue;
+    const close = result.findIndex(
+      (other, k) => k > i && other.type === "link_close",
+    );
+    if (close < 0) continue;
+    const ref = new TokenClass("file_ref", "", 0);
+    ref.attrSet("objectId", objectId);
+    ref.attrSet("name", fileName(result.slice(i + 1, close)));
+    const attributes = takeAttributes(result, close + 1, FILE_ATTRIBUTES);
+    if (attributes.type) ref.attrSet("mimeType", attributes.type);
+    if (attributes.size) ref.attrSet("size", attributes.size);
+    result.splice(i, close - i + 1, ref);
+  }
+  return result;
+}
+
+/** Outside paragraphs (headings), images and files can only be their text. */
+function flattenAttachments(children: Token[], TokenClass: typeof Token) {
+  return children.flatMap((child) => {
+    if (child.type !== "image" && child.type !== "file_ref") return [child];
+    const label =
+      child.type === "image"
+        ? (child.children?.map((c) => c.content).join("") ?? "")
+        : (child.attrGet("name") ?? "");
+    if (!label) return [];
+    const text = new TokenClass("text", "", 0);
+    text.content = label;
+    return [text];
+  });
+}
+
+/** Images and files are blocks in notes: lift them out of paragraphs. */
+function liftBlocks(state: { tokens: Token[]; Token: typeof Token }) {
   const tokens = state.tokens;
+  tokens.forEach((token, index) => {
+    if (
+      token.type === "inline" &&
+      token.children &&
+      tokens[index - 1]?.type !== "paragraph_open"
+    )
+      token.children = flattenAttachments(token.children, state.Token);
+  });
   for (let i = tokens.length - 3; i >= 0; i--) {
     const open = tokens[i]!;
     const inline = tokens[i + 1]!;
     if (open.type !== "paragraph_open" || inline.type !== "inline") continue;
     const children = inline.children ?? [];
-    if (!children.some((child) => child.type === "image")) continue;
-    const images: Token[] = [];
+    if (!children.some((c) => c.type === "image" || c.type === "file_ref"))
+      continue;
+    const blocks: Token[] = [];
     const kept: Token[] = [];
     for (const child of children) {
+      if (child.type === "file_ref") {
+        const block = new state.Token("file_block", "div", 0);
+        for (const name of ["objectId", "name", "mimeType", "size"]) {
+          const value = child.attrGet(name);
+          if (value !== null) block.attrSet(name, value);
+        }
+        block.level = open.level;
+        block.block = true;
+        blocks.push(block);
+        continue;
+      }
       if (child.type !== "image") {
         kept.push(child);
         continue;
@@ -113,9 +262,11 @@ function liftImages(state: { tokens: Token[]; Token: typeof Token }) {
       if (alt) block.attrSet("alt", alt);
       const title = child.attrGet("title");
       if (title) block.attrSet("title", title);
+      const width = child.attrGet("width");
+      if (width) block.attrSet("width", width);
       block.level = open.level;
       block.block = true;
-      images.push(block);
+      blocks.push(block);
     }
     const hasText = kept.some(
       (child) =>
@@ -123,7 +274,7 @@ function liftImages(state: { tokens: Token[]; Token: typeof Token }) {
         !(child.type === "text" && !child.content.trim()),
     );
     inline.children = kept;
-    tokens.splice(i + 3, 0, ...images);
+    tokens.splice(i + 3, 0, ...blocks);
     if (!hasText) tokens.splice(i, 3);
   }
 }
@@ -131,9 +282,11 @@ function liftImages(state: { tokens: Token[]; Token: typeof Token }) {
 tokenizer.core.ruler.after("inline", "palladian_notes", (state) => {
   for (const token of state.tokens)
     if (token.type === "inline" && token.children)
-      token.children = sanitizeInline(token.children);
+      token.children = sanitizeInline(
+        collectAttachments(token.children, state.Token),
+      );
   convertTaskLists(state.tokens);
-  liftImages(state);
+  liftBlocks(state);
   return true;
 });
 
@@ -177,6 +330,16 @@ const parser = new MarkdownParser(notesSchema, tokenizer, {
       src: tok.attrGet("src"),
       alt: tok.attrGet("alt") || null,
       title: tok.attrGet("title") || null,
+      width: tok.attrGet("width") ? Number(tok.attrGet("width")) : null,
+    }),
+  },
+  file_block: {
+    node: "file",
+    getAttrs: (tok) => ({
+      objectId: tok.attrGet("objectId"),
+      name: tok.attrGet("name"),
+      mimeType: tok.attrGet("mimeType") ?? "",
+      size: tok.attrGet("size") === null ? null : Number(tok.attrGet("size")),
     }),
   },
   hardbreak: { node: "hard_break" },
@@ -238,6 +401,22 @@ const serializer = new MarkdownSerializer(
     },
     image(state, node) {
       defaultMarkdownSerializer.nodes.image!(state, node, node, 0);
+      if (isImageWidth(node.attrs.width))
+        state.write(`{width=${node.attrs.width}}`);
+      state.closeBlock(node);
+    },
+    file(state, node) {
+      const { objectId, name, mimeType, size } = node.attrs;
+      // `&` would otherwise start an entity reference when read back.
+      const label = state
+        .esc(String(name))
+        .replace(/&(?=#?[a-z0-9]+;)/gi, "\\&");
+      state.write(`[${label}](${attachmentSource(String(objectId))})`);
+      const attributes = [
+        mimeType ? `type=${mimeType}` : "",
+        size !== null ? `size=${size}` : "",
+      ].filter(Boolean);
+      if (attributes.length) state.write(`{${attributes.join(" ")}}`);
       state.closeBlock(node);
     },
   },
