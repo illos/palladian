@@ -1,5 +1,9 @@
 import { isSafeHref, notesSchema } from "@palladian/notes-core/schema";
-import type { Node as ProseMirrorNode, Mark } from "prosemirror-model";
+import type {
+  Fragment,
+  Node as ProseMirrorNode,
+  Mark,
+} from "prosemirror-model";
 import {
   Plugin,
   PluginKey,
@@ -257,10 +261,11 @@ export function linkDraftFor(state: EditorState): LinkDraft | null {
 /**
  * Apply the link form to the range it targets. When the person did not edit
  * the Text field, the link goes on whatever text the range holds now, so a
- * collaborator's edits there stay. Edited text replaces the range, unless the
- * range changed while the form was open (`touched`): then, as when text the
- * form was opened on has been deleted, this returns null and the form must be
- * checked again. An empty text shows the address.
+ * collaborator's edits there stay. Edited text replaces the range only if the
+ * range still holds exactly what the form was opened on (`original`) and no
+ * edit touched it (`touched`); otherwise, as when the text the form was
+ * opened on has been deleted, this returns null and the form must be checked
+ * again. An empty text shows the address.
  */
 export function applyLink(
   state: EditorState,
@@ -268,10 +273,20 @@ export function applyLink(
   to: number,
   text: string,
   href: string,
-  options: { textEdited?: boolean; touched?: boolean } = {},
+  options: {
+    textEdited?: boolean;
+    touched?: boolean;
+    original?: Fragment | undefined;
+  } = {},
 ): Transaction | null {
   const textEdited = options.textEdited ?? true;
-  if (options.touched && (textEdited || from === to)) return null;
+  // The primary guard compares content; `touched` also catches a change
+  // that leaves the same content behind.
+  const changed =
+    options.touched ||
+    (options.original !== undefined &&
+      !state.doc.slice(from, to).content.eq(options.original));
+  if (changed && (textEdited || from === to)) return null;
   const label = text.trim() ? text : href;
   const mark = link.create({ href });
   const tr = state.tr;
@@ -301,6 +316,8 @@ export type LinkUi = {
   to: number;
   /** The form's text changed (by anyone) since it opened. */
   touched?: boolean;
+  /** What the form's range held when it opened. */
+  content?: Fragment | undefined;
 } | null;
 export const linkUiKey = new PluginKey<LinkUi>("linkUi");
 
@@ -350,7 +367,7 @@ export const linkUi = new Plugin<LinkUi>({
           return null;
         return { mode: "menu", from, to };
       }
-      return { mode: "form", from, to, touched };
+      return { mode: "form", from, to, touched, content: value.content };
     },
   },
   props: {

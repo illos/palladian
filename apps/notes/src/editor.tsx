@@ -665,7 +665,8 @@ export function NoteEditor({
         mode: "form",
         from: draft.from,
         to: draft.to,
-      }),
+        content: editor.state.doc.slice(draft.from, draft.to).content,
+      } satisfies LinkUi),
     );
     // Render now so focus moves within the tap or key press (iOS keyboard).
     flushSync(() =>
@@ -923,13 +924,18 @@ export function NoteEditor({
       ? applyLink(editor.state, target.from, target.to, text, href, {
           textEdited: linkForm.textEdited,
           touched: !!target.touched,
+          original: target.content,
         })
       : editor.state.tr;
     if (!tr) {
       // Someone changed the text while the form was open: show it as it is
       // now, rather than overwrite their edit.
       editor.dispatch(
-        editor.state.tr.setMeta(linkUiKey, { ...target, touched: false }),
+        editor.state.tr.setMeta(linkUiKey, {
+          ...target,
+          touched: false,
+          content: editor.state.doc.slice(target.from, target.to).content,
+        } satisfies LinkUi),
       );
       setLinkForm({
         ...linkForm,

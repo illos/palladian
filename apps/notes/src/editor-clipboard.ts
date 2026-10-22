@@ -62,9 +62,17 @@ function skipBlanks(line: string, index: number) {
 }
 
 /**
- * The code fence a line opens or closes, also inside quotes and list items,
- * and what follows it. A plain left-to-right scan: no regular expression
- * can backtrack over long runs of spaces.
+ * The code fence a line opens or closes, after quote markers and one list
+ * marker, and what follows it. A plain left-to-right scan: no regular
+ * expression can backtrack over long runs of spaces.
+ *
+ * This is a heuristic, not the parser's view. It does not see a quote inside
+ * a list item or several list markers, ignores indentation limits, accepts
+ * info strings the parser rejects, and does not end a fence where its
+ * container ends. Its only job is to keep markers out of code; when it is
+ * wrong, `keepLines` sees the marked parse differ from the plain one and uses
+ * the plain one. The cost is that lines are then joined as Markdown joins
+ * them; code is never changed.
  */
 function fenceOf(line: string) {
   let index = skipBlanks(line, 0);

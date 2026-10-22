@@ -9,7 +9,11 @@ import {
   parseMarkdownFragment,
 } from "@palladian/notes-core";
 import { assertSafeFragment } from "@palladian/notes-core/schema";
-import { Slice, type Node as ProseMirrorNode } from "prosemirror-model";
+import {
+  Slice,
+  type Fragment,
+  type Node as ProseMirrorNode,
+} from "prosemirror-model";
 import { baseKeymap, chainCommands } from "prosemirror-commands";
 import { collab, receiveTransaction } from "prosemirror-collab";
 import { history } from "prosemirror-history";
@@ -1402,5 +1406,137 @@ describe("review round 2", () => {
     const slice = markdownSlice(text, codec)!;
     expect(slice.content.childCount).toBe(1);
     expect(slice.content.firstChild!.textContent).toBe("a\ue000b next");
+  });
+});
+
+describe("review round 3", () => {
+  const link = marks.link!;
+  function linkedText(doc: ProseMirrorNode) {
+    let text = "";
+    doc.descendants((node) => {
+      if (node.isText && link.isInSet(node.marks)) text += node.text;
+    });
+    return text;
+  }
+  /**
+   * A collaborative editor with a local, unconfirmed edit, the link form
+   * opened on `word` as the editor opens it, and then a collaborator's steps
+   * (built on the confirmed document) received through prosemirror-collab.
+   */
+  function rebasedForm(
+    markdown: string,
+    local: (state: EditorState, start: number) => Transaction,
+    word: string,
+    remote: (tr: Transform, start: number) => void,
+  ) {
+    const confirmed = markdownToDoc(markdown);
+    const start = at(confirmed, markdown);
+    let state = EditorState.create({
+      doc: confirmed,
+      plugins: [collab({ version: 0, clientID: "me" }), linkUi],
+    });
+    state = state.apply(local(state, start));
+    const from = at(state.doc, word);
+    const to = from + word.length;
+    state = state.apply(
+      state.tr.setMeta(linkUiKey, {
+        mode: "form",
+        from,
+        to,
+        content: state.doc.slice(from, to).content,
+      }),
+    );
+    const theirs = new Transform(confirmed);
+    remote(theirs, start);
+    const clients = theirs.steps.map(() => "them");
+    return state.apply(receiveTransaction(state, theirs.steps, clients));
+  }
+  function applyForm(state: EditorState, text: string, textEdited: boolean) {
+    const target = linkUiKey.getState(state)!;
+    return applyLink(state, target.from, target.to, text, "https://e.com", {
+      textEdited,
+      touched: !!target.touched,
+      original: target.content,
+    });
+  }
+  const cases: [
+    string,
+    (state: EditorState, start: number) => Transaction,
+    string,
+    (tr: Transform, start: number) => void,
+    string,
+  ][] = [
+    [
+      "a replaced first letter and an insertion after it",
+      (state, start) => state.tr.insertText("XYZ", start, start + 1),
+      "YZb",
+      (tr, start) => tr.insert(start + 1, notesSchema.text("REMOTE")),
+      "REMOTE",
+    ],
+    [
+      "a partly replayed replacement",
+      (state, start) => state.tr.insertText("XYZ", start, start + 3),
+      "YZd",
+      (tr, start) => {
+        tr.delete(start + 1, start + 2);
+        tr.insert(start + 2, notesSchema.text("R"));
+      },
+      "R",
+    ],
+  ];
+
+  test.each(cases)(
+    "R3-1: %s — an edited label is refused",
+    (_name, local, word, remote, theirs) => {
+      const state = rebasedForm("abcdef", local, word, remote);
+      expect(state.doc.textContent).toContain(theirs);
+      expect(applyForm(state, "Greeting", true)).toBeNull();
+      // Linking without editing the text only adds the mark, keeping theirs.
+      const after = state.apply(applyForm(state, word, false)!);
+      expect(after.doc.textContent).toBe(state.doc.textContent);
+      expect(linkedText(after.doc)).toContain(theirs);
+    },
+  );
+
+  test("R3-1: an edited label still applies when the text is as it was", () => {
+    const state = rebasedForm(
+      "abcdef",
+      (s, start) => s.tr.insertText("XYZ", start, start + 1),
+      "YZb",
+      (tr, start) => tr.insert(start + 5, notesSchema.text("REMOTE")),
+    );
+    const after = state.apply(applyForm(state, "Greeting", true)!);
+    expect(after.doc.textContent).toBe("XGreetingcdeREMOTEf");
+    expect(linkedText(after.doc)).toBe("Greeting");
+  });
+
+  function codeTexts(fragment: Fragment) {
+    const texts: string[] = [];
+    fragment.descendants((node) => {
+      if (node.type === nodes.code_block) texts.push(node.textContent);
+    });
+    return texts;
+  }
+  test.each([
+    [
+      "a quote inside a list item",
+      "- > ```\n  > code\n  > more\n  > ```\n- next **x**\n  line",
+    ],
+    [
+      "several list markers",
+      "- - ```\n    code\n    more\n    ```\n\n**x**\nline",
+    ],
+    ["fence text in indented code", "para **x**\n\n    ```\n    code\n    ```"],
+    ["a backtick in the info string", "``` a`b\ncode\nmore\n```\n**x**\nline"],
+    ["a fence ended by its quote", "> ```\n> code\n\nafter **x**\nline two"],
+    ["a tilde fence", "~~~\na\nb\n~~~\n**x**\nline"],
+  ])("R3-2: %s keeps code exactly as the parser reads it", (_name, text) => {
+    const slice = markdownSlice(text, codec)!;
+    expect(codeTexts(slice.content)).toEqual(
+      codeTexts(parseMarkdownFragment(text)),
+    );
+    expect(
+      slice.content.textBetween(0, slice.content.size, "\n"),
+    ).not.toContain("\ue000");
   });
 });
