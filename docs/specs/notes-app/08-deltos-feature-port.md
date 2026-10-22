@@ -109,6 +109,8 @@ Deltos reference: `routes/settings/*`, `SettingsRail.tsx`, `SettingsRoute.tsx`, 
 
 ### A2. Note list interactions and note actions (M)
 
+Implemented 2026-10-22 without backend changes (`docs/reviews/notes-note-actions-implementation.md`); per-row Trash countdowns wait for A6's summary change, History for A4 and Pin for A6.
+
 Deltos reference: `components/SwipeRow.tsx`, `lib/useDragAxis.ts`, `components/NavSheet.tsx`, `NotebookPickerSheet.tsx`, `ToastHost.tsx` and `lib/toastEvents.ts`, `routes/TrashRoute.tsx`, `components/InfoPanel.tsx`, `lib/exportNote.ts`, `components/NoteMetaBar.tsx`; specs `swipe-actions-note-list.md` and `swipe-actions-acceptance-matrix.md`; ROAD-0013.
 
 **One action registry.** Four surfaces use it: swipe, the desktop row menu (right-click and a hover "…"), a touch long-press sheet, and the open note's "…" menu.

@@ -23,7 +23,8 @@ import { transportError } from "./live";
 import { deviceName, passkeyOffer, passkeysSupported } from "./passkeys";
 import { PasswordInput } from "./SignIn";
 
-type Panel = "agents" | "account" | "security" | "share" | "notebook" | "move";
+type Panel =
+  "agents" | "account" | "security" | "share" | "notebook" | "move" | "info";
 type Role = "read" | "edit";
 
 function useAction() {
@@ -480,9 +481,12 @@ function PublicLink({ noteId }: { noteId: Id<"notes"> }) {
 
 function MoveNote({
   noteId,
+  initialNotebookId,
   onClose,
 }: {
   noteId: Id<"notes">;
+  /** The notebook a note was dropped on, preselected if it is a valid choice. */
+  initialNotebookId?: string | undefined;
   onClose: () => void;
 }) {
   const note = useQuery(api.notes.get, { noteId });
@@ -501,6 +505,14 @@ function MoveNote({
       n.id !== note.summary.notebookId &&
       n.role !== "read",
   );
+  useEffect(() => {
+    if (
+      initialNotebookId &&
+      !target &&
+      choices.some((choice) => choice.id === initialNotebookId)
+    )
+      setTarget(initialNotebookId);
+  }, [initialNotebookId, choices.length]);
   return (
     <Modal label="Move note" onClose={onClose}>
       <form
@@ -537,6 +549,89 @@ function MoveNote({
           </p>
         )}
       </form>
+    </Modal>
+  );
+}
+
+function longDate(timestamp: number) {
+  return new Date(timestamp).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
+/** Facts about a note: dates, notebook, ownership and size. */
+function NoteInfo({
+  noteId,
+  text,
+  onClose,
+}: {
+  noteId: Id<"notes">;
+  /** The note's text as this device has it, for word and character counts. */
+  text: string | undefined;
+  onClose: () => void;
+}) {
+  const note = useQuery(api.notes.get, { noteId });
+  const me = useQuery(api.account.me, {});
+  const words = text?.trim() ? text.trim().split(/\s+/).length : 0;
+  return (
+    <Modal label="Note info" onClose={onClose}>
+      {note === undefined && <p>Loading…</p>}
+      {note === null && <p>This note is not available to you.</p>}
+      {note && (
+        <dl className="note-info">
+          <dt>Title</dt>
+          <dd>{note.summary.title || "Untitled"}</dd>
+          <dt>Notebook</dt>
+          <dd>{note.notebook?.name ?? "Shared with you"}</dd>
+          <dt>Created</dt>
+          <dd>{longDate(note.summary.createdAt)}</dd>
+          <dt>Last edited</dt>
+          <dd>{longDate(note.summary.editedAt)}</dd>
+          <dt>Owner</dt>
+          <dd>
+            {me && note.ownerId === me.id
+              ? "You"
+              : "Someone who shared it with you"}
+          </dd>
+          {note.creatorId !== note.ownerId && (
+            <>
+              <dt>Created by</dt>
+              <dd>
+                {me && note.creatorId === me.id
+                  ? "You"
+                  : "A collaborator or agent"}
+              </dd>
+            </>
+          )}
+          <dt>Your access</dt>
+          <dd>
+            {note.summary.role === "owner"
+              ? "Owner"
+              : note.summary.role === "edit"
+                ? "Can edit"
+                : "Can read"}
+          </dd>
+          {text !== undefined && (
+            <>
+              <dt>Words</dt>
+              <dd>{words.toLocaleString()}</dd>
+              <dt>Characters</dt>
+              <dd>{text.length.toLocaleString()}</dd>
+            </>
+          )}
+          {note.summary.trashed && (
+            <>
+              <dt>In Trash since</dt>
+              <dd>
+                {note.summary.trashedAt
+                  ? longDate(note.summary.trashedAt)
+                  : "—"}
+              </dd>
+            </>
+          )}
+        </dl>
+      )}
     </Modal>
   );
 }
@@ -1416,6 +1511,7 @@ export default function Panels({
   notebooks,
   noteId,
   notebookId,
+  text,
   onClose,
   onNotebookCreated,
 }: {
@@ -1424,6 +1520,7 @@ export default function Panels({
   notebooks: CachedNotebook[];
   noteId?: string | undefined;
   notebookId?: string | undefined;
+  text?: string | undefined;
   onClose?: () => void;
   onNotebookCreated?: (id: string) => void;
 }) {
@@ -1437,7 +1534,14 @@ export default function Panels({
         <ShareNote noteId={noteId as Id<"notes">} onClose={close} />
       )}
       {panel === "move" && noteId && (
-        <MoveNote noteId={noteId as Id<"notes">} onClose={close} />
+        <MoveNote
+          noteId={noteId as Id<"notes">}
+          initialNotebookId={notebookId}
+          onClose={close}
+        />
+      )}
+      {panel === "info" && noteId && (
+        <NoteInfo noteId={noteId as Id<"notes">} text={text} onClose={close} />
       )}
       {panel === "notebook" && (
         <NotebookPanel

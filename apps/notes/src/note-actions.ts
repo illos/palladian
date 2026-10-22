@@ -1,0 +1,109 @@
+import type { NoteRole } from "./cache";
+
+/**
+ * What can be done to a note, and where each action appears: the long-press
+ * sheet, the desktop row menu, the open note's menu, and swipes. One set of
+ * rules for all of them, by the note's role and lifecycle (plan 08, A2).
+ */
+
+export type ActionId =
+  | "duplicate"
+  | "move"
+  | "share"
+  | "info"
+  | "export"
+  | "print"
+  | "trash"
+  | "restore"
+  | "delete";
+
+export interface ActionTarget {
+  id: string;
+  /** Local drafts and conflict copies not yet on the server have no actions. */
+  local: boolean;
+  role: NoteRole | null | undefined;
+  trashed: boolean;
+}
+
+export const actionLabels: Record<ActionId, string> = {
+  duplicate: "Duplicate",
+  move: "Move…",
+  share: "Share…",
+  info: "Info",
+  export: "Export as Markdown",
+  print: "Print or save as PDF",
+  trash: "Move to Trash",
+  restore: "Restore",
+  delete: "Delete forever…",
+};
+
+/** Actions that change data stay hidden until the server is reachable. */
+const needsServer: Record<ActionId, boolean> = {
+  duplicate: true,
+  move: true,
+  share: true,
+  info: true,
+  export: false,
+  print: false,
+  trash: true,
+  restore: true,
+  delete: true,
+};
+
+/** The actions a note offers, in menu order. */
+export function noteActions(target: ActionTarget, online: boolean): ActionId[] {
+  if (target.local) return [];
+  const edit = target.role === "owner" || target.role === "edit";
+  const owner = target.role === "owner";
+  const all: ActionId[] = target.trashed
+    ? [
+        ...(edit ? (["restore"] as const) : []),
+        "info",
+        "export",
+        "print",
+        ...(owner ? (["delete"] as const) : []),
+      ]
+    : [
+        "duplicate",
+        ...(owner ? (["move"] as const) : []),
+        "share",
+        "info",
+        "export",
+        "print",
+        ...(edit ? (["trash"] as const) : []),
+      ];
+  return all.filter((id) => online || !needsServer[id]);
+}
+
+export interface SwipeLayout {
+  /** Revealed by swiping right; the row rests open on them. */
+  leading: ActionId[];
+  /** Revealed by swiping left. */
+  trailing: ActionId[];
+  /** Run by swiping left past the full-swipe distance, if any. */
+  full: ActionId | null;
+}
+
+/**
+ * Swipes: right rests on Duplicate (Restore in Trash); left rests on Move and
+ * Share, and a full left swipe moves the note to Trash (Undo follows). In Trash,
+ * left rests on Delete forever, which still asks first.
+ */
+export function swipeLayout(
+  target: ActionTarget,
+  online: boolean,
+): SwipeLayout {
+  const available = new Set(noteActions(target, online));
+  const pick = (ids: ActionId[]) => ids.filter((id) => available.has(id));
+  if (target.trashed)
+    return {
+      leading: pick(["restore"]),
+      trailing: pick(["delete"]),
+      full: null,
+    };
+  return {
+    leading: pick(["duplicate"]),
+    trailing: pick(["move", "share"]),
+    full: available.has("trash") ? "trash" : null,
+  };
+}

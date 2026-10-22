@@ -93,6 +93,27 @@ const paths: Record<string, ReactNode> = {
     </>
   ),
   chevron: <path d="m10 6 6 6-6 6" />,
+  more: (
+    <>
+      <circle cx="6" cy="12" r="1.2" />
+      <circle cx="12" cy="12" r="1.2" />
+      <circle cx="18" cy="12" r="1.2" />
+    </>
+  ),
+  copy: (
+    <>
+      <rect x="8" y="8" width="12" height="12" rx="2" />
+      <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+    </>
+  ),
+  download: <path d="M12 4v11m-5-5 5 5 5-5M5 20h14" />,
+  print: (
+    <>
+      <path d="M7 9V4h10v5" />
+      <rect x="4" y="9" width="16" height="7" rx="2" />
+      <path d="M7 14h10v6H7z" />
+    </>
+  ),
 };
 export function Icon({
   name,

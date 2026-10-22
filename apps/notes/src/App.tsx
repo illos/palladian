@@ -20,6 +20,16 @@ import { EditorSurface } from "./EditorSurface";
 import { Icon } from "./Icons";
 import { Appearance } from "./Appearance";
 import { PanelBoundary } from "./PanelBoundary";
+import { ActionMenu } from "./ActionMenu";
+import { SwipeRow, actionIcons } from "./SwipeRow";
+import { ToastHost, useToasts } from "./Toasts";
+import {
+  actionLabels,
+  noteActions,
+  swipeLayout,
+  type ActionId,
+  type ActionTarget,
+} from "./note-actions";
 import {
   About,
   SessionControls,
@@ -50,9 +60,45 @@ type Section =
   { kind: "all" } | { kind: "notebook"; id: string } | { kind: "trash" };
 type Dialog =
   | { kind: "share"; noteId: string }
-  | { kind: "move"; noteId: string }
+  | { kind: "move"; noteId: string; notebookId?: string }
+  | { kind: "info"; noteId: string; text?: string }
   | { kind: "notebook"; notebookId: string | null }
   | null;
+/** A note's actions menu: the long-press sheet, row menu or "…" menu. */
+interface Menu {
+  target: NoteTarget;
+  actions: ActionId[];
+  anchor: { x: number; y: number } | null;
+}
+interface NoteTarget extends ActionTarget {
+  accountId: string;
+  title: string;
+  notebookId?: string | undefined;
+}
+
+/** Actions shown as buttons on an open note on wide screens; the rest are under "…". */
+const toolbarIcons: ActionId[] = [
+  "share",
+  "move",
+  "info",
+  "restore",
+  "trash",
+  "delete",
+];
+const toolbarLabels: Partial<Record<ActionId, string>> = {
+  share: "Share note",
+  move: "Move to another notebook",
+  info: "Note info",
+  restore: "Restore note",
+  trash: "Move note to Trash",
+  delete: "Delete forever",
+};
+
+/** How far a swipe must travel to open or close the phone navigation sheet. */
+const SHEET_SWIPE = 40;
+
+/** The data type a note row carries when dragged onto a notebook (desktop). */
+const NOTE_DRAG = "application/x-palladian-note";
 /** Settings entries this tab pushed on top of the notes view. */
 function settingsDepth(): number {
   const depth = (history.state as { settingsDepth?: unknown } | null)
@@ -148,6 +194,12 @@ export function App({
   const shownTab = settingsTab ?? (phone ? null : "account");
   const [section, setSection] = useState<Section>({ kind: "all" });
   const [dialog, setDialog] = useState<Dialog>(null);
+  const [menu, setMenu] = useState<Menu | null>(null);
+  /** The note row resting open after a swipe; one at a time. */
+  const [openSwipe, setOpenSwipe] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const sheetGesture = useRef<number | null>(null);
+  const { toasts, show: toast, dismiss: dismissToast } = useToasts();
   const navSheet = useRef<HTMLDialogElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const [rows, setRows] = useState<NoteSummary[]>([]);
@@ -678,38 +730,169 @@ export function App({
     }
   }
 
-  async function deleteForever(note: OpenNote) {
-    if (!live) return;
-    if (
-      !confirm(
-        "Delete this note permanently? Its entire history is removed and it cannot be restored.",
-      )
-    )
-      return;
+  function targetOf(note: {
+    accountId: string;
+    id: string;
+    title?: string;
+    kind: string;
+    role?: NoteRole | null | undefined;
+    trashed?: boolean | undefined;
+    notebookId?: string | undefined;
+  }): NoteTarget {
+    return {
+      accountId: note.accountId,
+      id: note.id,
+      title: note.title || "Untitled",
+      local: note.id.startsWith("local-") || note.kind === "draft",
+      role: note.role,
+      trashed: !!note.trashed,
+      notebookId: note.notebookId,
+    };
+  }
+
+  function openMenu(
+    target: NoteTarget,
+    anchor: { x: number; y: number } | null,
+    only?: (action: ActionId) => boolean,
+  ) {
+    const actions = noteActions(target, liveReady).filter(
+      (action) => !only || only(action),
+    );
+    if (actions.length) setMenu({ target, actions, anchor });
+  }
+
+  /** The note's stored document, from the open editor, the cache or the server. */
+  async function documentOf(target: NoteTarget): Promise<string | null> {
+    const shown = openRef.current;
+    if (shown?.id === target.id) return shown.document;
+    const body = await store.read(target.accountId, target.id);
+    if (body) return body.document;
+    if (!live || !liveReady) return null;
+    return (await live.fetchContent(target.id))?.doc ?? null;
+  }
+
+  function failed(failure: unknown) {
+    toast(
+      failure instanceof Error && failure.message
+        ? failure.message
+        : "That did not work. Try again.",
+    );
+  }
+
+  async function runAction(action: ActionId, target: NoteTarget) {
+    setOpenSwipe(null);
+    const shown = openRef.current?.id === target.id;
     try {
-      await live.deleteForever(note.id);
-      closeOpen();
+      switch (action) {
+        case "share":
+          return setDialog({ kind: "share", noteId: target.id });
+        case "move":
+          return setDialog({ kind: "move", noteId: target.id });
+        case "info": {
+          const text = shown
+            ? openRef.current!.text
+            : (await store.read(target.accountId, target.id))?.text;
+          return setDialog({
+            kind: "info",
+            noteId: target.id,
+            ...(text !== undefined ? { text } : {}),
+          });
+        }
+        case "export":
+        case "print": {
+          const doc = await documentOf(target);
+          if (!doc) return toast("This note's text is not on this device yet.");
+          const tools = await import("./note-tools");
+          if (action === "export")
+            return tools.downloadMarkdown(target.title, doc);
+          if (!tools.printNote(target.title, doc))
+            toast(
+              "The installed app cannot print. Open Palladian in Safari to print or save a PDF.",
+            );
+          return;
+        }
+        case "duplicate": {
+          if (!live) return;
+          const doc = await documentOf(target);
+          if (!doc) return toast("This note's text is not on this device yet.");
+          // The copy stays in the same notebook if you can add notes there.
+          const book = notebooks.find((n) => n.id === target.notebookId);
+          const notebookId =
+            book && book.role !== "read"
+              ? book.id
+              : (liveState.profile?.defaultNotebookId ?? undefined);
+          const { duplicateNote } = await import("./note-tools");
+          const id = await duplicateNote(live.client, doc, notebookId);
+          return toast("Duplicated", {
+            label: "Open",
+            run: () => void openRemote(id),
+          });
+        }
+        case "trash": {
+          if (!live) return;
+          await live.trash(target.id, true);
+          if (shown) closeOpen();
+          return toast("Moved to Trash", {
+            label: "Undo",
+            run: () =>
+              void live
+                .trash(target.id, false)
+                .catch((failure) => failed(failure)),
+          });
+        }
+        case "restore": {
+          if (!live) return;
+          await live.trash(target.id, false);
+          if (shown)
+            setOpen((prev) =>
+              prev?.id === target.id ? { ...prev, trashed: false } : prev,
+            );
+          return toast("Restored");
+        }
+        case "delete": {
+          if (!live) return;
+          if (
+            !confirm(
+              `Delete “${target.title}” forever? Its entire history is removed and it cannot be restored.`,
+            )
+          )
+            return;
+          await live.deleteForever(target.id);
+          if (shown) closeOpen();
+          return toast("Deleted forever");
+        }
+      }
     } catch (failure) {
-      setError(
-        failure instanceof Error ? failure.message : "That change failed.",
-      );
+      failed(failure);
     }
   }
 
-  async function toggleTrash(note: OpenNote) {
-    if (!live) return;
-    try {
-      await live.trash(note.id, !note.trashed);
-      if (!note.trashed) closeOpen();
-      else
-        setOpen((prev) =>
-          prev?.key === note.key ? { ...prev, trashed: false } : prev,
-        );
-    } catch (failure) {
-      setError(
-        failure instanceof Error ? failure.message : "That change failed.",
-      );
+  /** Delete every note you own in Trash, one at a time. */
+  async function emptyTrash(targets: NoteTarget[]) {
+    if (!live || !targets.length) return;
+    if (
+      !confirm(
+        targets.length === 1
+          ? "Delete the note in Trash forever? Its history is removed too."
+          : `Delete all ${targets.length} notes in Trash forever? Their history is removed too.`,
+      )
+    )
+      return;
+    let deleted = 0;
+    for (const target of targets) {
+      try {
+        await live.deleteForever(target.id);
+        deleted++;
+        if (openRef.current?.id === target.id) closeOpen();
+      } catch {
+        // Counted below; the rest still go.
+      }
     }
+    toast(
+      deleted === targets.length
+        ? `Deleted ${deleted} ${deleted === 1 ? "note" : "notes"} forever`
+        : `Deleted ${deleted} of ${targets.length} notes; try again for the rest.`,
+    );
   }
 
   const visibleNotebookIds = new Set(notebooks.map((n) => n.id));
@@ -740,8 +923,6 @@ export function App({
       : section.kind === "notebook"
         ? (notebooks.find((n) => n.id === section.id)?.name ?? "Notebook")
         : "All notes";
-  const openRole = currentOpen?.role ?? null;
-  const canEdit = openRole === "owner" || openRole === "edit";
   const editable =
     !!currentOpen &&
     (currentOpen.kind === "draft" ||
@@ -767,10 +948,19 @@ export function App({
     (snapshot.status === "ready" && live && !liveState.connected
       ? " — server unreachable"
       : "");
-  const serverNote =
-    !!currentOpen &&
-    currentOpen.kind !== "draft" &&
-    !currentOpen.id.startsWith("local-");
+  const openTarget = currentOpen
+    ? targetOf({
+        ...currentOpen,
+        title: rows.find((row) => row.id === currentOpen.id)?.title ?? "",
+        notebookId: rows.find((row) => row.id === currentOpen.id)?.notebookId,
+      })
+    : null;
+  const openActions = openTarget ? noteActions(openTarget, liveReady) : [];
+  const ownTrash =
+    section.kind === "trash"
+      ? sectionRows.filter((row) => row.role === "owner").map(targetOf)
+      : [];
+  const retention = liveState.profile?.trashRetentionDays;
 
   /** Settings opens as a history entry, so Back returns to the notes. */
   function openSettings(tab: SettingsTab | null) {
@@ -857,6 +1047,26 @@ export function App({
               : "nav-item"
           }
           onClick={() => choose({ kind: "notebook", id: notebook.id })}
+          onDragOver={(event) => {
+            if (!liveReady || !event.dataTransfer.types.includes(NOTE_DRAG))
+              return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "move";
+            setDropTarget(notebook.id);
+          }}
+          onDragLeave={() =>
+            setDropTarget((current) =>
+              current === notebook.id ? null : current,
+            )
+          }
+          onDrop={(event) => {
+            const noteId = event.dataTransfer.getData(NOTE_DRAG);
+            setDropTarget(null);
+            if (!noteId) return;
+            event.preventDefault();
+            setDialog({ kind: "move", noteId, notebookId: notebook.id });
+          }}
+          data-drop={dropTarget === notebook.id ? "" : undefined}
           title={
             notebook.role === "owner"
               ? notebook.name
@@ -919,8 +1129,34 @@ export function App({
           <header className="library-header">
             <div>
               <h1>{sectionTitle}</h1>
+              {section.kind === "trash" && retention !== undefined && (
+                <p className="trash-policy">
+                  {retention === 0
+                    ? "Your notes stay in Trash until you delete them."
+                    : `Your notes in Trash are deleted forever after ${
+                        retention === 1
+                          ? "1 day"
+                          : retention === 7
+                            ? "1 week"
+                            : `${retention} days`
+                      }.`}
+                </p>
+              )}
               <p className="note-count">
                 {visibleRows.length} notes
+                {section.kind === "trash" &&
+                  liveReady &&
+                  ownTrash.length > 0 && (
+                    <>
+                      {" · "}
+                      <button
+                        className="link-button"
+                        onClick={() => void emptyTrash(ownTrash)}
+                      >
+                        Empty Trash
+                      </button>
+                    </>
+                  )}
                 {activeNotebook && liveReady && (
                   <>
                     {" · "}
@@ -978,36 +1214,90 @@ export function App({
                 );
             }}
           >
-            {visibleRows.slice(0, rowLimit).map((row) => (
-              <button
-                className={
-                  currentOpen?.id === row.id ? "note-row selected" : "note-row"
-                }
-                key={row.id}
-                onClick={() => {
-                  void selectNote(row);
-                }}
-              >
-                <strong>{row.title || "Untitled"}</strong>
-                <span className="row-detail">
-                  <time dateTime={new Date(row.updatedAt).toISOString()}>
-                    {smartDate(row.updatedAt)}
-                  </time>
-                  <span className="row-preview">
-                    {row.preview || "Empty note"}
-                  </span>
-                </span>
-                {row.kind === "draft" && (
-                  <small>{row.role ? "Unsaved changes" : "Local draft"}</small>
-                )}
-                {row.trashed && section.kind !== "trash" && (
-                  <small>In Trash</small>
-                )}
-                {row.notebookId &&
-                  !visibleNotebookIds.has(row.notebookId) &&
-                  !row.trashed && <small>Shared with you</small>}
-              </button>
-            ))}
+            {visibleRows.slice(0, rowLimit).map((row) => {
+              const target = targetOf(row);
+              const actions = noteActions(target, liveReady);
+              const book =
+                section.kind === "all" && row.notebookId && !row.trashed
+                  ? notebooks.find((n) => n.id === row.notebookId)
+                  : undefined;
+              const draggable =
+                !phone && liveReady && row.role === "owner" && !row.trashed;
+              return (
+                <div className="note-row-wrap" key={row.id}>
+                  <SwipeRow
+                    layout={swipeLayout(target, liveReady)}
+                    open={openSwipe === row.id}
+                    onOpenChange={(open) =>
+                      setOpenSwipe((current) =>
+                        open ? row.id : current === row.id ? null : current,
+                      )
+                    }
+                    onAction={(action) => void runAction(action, target)}
+                    onLongPress={() => openMenu(target, null)}
+                    onMenu={(anchor) => openMenu(target, anchor)}
+                  >
+                    <button
+                      className={
+                        currentOpen?.id === row.id
+                          ? "note-row selected"
+                          : "note-row"
+                      }
+                      draggable={draggable}
+                      onDragStart={(event) => {
+                        event.dataTransfer.setData(NOTE_DRAG, row.id);
+                        event.dataTransfer.effectAllowed = "move";
+                      }}
+                      onClick={() => {
+                        void selectNote(row);
+                      }}
+                    >
+                      <strong>{row.title || "Untitled"}</strong>
+                      <span className="row-detail">
+                        <time dateTime={new Date(row.updatedAt).toISOString()}>
+                          {smartDate(row.updatedAt)}
+                        </time>
+                        <span className="row-preview">
+                          {row.preview || "Empty note"}
+                        </span>
+                      </span>
+                      {row.kind === "draft" && (
+                        <small>
+                          {row.role ? "Unsaved changes" : "Local draft"}
+                        </small>
+                      )}
+                      {row.trashed && section.kind !== "trash" && (
+                        <small>In Trash</small>
+                      )}
+                      {book && (
+                        <small className="row-notebook">{book.name}</small>
+                      )}
+                      {row.notebookId &&
+                        !visibleNotebookIds.has(row.notebookId) &&
+                        !row.trashed && <small>Shared with you</small>}
+                    </button>
+                  </SwipeRow>
+                  {actions.length > 0 && (
+                    <button
+                      type="button"
+                      className="row-more"
+                      // A pointer shortcut only: keyboards open the same menu
+                      // from the row with the context-menu key, and the row
+                      // stays the one button per note for assistive tech.
+                      aria-hidden="true"
+                      tabIndex={-1}
+                      title="Actions"
+                      onClick={(event) => {
+                        const box = event.currentTarget.getBoundingClientRect();
+                        openMenu(target, { x: box.left, y: box.bottom });
+                      }}
+                    >
+                      <Icon name="more" size={18} />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
             {rowLimit < visibleRows.length && (
               <button
                 className="show-more"
@@ -1081,7 +1371,27 @@ export function App({
             </button>
           ))}
         </div>
-        <div className="mobile-home-bar" hidden={view !== "notes"}>
+        <div
+          className="mobile-home-bar"
+          hidden={view !== "notes"}
+          // Touch events, not pointer events: a vertical drag becomes a
+          // scroll gesture, which cancels the pointer before it ends.
+          onTouchStart={(event) => {
+            sheetGesture.current = event.touches[0]?.clientY ?? null;
+          }}
+          onTouchEnd={(event) => {
+            // A swipe up from the bottom bar opens the navigation sheet.
+            const start = sheetGesture.current;
+            const end = event.changedTouches[0]?.clientY;
+            sheetGesture.current = null;
+            if (
+              start !== null &&
+              end !== undefined &&
+              start - end > SHEET_SWIPE
+            )
+              navSheet.current?.showModal();
+          }}
+        >
           <button
             className="sheet-handle"
             aria-label="Open navigation"
@@ -1134,59 +1444,41 @@ export function App({
                   <Icon name="menu" size={20} />
                 </button>
                 <span className="save-status">{statusText}</span>
-                {serverNote && liveReady && (
+                {openActions.length > 0 && (
                   <span className="note-actions">
+                    {openActions
+                      .filter((action) => toolbarIcons.includes(action))
+                      .map((action) => (
+                        <button
+                          key={action}
+                          className="icon-button wide-only"
+                          aria-label={
+                            toolbarLabels[action] ?? actionLabels[action]
+                          }
+                          title={toolbarLabels[action] ?? actionLabels[action]}
+                          onClick={() => void runAction(action, openTarget!)}
+                        >
+                          <Icon name={actionIcons[action]} size={18} />
+                        </button>
+                      ))}
                     <button
-                      className="icon-button"
-                      aria-label="Share note"
-                      title="Share"
-                      onClick={() =>
-                        setDialog({ kind: "share", noteId: currentOpen.id })
-                      }
+                      className="icon-button more"
+                      aria-label="More actions"
+                      title="More actions"
+                      onClick={(event) => {
+                        const box = event.currentTarget.getBoundingClientRect();
+                        openMenu(
+                          openTarget!,
+                          { x: box.right - 230, y: box.bottom + 4 },
+                          // Wide screens show the main actions as buttons.
+                          phone
+                            ? undefined
+                            : (action) => !toolbarIcons.includes(action),
+                        );
+                      }}
                     >
-                      <Icon name="share" size={18} />
+                      <Icon name="more" size={18} />
                     </button>
-                    {openRole === "owner" && !currentOpen.trashed && (
-                      <button
-                        className="icon-button"
-                        aria-label="Move to another notebook"
-                        title="Move to another notebook"
-                        onClick={() =>
-                          setDialog({ kind: "move", noteId: currentOpen.id })
-                        }
-                      >
-                        <Icon name="notebook" size={18} />
-                      </button>
-                    )}
-                    {openRole === "owner" && currentOpen.trashed && (
-                      <button
-                        className="icon-button"
-                        aria-label="Delete forever"
-                        title="Delete forever"
-                        onClick={() => void deleteForever(currentOpen)}
-                      >
-                        <Icon name="trash" size={18} />
-                      </button>
-                    )}
-                    {canEdit && (
-                      <button
-                        className="icon-button"
-                        aria-label={
-                          currentOpen.trashed
-                            ? "Restore note"
-                            : "Move note to Trash"
-                        }
-                        title={
-                          currentOpen.trashed ? "Restore" : "Move to Trash"
-                        }
-                        onClick={() => void toggleTrash(currentOpen)}
-                      >
-                        <Icon
-                          name={currentOpen.trashed ? "restore" : "trash"}
-                          size={18}
-                        />
-                      </button>
-                    )}
                   </span>
                 )}
               </div>
@@ -1290,16 +1582,13 @@ export function App({
               live={live}
               panel={dialog.kind}
               notebooks={notebooks}
-              noteId={
-                dialog.kind === "share" || dialog.kind === "move"
-                  ? dialog.noteId
-                  : undefined
-              }
+              noteId={dialog.kind === "notebook" ? undefined : dialog.noteId}
               notebookId={
-                dialog.kind === "notebook"
+                dialog.kind === "notebook" || dialog.kind === "move"
                   ? (dialog.notebookId ?? undefined)
                   : undefined
               }
+              text={dialog.kind === "info" ? dialog.text : undefined}
               onClose={() => setDialog(null)}
               onNotebookCreated={(id) => {
                 setDialog(null);
@@ -1309,10 +1598,35 @@ export function App({
           </Suspense>
         </PanelBoundary>
       )}
+      {menu && (
+        <ActionMenu
+          title={menu.target.title}
+          actions={menu.actions}
+          anchor={menu.anchor}
+          sheet={phone || menu.anchor === null}
+          onPick={(action) => void runAction(action, menu.target)}
+          onClose={() => setMenu(null)}
+        />
+      )}
+      <ToastHost toasts={toasts} dismiss={dismissToast} />
       <dialog
         ref={navSheet}
         className="mobile-nav-sheet"
         aria-label="Navigation"
+        onTouchStart={(event) => {
+          // A swipe down closes the sheet when its list is at the top.
+          sheetGesture.current =
+            event.currentTarget.scrollTop <= 0
+              ? (event.touches[0]?.clientY ?? null)
+              : null;
+        }}
+        onTouchEnd={(event) => {
+          const start = sheetGesture.current;
+          const end = event.changedTouches[0]?.clientY;
+          sheetGesture.current = null;
+          if (start !== null && end !== undefined && end - start > SHEET_SWIPE)
+            navSheet.current?.close();
+        }}
         onClick={(event) => {
           if (event.target === event.currentTarget) navSheet.current?.close();
         }}

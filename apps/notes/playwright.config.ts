@@ -6,6 +6,7 @@ export default defineConfig({
     "notes-foundation.spec.ts",
     "notes-design.spec.ts",
     "notes-settings.spec.ts",
+    "notes-actions.spec.ts",
   ],
   fullyParallel: true,
   reporter: "list",
