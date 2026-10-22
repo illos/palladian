@@ -101,6 +101,22 @@ Round 4 evidence:
 - `test:offline`: pass.
 - A production build: contains no harness file or code.
 
+## Review round 5: accepted
+
+Report: `notes-note-actions-round5-astra-review.md`. The verdict is ACCEPTED, ready to merge, with three notes and no fixes required.
+
+Following the reviewer's suggestion, the round-5 probes are kept as tests in `notes-swipe.spec.ts`. They cover:
+
+- after the list opens another row mid-gesture: a flick that opens, a flick that closes, a full swipe with and without actions, a slow drag that rests open, and a cancelled drag on a closed row;
+- a revealed action and the keyboard on an open row.
+
+The browser suite on both Chromium projects then passed 66 tests, on two consecutive runs.
+
+Still pending:
+
+- the App-level mocked-services harness, a separate task;
+- the owner's iPhone checks.
+
 ## Found during this work (not changed)
 
 A new note created **offline** and left blank stays in the list as "Untitled · Empty note · Local draft", including after a reload, and would be created on the server once online. Deltos discarded blank new notes. Online, a blank new note is never created. This is the draft journal's behaviour (fundamentals) and is reported to the owner with the two save issues from the Settings work.
