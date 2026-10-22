@@ -93,7 +93,12 @@ test("phones: a long press opens the action sheet; swipes need the server", asyn
   test.skip(!info.project.name.includes("mobile"), "touch layout");
   await seed(page);
   const fingers = await touch(page);
+  const row = page.getByRole("button", { name: /Welcome to your notes/ });
   const point = await rowCenter(page, /Welcome to your notes/);
+  // Offline every swipe action needs the server, so the row does not move.
+  await fingers.swipe(point.x, point.y, -220);
+  await expect(page.locator(".swipe-actions")).toHaveCount(0);
+  await expect(row).toBeVisible();
   await fingers.longPress(point.x, point.y);
   const sheet = page.getByRole("dialog", {
     name: "Actions for Welcome to your notes",
@@ -109,11 +114,17 @@ test("phones: a long press opens the action sheet; swipes need the server", asyn
   await expect(
     page.getByRole("textbox", { name: "Note content" }),
   ).toBeHidden();
-  // Offline every swipe action needs the server, so the row does not move.
-  await fingers.swipe(point.x, point.y, -220);
-  await expect(page.locator(".swipe-actions")).toHaveCount(0);
+  // After touch, the keyboard still works: the menu key opens the menu, and
+  // the first Enter opens the note (review F5).
+  await row.focus();
+  await page.keyboard.press("Shift+F10");
+  await expect(sheet).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  await row.focus();
+  await page.keyboard.press("Enter");
   await expect(
-    page.getByRole("button", { name: /Welcome to your notes/ }),
+    page.getByRole("textbox", { name: "Note content" }),
   ).toBeVisible();
 });
 

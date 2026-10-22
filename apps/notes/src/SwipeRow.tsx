@@ -17,6 +17,8 @@ const FULL = 200;
 const CLAMP = 240;
 const ACTION_WIDTH = 76;
 const FLICK = 0.4;
+/** A pause this long before release means the finger stopped: no flick. */
+const FLICK_EXPIRES = 100;
 const LONG_PRESS = 500;
 
 type IconName = Parameters<typeof Icon>[0]["name"];
@@ -83,6 +85,15 @@ export function SwipeRow({
   useEffect(() => {
     if (!open && !gesture.current) setOffset(0);
   }, [open]);
+  // The actions can change while the row rests open (a role or Trash change,
+  // the connection): rest on the new set, or close if that side has none.
+  useEffect(() => {
+    if (gesture.current || offset === 0) return;
+    const next = offset > 0 ? leadingWidth : -trailingWidth;
+    if (next === offset) return;
+    setOffset(next);
+    if (next === 0) onOpenChange(false);
+  }, [leadingWidth, trailingWidth]);
 
   const clearPress = () => {
     if (pressTimer.current) clearTimeout(pressTimer.current);
@@ -110,6 +121,12 @@ export function SwipeRow({
         // A tap on an open row, or the click ending a long press or a swipe,
         // only closes the row. Taps on the revealed actions go through.
         if (!(event.target as Element).closest(".swipe-front")) return;
+        // Keyboard clicks are never part of a touch gesture.
+        if (event.detail === 0) {
+          swallowClick.current = false;
+          if (offset !== 0) settle(0);
+          return;
+        }
         if (swallowClick.current || offset !== 0) {
           event.preventDefault();
           event.stopPropagation();
@@ -161,11 +178,19 @@ export function SwipeRow({
       <div
         className="swipe-front"
         style={{ transform: offset ? `translateX(${offset}px)` : undefined }}
+        onKeyDown={() => {
+          // The context-menu key or Shift+F10 follows; it is not a touch.
+          lastPointer.current = "keyboard";
+        }}
         onContextMenu={(event) => {
           event.preventDefault();
           // A touch long press opens the action sheet (onLongPress) instead.
           if (lastPointer.current === "mouse")
             onMenu({ x: event.clientX, y: event.clientY });
+          else if (lastPointer.current === "keyboard") {
+            const box = (event.target as Element).getBoundingClientRect();
+            onMenu({ x: box.left, y: box.bottom });
+          }
         }}
         onPointerDown={(event) => {
           // A swallowed click belongs to the previous gesture only.
@@ -225,7 +250,8 @@ export function SwipeRow({
           if (layout.full && at <= -FULL) return run(layout.full);
           // A quick flick opens the side it moves into, or closes the row
           // when it flicks back past the resting point.
-          if (Math.abs(g.velocity) > FLICK) {
+          const moving = event.timeStamp - g.lastTime < FLICK_EXPIRES;
+          if (moving && Math.abs(g.velocity) > FLICK) {
             if (g.velocity < 0)
               return settle(at < 0 && trailingWidth ? -trailingWidth : 0);
             return settle(at > 0 && leadingWidth ? leadingWidth : 0);

@@ -64,35 +64,41 @@ const printStyle = `
  */
 export function printNote(title: string, doc: string): boolean {
   if ((navigator as { standalone?: boolean }).standalone) return false;
+  // Validate before adding anything to the page; a bad document throws here.
+  const content = parseStoredDoc(doc).content;
   const frame = document.createElement("iframe");
   frame.setAttribute("aria-hidden", "true");
   frame.style.cssText =
     "position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;opacity:0";
   document.body.append(frame);
-  const target = frame.contentWindow;
-  if (!target) {
+  try {
+    const target = frame.contentWindow;
+    if (!target) {
+      frame.remove();
+      return false;
+    }
+    const page = target.document;
+    page.open();
+    page.write(
+      "<!doctype html><html><head><meta charset='utf-8'></head><body></body></html>",
+    );
+    page.close();
+    page.title = title;
+    const style = page.createElement("style");
+    style.textContent = printStyle;
+    page.head.append(style);
+    page.body.append(
+      DOMSerializer.fromSchema(notesSchema).serializeFragment(content, {
+        document: page,
+      }),
+    );
+    target.addEventListener("afterprint", () => frame.remove());
+    setTimeout(() => frame.remove(), 120_000);
+    target.focus();
+    target.print();
+    return true;
+  } catch (failure) {
     frame.remove();
-    return false;
+    throw failure;
   }
-  const page = target.document;
-  page.open();
-  page.write(
-    "<!doctype html><html><head><meta charset='utf-8'></head><body></body></html>",
-  );
-  page.close();
-  page.title = title;
-  const style = page.createElement("style");
-  style.textContent = printStyle;
-  page.head.append(style);
-  page.body.append(
-    DOMSerializer.fromSchema(notesSchema).serializeFragment(
-      parseStoredDoc(doc).content,
-      { document: page },
-    ),
-  );
-  target.addEventListener("afterprint", () => frame.remove());
-  setTimeout(() => frame.remove(), 120_000);
-  target.focus();
-  target.print();
-  return true;
 }

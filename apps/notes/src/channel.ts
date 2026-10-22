@@ -113,6 +113,16 @@ export class NoteChannel implements EditorBinding {
     return !this.blocked && (!this.created || this.caughtUp);
   }
 
+  /** What the editor shows now, including typing not yet saved anywhere. */
+  current(): { document: string; text: string } | null {
+    const doc = this.view?.state.doc;
+    if (!doc) return null;
+    return {
+      document: JSON.stringify(doc.toJSON()),
+      text: doc.textBetween(0, doc.content.size, "\n"),
+    };
+  }
+
   attach(view: EditorView) {
     this.view = view;
     if (this.transport) this.start();

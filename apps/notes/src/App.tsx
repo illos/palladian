@@ -67,8 +67,11 @@ type Dialog =
 /** A note's actions menu: the long-press sheet, row menu or "…" menu. */
 interface Menu {
   target: NoteTarget;
+  /** A row in the list, or the open note's toolbar. */
+  source: "row" | "open";
   actions: ActionId[];
   anchor: { x: number; y: number } | null;
+  only?: ((action: ActionId) => boolean) | undefined;
 }
 interface NoteTarget extends ActionTarget {
   accountId: string;
@@ -752,19 +755,42 @@ export function App({
 
   function openMenu(
     target: NoteTarget,
+    source: Menu["source"],
     anchor: { x: number; y: number } | null,
     only?: (action: ActionId) => boolean,
   ) {
     const actions = noteActions(target, liveReady).filter(
       (action) => !only || only(action),
     );
-    if (actions.length) setMenu({ target, actions, anchor });
+    if (actions.length) setMenu({ target, source, actions, anchor, only });
   }
 
-  /** The note's stored document, from the open editor, the cache or the server. */
+  /**
+   * The note as it is now, from its row or the open note: roles, Trash and
+   * the connection can change while a menu is open or a swipe rests open.
+   */
+  function currentTarget(
+    id: string,
+    source: Menu["source"] = "row",
+  ): NoteTarget | null {
+    const row = rows.find((r) => r.accountId === accountId && r.id === id);
+    if (source === "row" && row) return targetOf(row);
+    return openTarget?.id === id ? openTarget : row ? targetOf(row) : null;
+  }
+
+  /** What the open note's editor shows now, including unsaved typing. */
+  function openContent(): { document: string; text: string } | null {
+    const shown = openRef.current;
+    if (!shown) return null;
+    return (
+      shown.channel?.current() ?? { document: shown.document, text: shown.text }
+    );
+  }
+
+  /** The note's document, from the open editor, the cache or the server. */
   async function documentOf(target: NoteTarget): Promise<string | null> {
     const shown = openRef.current;
-    if (shown?.id === target.id) return shown.document;
+    if (shown?.id === target.id) return openContent()!.document;
     const body = await store.read(target.accountId, target.id);
     if (body) return body.document;
     if (!live || !liveReady) return null;
@@ -779,9 +805,31 @@ export function App({
     );
   }
 
-  async function runAction(action: ActionId, target: NoteTarget) {
+  async function runAction(
+    action: ActionId,
+    target: NoteTarget,
+    source: Menu["source"] = "row",
+  ) {
     setOpenSwipe(null);
-    const shown = openRef.current?.id === target.id;
+    // Act only if the note still offers this action to this person now.
+    const now = currentTarget(target.id, source);
+    if (
+      !now ||
+      now.accountId !== accountId ||
+      !noteActions(now, liveReady).includes(action)
+    )
+      return toast("That action is no longer available for this note.");
+    target = now;
+    // The open note this action applies to, if any. Others may open while it
+    // runs; only this one is closed.
+    const shownKey =
+      openRef.current?.id === target.id ? openRef.current.key : null;
+    const closeShown = () => {
+      if (shownKey && openRef.current?.key === shownKey) {
+        openRef.current.channel?.close();
+        closeOpen();
+      }
+    };
     try {
       switch (action) {
         case "share":
@@ -789,8 +837,8 @@ export function App({
         case "move":
           return setDialog({ kind: "move", noteId: target.id });
         case "info": {
-          const text = shown
-            ? openRef.current!.text
+          const text = shownKey
+            ? openContent()?.text
             : (await store.read(target.accountId, target.id))?.text;
           return setDialog({
             kind: "info",
@@ -830,8 +878,10 @@ export function App({
         }
         case "trash": {
           if (!live) return;
+          // Close the open note first: closing journals its latest typing
+          // while the note can still be saved, and stops further edits.
+          closeShown();
           await live.trash(target.id, true);
-          if (shown) closeOpen();
           return toast("Moved to Trash", {
             label: "Undo",
             run: () =>
@@ -843,9 +893,9 @@ export function App({
         case "restore": {
           if (!live) return;
           await live.trash(target.id, false);
-          if (shown)
+          if (shownKey)
             setOpen((prev) =>
-              prev?.id === target.id ? { ...prev, trashed: false } : prev,
+              prev?.key === shownKey ? { ...prev, trashed: false } : prev,
             );
           return toast("Restored");
         }
@@ -858,7 +908,7 @@ export function App({
           )
             return;
           await live.deleteForever(target.id);
-          if (shown) closeOpen();
+          closeShown();
           return toast("Deleted forever");
         }
       }
@@ -883,7 +933,10 @@ export function App({
       try {
         await live.deleteForever(target.id);
         deleted++;
-        if (openRef.current?.id === target.id) closeOpen();
+        if (openRef.current?.id === target.id) {
+          openRef.current.channel?.close();
+          closeOpen();
+        }
       } catch {
         // Counted below; the rest still go.
       }
@@ -956,6 +1009,18 @@ export function App({
       })
     : null;
   const openActions = openTarget ? noteActions(openTarget, liveReady) : [];
+  // An open menu closes if the note's actions change under it (a role or
+  // Trash change, the connection), rather than offering stale ones.
+  const menuNow = menu ? currentTarget(menu.target.id, menu.source) : null;
+  const menuStale =
+    !!menu &&
+    (!menuNow ||
+      noteActions(menuNow, liveReady)
+        .filter((action) => !menu.only || menu.only(action))
+        .join() !== menu.actions.join());
+  useEffect(() => {
+    if (menuStale) setMenu(null);
+  }, [menuStale]);
   const ownTrash =
     section.kind === "trash"
       ? sectionRows.filter((row) => row.role === "owner").map(targetOf)
@@ -1208,9 +1273,11 @@ export function App({
             aria-label="Cached notes"
             onScroll={(event) => {
               const list = event.currentTarget;
+              // Only ever grows: a scroll event while the list is briefly
+              // empty (switching lists) once set it to 0, hiding every row.
               if (list.scrollHeight - list.scrollTop - list.clientHeight < 200)
                 setRowLimit((limit) =>
-                  Math.min(visibleRows.length, limit + 60),
+                  Math.max(limit, Math.min(visibleRows.length, limit + 60)),
                 );
             }}
           >
@@ -1234,8 +1301,8 @@ export function App({
                       )
                     }
                     onAction={(action) => void runAction(action, target)}
-                    onLongPress={() => openMenu(target, null)}
-                    onMenu={(anchor) => openMenu(target, anchor)}
+                    onLongPress={() => openMenu(target, "row", null)}
+                    onMenu={(anchor) => openMenu(target, "row", anchor)}
                   >
                     <button
                       className={
@@ -1289,7 +1356,10 @@ export function App({
                       title="Actions"
                       onClick={(event) => {
                         const box = event.currentTarget.getBoundingClientRect();
-                        openMenu(target, { x: box.left, y: box.bottom });
+                        openMenu(target, "row", {
+                          x: box.left,
+                          y: box.bottom,
+                        });
                       }}
                     >
                       <Icon name="more" size={18} />
@@ -1456,7 +1526,9 @@ export function App({
                             toolbarLabels[action] ?? actionLabels[action]
                           }
                           title={toolbarLabels[action] ?? actionLabels[action]}
-                          onClick={() => void runAction(action, openTarget!)}
+                          onClick={() =>
+                            void runAction(action, openTarget!, "open")
+                          }
                         >
                           <Icon name={actionIcons[action]} size={18} />
                         </button>
@@ -1469,6 +1541,7 @@ export function App({
                         const box = event.currentTarget.getBoundingClientRect();
                         openMenu(
                           openTarget!,
+                          "open",
                           { x: box.right - 230, y: box.bottom + 4 },
                           // Wide screens show the main actions as buttons.
                           phone
@@ -1598,13 +1671,13 @@ export function App({
           </Suspense>
         </PanelBoundary>
       )}
-      {menu && (
+      {menu && !menuStale && (
         <ActionMenu
           title={menu.target.title}
           actions={menu.actions}
           anchor={menu.anchor}
           sheet={phone || menu.anchor === null}
-          onPick={(action) => void runAction(action, menu.target)}
+          onPick={(action) => void runAction(action, menu.target, menu.source)}
           onClose={() => setMenu(null)}
         />
       )}

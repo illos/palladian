@@ -116,6 +116,16 @@ async function fingers(page) {
       await page.waitForTimeout(650);
       await send("touchEnd", x, y);
     },
+    /** Move quickly, then stop and hold before lifting: not a flick. */
+    async dragAndHold(x, y, dx, ms) {
+      await send("touchStart", x, y);
+      for (let i = 1; i <= 4; i++) {
+        await send("touchMove", x + (dx * i) / 4, y);
+        await page.waitForTimeout(10);
+      }
+      await page.waitForTimeout(ms);
+      await send("touchEnd", x + dx, y);
+    },
     async swipe(x, y, dx) {
       await send("touchStart", x, y);
       for (let i = 1; i <= 12; i++) {
@@ -161,10 +171,13 @@ try {
   const archive = await convex(page, "mutation", "notebooks:create", {
     name: "Archive",
   });
+  const ids = {};
   for (const title of ["Alpha", "Bravo", "Charlie", "Delta", "Echo"])
-    await convex(page, "mutation", "notes:createFromMarkdown", {
-      markdown: `${title}\n\nSome words about ${title.toLowerCase()}.`,
-    });
+    ids[title] = (
+      await convex(page, "mutation", "notes:createFromMarkdown", {
+        markdown: `${title}\n\nSome words about ${title.toLowerCase()}.`,
+      })
+    ).noteId;
   const row = (name) =>
     page.getByRole("button", { name: new RegExp(`^${name}\\b`) }).first();
   await expect(row("Echo")).toBeVisible({ timeout: 20_000 });
@@ -200,6 +213,64 @@ try {
   await expect(info.locator("dd").filter({ hasText: /^5$/ })).toHaveCount(1);
   await info.getByRole("button", { name: "Done" }).click();
   step("Info shows the dates, owner and word count");
+
+  // The open note's actions use what its editor shows now, including typing
+  // not yet saved (review F1).
+  const editor = page.getByRole("textbox", { name: "Note content" });
+  await editor.click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type(" Fresh words.");
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page
+    .getByRole("dialog", { name: /^Actions for/ })
+    .getByRole("menuitem", { name: "Duplicate" })
+    .click();
+  await expect(page.getByText("Duplicated")).toBeVisible();
+  const original = new URL(page.url()).pathname;
+  await page.locator(".toast").getByRole("button", { name: "Open" }).click();
+  // The copy is open, not the original.
+  await page.waitForURL(
+    (url) => url.pathname.startsWith("/notes/") && url.pathname !== original,
+    { timeout: 20_000 },
+  );
+  await expect(editor).toContainText("Fresh words", { timeout: 20_000 });
+  step("Duplicate copies the open note's current text, including new typing");
+
+  // Trashing the open note keeps what was typed just before (review F2).
+  await expect(page.locator(".toast")).toHaveCount(0, { timeout: 8_000 });
+  await row("Echo").click();
+  await expect(editor).toContainText("Some words about echo", {
+    timeout: 20_000,
+  });
+  // Typing starts once the note has caught up with the server.
+  await expect(editor).toHaveAttribute("contenteditable", "true", {
+    timeout: 20_000,
+  });
+  await editor.click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type(" Last words.");
+  await page.getByRole("button", { name: "Move note to Trash" }).click();
+  await expect(page.getByText("Moved to Trash")).toBeVisible();
+  await expect(editor).toBeHidden();
+  await page.locator(".toast").getByRole("button", { name: "Undo" }).click();
+  await expect(
+    page.locator(".note-row", { hasText: "Echo" }).first(),
+  ).not.toContainText("In Trash", { timeout: 20_000 });
+  await row("Echo").click();
+  await expect(editor).toContainText("Last words", { timeout: 20_000 });
+  step("trashing the open note keeps its latest typing; Undo, and it is there");
+
+  // A menu closes when the note's actions change under it (review F4).
+  await row("Delta").click({ button: "right" });
+  const deltaMenu = page.getByRole("dialog", { name: "Actions for Delta" });
+  await expect(deltaMenu).toBeVisible();
+  await convex(page, "mutation", "notes:trash", { noteId: ids.Delta });
+  await expect(deltaMenu).toBeHidden({ timeout: 20_000 });
+  await convex(page, "mutation", "notes:restore", { noteId: ids.Delta });
+  await expect(
+    page.locator(".note-row", { hasText: "Delta" }).first(),
+  ).not.toContainText("In Trash", { timeout: 20_000 });
+  step("an open menu closes when the note moves to Trash elsewhere");
 
   await row("Bravo").hover();
   await page
@@ -321,6 +392,10 @@ try {
 
   // Toasts sit over the bottom of the list until they time out.
   await expect(phone.locator(".toast")).toHaveCount(0, { timeout: 8_000 });
+  // Clear of the bottom bar, which a press there would hit instead.
+  await phoneRow("Bravo").evaluate((row) =>
+    row.scrollIntoView({ block: "center" }),
+  );
   at = await center(phoneRow("Bravo"));
   await touch.longPress(at.x, at.y);
   if (
@@ -346,6 +421,34 @@ try {
     timeout: 20_000,
   });
   step("phone: long press → Move to Trash; in Trash a right swipe restores");
+
+  await phone.getByRole("button", { name: "Open navigation" }).first().click();
+  await phone.getByRole("button", { name: "All Notes" }).click();
+  at = await center(phoneRow("Charlie"));
+  await touch.dragAndHold(at.x, at.y, -40, 1000);
+  await expect(phone.locator(".swipe-actions")).toHaveCount(0);
+  step("phone: a short drag held still before release does not open the row");
+
+  // The row resting open follows its actions when they change (review F6).
+  at = await center(phoneRow("Charlie"));
+  await touch.swipe(at.x, at.y, -120);
+  const trailing = phone.locator(".swipe-actions.trailing");
+  await expect(trailing.getByRole("button", { name: "Move" })).toBeVisible();
+  await convex(page, "mutation", "notes:trash", { noteId: ids.Charlie });
+  await expect(trailing.getByRole("button", { name: "Move" })).toHaveCount(0, {
+    timeout: 20_000,
+  });
+  await expect(trailing.getByRole("button")).toHaveText(["Delete"]);
+  await convex(page, "mutation", "notes:restore", { noteId: ids.Charlie });
+  step("phone: an open row shows the new actions when the note moves to Trash");
+} catch (failure) {
+  // A picture of each page at the failure, for the person debugging it.
+  for (const [i, open] of browser
+    .contexts()
+    .flatMap((c) => c.pages())
+    .entries())
+    await open.screenshot({ path: `/tmp/actions-e2e-failure-${i}.png` });
+  throw failure;
 } finally {
   await browser.close();
 }
