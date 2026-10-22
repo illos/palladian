@@ -72,7 +72,8 @@ export function serviceWorkerSource(version: string, assets: string[]): string {
 const ASSETS = ${JSON.stringify(assets)};
 self.addEventListener('install', event => event.waitUntil(caches.open(NAME).then(cache => cache.addAll(ASSETS))));
 self.addEventListener('message', event => { if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting(); });
-const cleanUp = () => self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(windows => windows.length > 1 ? undefined : caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('palladian-notes-shell-') && key !== NAME).map(key => caches.delete(key)))));
+// Only retired builds are removed: never while a newer one installs or waits, nor while another window may run an older one.
+const cleanUp = () => self.registration.installing || self.registration.waiting ? Promise.resolve() : self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(windows => windows.length > 1 ? undefined : caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('palladian-notes-shell-') && key !== NAME).map(key => caches.delete(key)))));
 self.addEventListener('activate', event => event.waitUntil(cleanUp().then(() => self.clients.claim())));
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);

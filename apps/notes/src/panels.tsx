@@ -9,6 +9,7 @@ import {
   ConvexProvider,
   useAction as useConvexAction,
   useMutation,
+  usePaginatedQuery,
   useQuery,
 } from "convex/react";
 import { api } from "@palladian/notes-backend/api";
@@ -1135,15 +1136,23 @@ function shortDate(timestamp: number) {
   });
 }
 
+/** Calls to "sign out all other devices" before reporting it unfinished. */
+const REVOKE_CALLS = 200;
+
 /** Devices signed in to this account, listed by ID; tokens stay on the server. */
 function DevicesSection() {
-  const listed = useQuery(api.devices.list, {});
-  const devices = listed?.devices;
+  const {
+    results: devices,
+    status,
+    loadMore,
+  } = usePaginatedQuery(api.devices.list, {}, { initialNumItems: 50 });
   const revoke = useMutation(api.devices.revoke);
   const revokeOthers = useMutation(api.devices.revokeOthers);
   const { error, busy, run } = useAction();
   const [confirming, setConfirming] = useState<string | null>(null);
-  const others = devices?.filter((device) => !device.current) ?? [];
+  const [notice, setNotice] = useState<string | null>(null);
+  const others = devices.filter((device) => !device.current);
+  const complete = status === "Exhausted";
   return (
     <section className="member-list security-section devices-section">
       <h3>Signed-in devices</h3>
@@ -1151,9 +1160,9 @@ function DevicesSection() {
         Signing a device out ends its session at once. It keeps the notes it
         already downloaded and asks to sign in again before it can sync.
       </p>
-      {devices === undefined && <p>Loading…</p>}
+      {status === "LoadingFirstPage" && <p>Loading…</p>}
       <ul>
-        {devices?.map((device) => (
+        {devices.map((device) => (
           <li key={device.id}>
             <span>
               <strong>
@@ -1202,10 +1211,16 @@ function DevicesSection() {
           </li>
         ))}
       </ul>
-      {listed?.more && (
-        <p className="muted">Showing the {devices?.length} most recent.</p>
+      {status === "CanLoadMore" && (
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => loadMore(50)}
+        >
+          Show more devices
+        </button>
       )}
-      {others.length > 1 &&
+      {(others.length > 1 || (!complete && status !== "LoadingFirstPage")) &&
         (confirming === "others" ? (
           <span className="button-row">
             <button
@@ -1214,13 +1229,33 @@ function DevicesSection() {
               disabled={busy}
               onClick={() =>
                 void run(async () => {
-                  // The server signs devices out in batches.
-                  for (let batch = 0; batch < 50; batch++)
-                    if ((await revokeOthers({})).done) return;
-                }).then(() => setConfirming(null))
+                  setNotice(null);
+                  // The server signs devices out in batches; only `done`
+                  // means every other device is signed out.
+                  let signedOut = 0;
+                  for (let call = 0; call < REVOKE_CALLS; call++) {
+                    const batch = await revokeOthers({});
+                    signedOut += batch.revoked;
+                    if (batch.done) {
+                      setNotice(
+                        signedOut === 1
+                          ? "Signed out 1 other device."
+                          : `Signed out ${signedOut} other devices.`,
+                      );
+                      setConfirming(null);
+                      return;
+                    }
+                  }
+                  setNotice(
+                    `Signed out ${signedOut} devices so far, but not all of them yet. Choose Sign out all other devices again to continue.`,
+                  );
+                  setConfirming(null);
+                })
               }
             >
-              Sign out {listed?.more ? "all other" : others.length} devices
+              {complete
+                ? `Sign out ${others.length} devices`
+                : "Sign out all other devices"}
             </button>
             <button
               type="button"
@@ -1240,6 +1275,7 @@ function DevicesSection() {
             Sign out all other devices…
           </button>
         ))}
+      {notice && <p role="status">{notice}</p>}
       {error && (
         <p role="alert" className="error">
           {error}

@@ -61,6 +61,53 @@ async function setUserAgent(t: T, id: string, userAgent: string) {
   );
 }
 
+type Caller = { query: T["query"] };
+/** Every device the caller can list, page by page. */
+async function devicesOf(caller: Caller, numItems = 100) {
+  type Device = (typeof api.devices.list)["_returnType"]["page"][number];
+  const all: Device[] = [];
+  let cursor: string | null = null;
+  for (let pages = 0; pages < 50; pages++) {
+    const result: { page: Device[]; isDone: boolean; continueCursor: string } =
+      await caller.query(api.devices.list, {
+        paginationOpts: { numItems, cursor },
+      });
+    all.push(...result.page);
+    if (result.isDone) return all;
+    cursor = result.continueCursor;
+  }
+  throw new Error("too many pages");
+}
+const firstPage = (caller: Caller, numItems = 50) =>
+  caller.query(api.devices.list, {
+    paginationOpts: { numItems, cursor: null },
+  });
+
+/** Many sessions for a user, created after everything else so far. */
+async function bulkSessions(
+  t: T,
+  userId: string,
+  count: number,
+  expired: (i: number) => boolean,
+) {
+  const now = Date.now();
+  await t.run(async (ctx) => {
+    for (let i = 0; i < count; i++)
+      await ctx.runMutation(components.betterAuth.adapter.create, {
+        input: {
+          model: "session",
+          data: {
+            userId,
+            token: `bulk-${userId}-${i}`.padEnd(40, "x"),
+            expiresAt: expired(i) ? now - 1000 : now + 86_400_000,
+            createdAt: now + i,
+            updatedAt: now + i,
+          },
+        },
+      });
+  });
+}
+
 /** Ada signed in on a phone and a laptop, acting from the laptop. */
 async function twoDevices(t: T) {
   const person = await account(t, "ada@example.com", OLD);
@@ -92,7 +139,7 @@ describe("devices", () => {
   test("lists signed-in devices by label and dates, this device first, without tokens", async () => {
     const t = setup();
     const { as, phoneRow, laptopRow } = await twoDevices(t);
-    const list = (await as.query(api.devices.list, {})).devices;
+    const list = await devicesOf(as);
     expect(list[0]).toMatchObject({
       id: laptopRow._id,
       label: "Mac · Safari",
@@ -119,7 +166,7 @@ describe("devices", () => {
     await as.mutation(api.devices.revoke, { id: phoneRow._id });
     expect(await sessionValid(t, phone)).toBe(false);
     expect(await sessionValid(t, laptop)).toBe(true);
-    const list = (await as.query(api.devices.list, {})).devices;
+    const list = await devicesOf(as);
     expect(list.some((row) => row.id === phoneRow._id)).toBe(false);
     // The phone's Convex calls stop at once: its session no longer exists.
     const phoneAs = t.withIdentity({
@@ -152,7 +199,7 @@ describe("devices", () => {
     });
     expect(await sessionValid(t, phone)).toBe(false);
     expect(await sessionValid(t, laptop)).toBe(true);
-    expect((await as.query(api.devices.list, {})).devices).toHaveLength(1);
+    expect(await devicesOf(as)).toHaveLength(1);
   });
 
   test("nobody can list or end another person's devices", async () => {
@@ -166,7 +213,7 @@ describe("devices", () => {
       sessionId: beaRow._id,
       issuer: SITE,
     });
-    const list = (await asBea.query(api.devices.list, {})).devices;
+    const list = await devicesOf(asBea);
     expect(list.some((row) => row.id === phoneRow._id)).toBe(false);
     await expect(
       asBea.mutation(api.devices.revoke, { id: phoneRow._id }),
@@ -216,7 +263,7 @@ describe("devices", () => {
       caller: ReturnType<T["withIdentity"]> | T,
       pattern: RegExp,
     ) => {
-      await expect(caller.query(api.devices.list, {})).rejects.toThrow(pattern);
+      await expect(firstPage(caller)).rejects.toThrow(pattern);
       await expect(
         caller.mutation(api.devices.revoke, { id: phoneRow._id }),
       ).rejects.toThrow(pattern);
@@ -269,37 +316,25 @@ describe("devices", () => {
     await refused(asPhone, /Sign in/);
   });
 
-  test("many sessions: listing is bounded and other devices sign out in batches", async () => {
+  test("many sessions: listing pages through them and other devices sign out in batches", async () => {
     const t = setup();
-    const { as, person, laptopRow, laptop } = await twoDevices(t);
+    const { as, person, laptopRow, laptop, phoneRow } = await twoDevices(t);
     const userId = person.authUserId!;
-    const now = Date.now();
-    await t.run(async (ctx) => {
-      for (let i = 0; i < 160; i++)
-        await ctx.runMutation(components.betterAuth.adapter.create, {
-          input: {
-            model: "session",
-            data: {
-              userId,
-              token: `bulk-${i}`.padEnd(32, "x"),
-              // Every fourth one has already expired.
-              expiresAt: i % 4 === 0 ? now - 1000 : now + 86_400_000,
-              createdAt: now - 10_000 + i,
-              updatedAt: now - 10_000 + i,
-            },
-          },
-        });
-    });
-    const first = await as.query(api.devices.list, {});
-    expect(first.devices.length).toBeLessThanOrEqual(51);
-    expect(first.more).toBe(true);
-    expect(first.devices[0]).toMatchObject({
-      id: laptopRow._id,
-      current: true,
-    });
+    // Every fourth one has already expired.
+    await bulkSessions(t, userId, 160, (i) => i % 4 === 0);
+    const first = await firstPage(as);
+    expect(first.isDone).toBe(false);
+    expect(first.page[0]).toMatchObject({ id: laptopRow._id, current: true });
     const live = (await sessions(t, userId)).filter(
       (row) => row.expiresAt > Date.now(),
-    ).length;
+    );
+    const listed = await devicesOf(as, 40);
+    // Every live device once, this one first, none expired.
+    expect(listed.map((row) => row.id).sort()).toEqual(
+      live.map((row) => row._id).sort(),
+    );
+    expect(listed.filter((row) => row.current)).toHaveLength(1);
+    expect(listed.some((row) => row.id === phoneRow._id)).toBe(true);
     let revoked = 0;
     let calls = 0;
     for (;;) {
@@ -311,16 +346,40 @@ describe("devices", () => {
     }
     expect(calls).toBeGreaterThan(1);
     // Every other live session was counted once; expired ones were removed too.
-    expect(revoked).toBe(live - 1);
+    expect(revoked).toBe(live.length - 1);
     expect((await sessions(t, userId)).map((row) => row._id)).toEqual([
       laptopRow._id,
     ]);
     expect(await sessionValid(t, laptop)).toBe(true);
-    const after = await as.query(api.devices.list, {});
-    expect(after).toEqual({
-      devices: [expect.objectContaining({ id: laptopRow._id, current: true })],
-      more: false,
+    expect(await firstPage(as)).toEqual({
+      page: [expect.objectContaining({ id: laptopRow._id, current: true })],
+      isDone: true,
+      continueCursor: expect.any(String),
     });
+  });
+
+  test("other people's sessions never crowd a person's devices out of the list", async () => {
+    const t = setup();
+    const { as, phoneRow, laptopRow } = await twoDevices(t);
+    const bea = await account(t, "bea@example.com", OLD);
+    await bulkSessions(t, bea.authUserId!, 220, () => false);
+    const first = await firstPage(as);
+    expect(first.isDone).toBe(true);
+    expect(first.page.map((row) => row.id)).toEqual([
+      laptopRow._id,
+      phoneRow._id,
+    ]);
+  });
+
+  test("a long expired history ahead of a live device does not hide it", async () => {
+    const t = setup();
+    const { as, person, phoneRow } = await twoDevices(t);
+    await bulkSessions(t, person.authUserId!, 150, () => true);
+    // The first page may hold only expired sessions besides this device;
+    // the next pages reach the phone.
+    const listed = await devicesOf(as, 50);
+    expect(listed.map((row) => row.id)).toContain(phoneRow._id);
+    expect(listed).toHaveLength(2);
   });
 
   test("device labels name the system and browser only", () => {

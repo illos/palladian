@@ -198,3 +198,65 @@ test("a note that finishes opening while Settings shows does not replace the Set
     page.getByRole("textbox", { name: "Note content" }),
   ).toContainText("Opening it does not need a session token");
 });
+
+test("a note still opening from Back does not pull the person out of Settings", async ({
+  page,
+}, info) => {
+  test.skip(info.project.name.includes("mobile"), "wide layout");
+  await seed(page);
+  await page.getByRole("button", { name: /Welcome to your notes/ }).click();
+  await expect(page).toHaveURL(/\/notes\/[A-Za-z0-9_-]+$/);
+  const noteUrl = page.url();
+  const notePath = new URL(noteUrl).pathname;
+  // Start again with no note open while the address names it.
+  await page.goto("/?fixture=1&session=stall");
+  await expect(
+    page.getByRole("button", { name: /Welcome to your notes/ }),
+  ).toBeVisible();
+  await page.evaluate((path) => {
+    history.replaceState(null, "", path);
+    type Harness = {
+      store: { read: (...args: unknown[]) => Promise<unknown> };
+    };
+    const harness = (window as unknown as { __notesHarness: Harness })
+      .__notesHarness;
+    const read = harness.store.read.bind(harness.store);
+    const held: (() => void)[] = [];
+    (window as unknown as { releaseReads: () => void }).releaseReads = () =>
+      held.splice(0).forEach((release) => release());
+    harness.store.read = (...args) =>
+      new Promise((resolve) => held.push(() => resolve(read(...args))));
+  }, notePath);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page).toHaveURL(/\/settings\/account$/);
+  // Back to the notes: the address names a note, so it starts opening (held).
+  await page.getByRole("button", { name: "Notes", exact: true }).click();
+  await expect(page).toHaveURL(noteUrl);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page).toHaveURL(/\/settings\/account$/);
+  // An ordinary library refresh must not resume the open over Settings.
+  await page.evaluate(() =>
+    (
+      window as unknown as {
+        __notesHarness: { store: { notify: () => void } };
+      }
+    ).__notesHarness.store.notify(),
+  );
+  await page.waitForTimeout(300);
+  await expect(
+    page.getByRole("heading", { name: "Account", exact: true }),
+  ).toBeVisible();
+  await page.evaluate(() =>
+    (window as unknown as { releaseReads: () => void }).releaseReads(),
+  );
+  await page.waitForTimeout(300);
+  await expect(page).toHaveURL(/\/settings\/account$/);
+  await expect(
+    page.getByRole("heading", { name: "Account", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Notes", exact: true }).click();
+  await expect(page).toHaveURL(noteUrl);
+  await expect(
+    page.getByRole("textbox", { name: "Note content" }),
+  ).toContainText("Opening it does not need a session token");
+});

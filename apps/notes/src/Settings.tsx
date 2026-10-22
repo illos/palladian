@@ -172,10 +172,17 @@ const outcomes: Record<UpdateOutcome, string> = {
   offline: "Connect to the internet to check for updates.",
   unsupported: "Updates install automatically in this browser.",
   unsaved:
-    "Your latest typing is not stored on this device yet, so Palladian has not reloaded. Try again in a moment; if this keeps happening, storage may be full, so copy your text somewhere safe first.",
+    "Your latest typing is not stored on this device yet, so Palladian has not updated. Try again in a moment; if this keeps happening, storage may be full, so copy your text somewhere safe first.",
+  installed:
+    "The update is installed. It starts the next time Palladian opens, so your open note is not interrupted.",
+  failed: "The update could not be installed. Try again later.",
 };
 
-export function About({ ready }: { ready: () => Promise<boolean> }) {
+export function About({
+  ready,
+}: {
+  ready: (stage: "activate" | "reload") => Promise<boolean>;
+}) {
   const [state, setState] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [waiting, setWaiting] = useState(false);
@@ -221,6 +228,7 @@ export function About({ ready }: { ready: () => Promise<boolean> }) {
               .then((outcome) => {
                 setState(outcomes[outcome]);
                 if (outcome !== "updating") setChecking(false);
+                if (outcome === "installed") setWaiting(false);
               })
               .catch(() => {
                 setState(outcomes.offline);

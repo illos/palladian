@@ -389,17 +389,18 @@ export function App({
   }, [liveReady, live, query, accountId, snapshot.generation, store]);
 
   // A deep link opens its note once the library knows about it. Startup session
-  // fences can discard an attempt, so keep trying until a note is shown.
+  // fences can discard an attempt, so keep trying until a note is shown. Not
+  // while Settings shows: opening a note would leave it; Back resumes it.
   useEffect(() => {
     const id = pendingRoute.current;
-    if (!id || !permitted) return;
+    if (!id || !permitted || view !== "notes") return;
     const row = rows.find((r) => r.id === id);
     if (row) void selectNote(row);
     else if (liveReady) {
       pendingRoute.current = null;
       void openRemote(id);
     }
-  }, [rows, permitted, liveReady, snapshot.generation, routeTick]);
+  }, [rows, permitted, liveReady, snapshot.generation, routeTick, view]);
 
   /** Address the notes view, unless Settings is showing (see deferredNotesPath). */
   function writeNotesPath(path: string) {
@@ -796,13 +797,18 @@ export function App({
     history.replaceState(null, "", path);
     setView("notes");
   }
-  /** Update now reloads only once everything typed is stored on the device. */
-  async function readyToUpdate() {
+  /**
+   * Update now reloads only once everything typed is stored on the device.
+   * Before the new build activates, the open note is closed: its editor hands
+   * pending typing to the recovery journal at once, and nothing more can be
+   * typed here. Just before the reload it checks again, and holds the reload
+   * if a note has been opened since.
+   */
+  async function readyToUpdate(stage: "activate" | "reload") {
+    if (stage === "activate") closeOpen();
+    else if (openRef.current) return false;
     const id = snapshotRef.current.accountId;
-    if (!id) return true;
-    // Typing reaches the recovery journal after a short pause; let it land.
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    return !(await store.hasUndurableWork(id));
+    return !id || !(await store.hasUndurableWork(id));
   }
   function choose(next: Section) {
     setSection(next);

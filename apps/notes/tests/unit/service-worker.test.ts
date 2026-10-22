@@ -11,7 +11,12 @@ function run(
 ) {
   const listeners: Record<string, Listener> = {};
   const state = { windows: 1 };
+  const registration: { installing: unknown; waiting: unknown } = {
+    installing: null,
+    waiting: null,
+  };
   const self = {
+    registration,
     addEventListener: (type: string, listener: Listener) => {
       listeners[type] = listener;
     },
@@ -70,7 +75,7 @@ function run(
         headers: new Headers(),
       },
     });
-  return { self, state, dispatch, get };
+  return { self, state, registration, dispatch, get };
 }
 
 const OLD = "palladian-notes-shell-old";
@@ -111,6 +116,33 @@ describe("service worker updates", () => {
     await worker.dispatch("install");
     await worker.dispatch("activate");
     expect([...caches.keys()]).toEqual([NEW]);
+  });
+
+  test("a waiting build keeps its files while the current one serves page loads", async () => {
+    const caches = new Map<string, Map<string, string>>();
+    const current = run("old", ["/", "/assets/old.js"], caches);
+    await current.dispatch("install");
+    await current.dispatch("activate");
+    const next = run("new", ["/", "/assets/new.js"], caches);
+    await next.dispatch("install");
+    // The new build waits; the current one keeps loading pages meanwhile.
+    current.registration.waiting = {};
+    await current.get("/", "navigate");
+    expect([...caches.keys()].sort()).toEqual([NEW, OLD]);
+    // Activated with one window left, the new build has its own files and
+    // retires the old ones.
+    await next.dispatch("activate");
+    expect([...caches.keys()]).toEqual([NEW]);
+    expect(await next.get("/assets/new.js")).toBe(NEW + "/assets/new.js");
+  });
+
+  test("an installing build keeps its files too", async () => {
+    const caches = new Map([[NEW, new Map([["/", "new shell"]])]]);
+    const current = run("old", ["/"], caches);
+    await current.dispatch("install");
+    current.registration.installing = {};
+    await current.get("/", "navigate");
+    expect(caches.has(NEW)).toBe(true);
   });
 
   test("note and Settings links open the cached shell", async () => {

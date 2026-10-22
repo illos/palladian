@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { components } from "./_generated/api";
+import { paginationOptsValidator } from "convex/server";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { fail, requireHuman, type Principal } from "./access";
@@ -28,8 +29,8 @@ interface SessionRow {
   userAgent?: string | null;
 }
 
-/** Devices listed at once, newest sign-ins first; this device is always shown. */
-const LIST_LIMIT = 50;
+/** Sessions examined by one list page. */
+const PAGE_LIMIT = 100;
 /** Sessions examined by one "sign out all other devices" call. */
 const BATCH = 100;
 
@@ -79,44 +80,58 @@ export function deviceLabel(userAgent: string | null | undefined): string {
   return [system, browser].filter(Boolean).join(" · ");
 }
 
+/**
+ * One page of the person's devices, newest sign-ins first, read through the
+ * session table's `userId` index so other people's sessions are never read.
+ * Expired sessions are skipped within the page. The first page puts this
+ * device first, even when it signed in long ago; later pages leave it out.
+ */
 export const list = query({
-  args: {},
-  returns: v.object({ devices: v.array(device), more: v.boolean() }),
-  handler: async (ctx) => {
+  args: { paginationOpts: paginationOptsValidator },
+  returns: v.object({
+    page: v.array(device),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
+  handler: async (ctx, args) => {
     const userId = authUser(await requireHuman(ctx));
     const current = await currentSession(ctx);
     const now = Date.now();
+    const first = args.paginationOpts.cursor === null;
     const result = (await ctx.runQuery(components.betterAuth.adapter.findMany, {
       model: "session",
-      where: [
-        { field: "userId", value: userId },
-        { field: "expiresAt", operator: "gt", value: now },
-      ],
+      where: [{ field: "userId", value: userId }],
       sortBy: { field: "createdAt", direction: "desc" },
-      paginationOpts: { numItems: LIST_LIMIT, cursor: null },
-    })) as { page: SessionRow[]; isDone: boolean };
-    const rows = [...result.page];
-    if (current && !rows.some((row) => row._id === current)) {
+      paginationOpts: {
+        cursor: args.paginationOpts.cursor,
+        numItems: Math.min(
+          Math.max(args.paginationOpts.numItems, 1),
+          PAGE_LIMIT,
+        ),
+      },
+    })) as { page: SessionRow[]; isDone: boolean; continueCursor: string };
+    const rows = result.page.filter(
+      (row) => row.expiresAt > now && row._id !== current,
+    );
+    if (first && current) {
       const own = (await ctx.runQuery(components.betterAuth.adapter.findOne, {
         model: "session",
         where: [{ field: "_id", value: current }],
       })) as SessionRow | null;
-      if (own && own.userId === userId && own.expiresAt > now) rows.push(own);
+      if (own && own.userId === userId && own.expiresAt > now)
+        rows.unshift(own);
     }
-    const devices = rows
-      .sort(
-        (a, b) =>
-          Number(b._id === current) - Number(a._id === current) ||
-          b.updatedAt - a.updatedAt,
-      )
-      .map((row) => ({
+    return {
+      page: rows.map((row) => ({
         id: row._id,
         label: deviceLabel(row.userAgent),
         signedInAt: row.createdAt,
         lastActiveAt: row.updatedAt,
         current: row._id === current,
-      }));
-    return { devices, more: !result.isDone };
+      })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
   },
 });
 
