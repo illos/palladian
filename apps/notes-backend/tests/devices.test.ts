@@ -422,6 +422,75 @@ describe("devices", () => {
     expect(afterSignIn[0]).toBe(laptopRow._id);
   });
 
+  test("the app's pagination hook sees every device across large splits", async () => {
+    const t = setup();
+    const { as, person, laptopRow } = await twoDevices(t);
+    const userId = person.authUserId!;
+    await bulkSessions(t, userId, 60, () => false);
+    // Mirrors usePaginatedQuery from convex-helpers/react (0.1.124): pages
+    // are re-run as the data changes; a page reporting SplitRecommended or
+    // SplitRequired is replaced by two pages, start → splitCursor and
+    // splitCursor → its continueCursor; Show more pins the last page at its
+    // continueCursor and adds an unbounded page after it.
+    type Page = { cursor: string | null; endCursor?: string };
+    type Result = Awaited<ReturnType<typeof run>>;
+    const run = (page: Page) =>
+      as.query(api.devices.list, {
+        paginationOpts: { numItems: 50, ...page },
+      });
+    let pages: Page[] = [{ cursor: null }];
+    let results: Result[] = [];
+    async function settle() {
+      for (let rounds = 0; rounds < 100; rounds++) {
+        results = await Promise.all(pages.map(run));
+        const index = results.findIndex(
+          (result) =>
+            result.splitCursor &&
+            (result.pageStatus === "SplitRecommended" ||
+              result.pageStatus === "SplitRequired"),
+        );
+        if (index < 0) return;
+        const page = pages[index]!;
+        const result = results[index]!;
+        pages = [
+          ...pages.slice(0, index),
+          { ...page, endCursor: result.splitCursor! },
+          {
+            ...page,
+            cursor: result.splitCursor!,
+            endCursor: result.continueCursor,
+          },
+          ...pages.slice(index + 1),
+        ];
+      }
+      throw new Error("pages never settled");
+    }
+    async function loadAll() {
+      await settle();
+      while (!results.at(-1)!.isDone) {
+        const last = results.at(-1)!;
+        pages = [
+          ...pages.slice(0, -1),
+          { ...pages.at(-1)!, endCursor: last.continueCursor },
+          { cursor: last.continueCursor },
+        ];
+        await settle();
+      }
+    }
+    const shown = () => results.flatMap((result) => result.page);
+    await loadAll();
+    expect(shown()).toHaveLength(62);
+    // 250 devices sign in while those pages are loaded: the first page's
+    // range now holds more rows than one read may cover, so it splits.
+    await bulkSessions(t, userId, 250, () => false);
+    await settle();
+    const ids = shown().map((row) => row.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toHaveLength(312);
+    expect(ids[0]).toBe(laptopRow._id);
+    expect(shown().filter((row) => row.current)).toHaveLength(1);
+  });
+
   test("device labels name the system and browser only", () => {
     expect(deviceLabel(IPHONE_APP)).toBe("iPhone · Home Screen app");
     expect(deviceLabel(MAC_SAFARI)).toBe("Mac · Safari");

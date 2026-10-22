@@ -137,7 +137,11 @@ export const list = query({
         current: row._id === current,
       })),
       isDone: result.isDone,
-      continueCursor: result.continueCursor,
+      // A bounded page always ends at its requested end. When the read limit
+      // cuts it short (SplitRequired), the adapter reports where it stopped;
+      // the client then splits the page between its start and this end, so
+      // the rows after the cut are fetched rather than lost.
+      continueCursor: args.paginationOpts.endCursor ?? result.continueCursor,
       ...(result.splitCursor !== undefined
         ? { splitCursor: result.splitCursor }
         : {}),
