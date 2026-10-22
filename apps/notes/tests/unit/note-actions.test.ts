@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  isLocalNoteId,
   noteActions,
   swipeLayout,
   type ActionTarget,
@@ -84,5 +85,14 @@ describe("note actions", () => {
       trailing: [],
       full: null,
     });
+  });
+});
+
+describe("local notes", () => {
+  test("only notes not yet on the server count as local", () => {
+    expect(isLocalNoteId("local-0123abcd")).toBe(true);
+    expect(isLocalNoteId("0b6c7a52-1f0e-4b8e-9b55-3a3a6f1c2d4e")).toBe(true);
+    // A server note keeps its ID while it has unsent edits.
+    expect(isLocalNoteId("k57c9x1p2h3m4n5q6r7s8t9v0w1y2z3")).toBe(false);
   });
 });

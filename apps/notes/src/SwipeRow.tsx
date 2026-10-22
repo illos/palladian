@@ -265,7 +265,12 @@ export function SwipeRow({
           const g = gesture.current;
           gesture.current = null;
           setDragging(false);
-          if (g?.axis === "x") settle(g.start);
+          // Back to where the gesture started, as the actions are now: they
+          // may have changed during the gesture.
+          if (g?.axis === "x")
+            settle(
+              g.start > 0 ? leadingWidth : g.start < 0 ? -trailingWidth : 0,
+            );
         }}
       >
         {children}

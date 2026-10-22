@@ -272,6 +272,44 @@ try {
   ).not.toContainText("In Trash", { timeout: 20_000 });
   step("an open menu closes when the note moves to Trash elsewhere");
 
+  // The open note's toolbar and menu follow its current state (review R2-1).
+  await row("Delta").click();
+  await expect(editor).toContainText("Some words about delta", {
+    timeout: 20_000,
+  });
+  await page.getByRole("button", { name: "More actions" }).click();
+  const toolbarMenu = page.getByRole("dialog", { name: "Actions for Delta" });
+  await expect(toolbarMenu).toBeVisible();
+  await convex(page, "mutation", "notes:trash", { noteId: ids.Delta });
+  await expect(toolbarMenu).toBeHidden({ timeout: 20_000 });
+  await expect(page.getByRole("button", { name: "Restore note" })).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(
+    page.getByRole("button", { name: "Move note to Trash" }),
+  ).toHaveCount(0);
+  await convex(page, "mutation", "notes:restore", { noteId: ids.Delta });
+  await expect(
+    page.getByRole("button", { name: "Move note to Trash" }),
+  ).toBeVisible({ timeout: 20_000 });
+  step("the open note's toolbar and menu follow a Trash change made elsewhere");
+
+  // A note with unsent typing keeps its actions (review R2-2).
+  await row("Bravo").click();
+  await expect(editor).toHaveAttribute("contenteditable", "true", {
+    timeout: 20_000,
+  });
+  await editor.click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type(" More.");
+  await row("Bravo").click({ button: "right" });
+  const bravoMenu = page.getByRole("dialog", { name: "Actions for Bravo" });
+  await expect(
+    bravoMenu.getByRole("menuitem", { name: "Duplicate" }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  step("a note with typing not yet saved still offers its actions");
+
   await row("Bravo").hover();
   await page
     .locator(".note-row-wrap", { has: row("Bravo") })

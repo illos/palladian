@@ -25,6 +25,7 @@ import { SwipeRow, actionIcons } from "./SwipeRow";
 import { ToastHost, useToasts } from "./Toasts";
 import {
   actionLabels,
+  isLocalNoteId,
   noteActions,
   swipeLayout,
   type ActionId,
@@ -51,6 +52,8 @@ type OpenKind = "cached" | "draft" | "live" | "reader";
 interface OpenNote extends NoteBody {
   kind: OpenKind;
   key: string;
+  /** Counts each time a note is shown, so late results can tell openings apart. */
+  opening: number;
   generation: number;
   role: NoteRole | null;
   trashed: boolean;
@@ -238,6 +241,7 @@ export function App({
    */
   const deferredNotesPath = useRef<string | null>(null);
   const openKey = useRef<string | null>(null);
+  const openings = useRef(0);
   openKey.current = open?.key ?? null;
   const openRef = useRef(open);
   openRef.current = open;
@@ -481,12 +485,12 @@ export function App({
     writeNotesPath("/");
   }
 
-  function show(note: OpenNote) {
+  function show(note: Omit<OpenNote, "opening">) {
     pendingRoute.current = null;
     open?.channel?.close();
     setChannelStatus(null);
     openKey.current = note.key;
-    setOpen(note);
+    setOpen({ ...note, opening: ++openings.current });
     writeNotesPath(notePath(note));
   }
 
@@ -681,7 +685,7 @@ export function App({
       });
       return;
     }
-    const draft: OpenNote = {
+    const draft: Omit<OpenNote, "opening"> = {
       accountId,
       id: "local-" + randomId(),
       key: "",
@@ -699,7 +703,11 @@ export function App({
     await persistDraft(draft, draft.document, "");
   }
 
-  async function persistDraft(note: OpenNote, document: string, text: string) {
+  async function persistDraft(
+    note: Pick<OpenNote, "accountId" | "id">,
+    document: string,
+    text: string,
+  ) {
     const request = ++writeRequest.current;
     setSaveState("Saving draft on this device…");
     try {
@@ -746,7 +754,8 @@ export function App({
       accountId: note.accountId,
       id: note.id,
       title: note.title || "Untitled",
-      local: note.id.startsWith("local-") || note.kind === "draft",
+      // A server note with unsent edits is still a server note.
+      local: isLocalNoteId(note.id),
       role: note.role,
       trashed: !!note.trashed,
       notebookId: note.notebookId,
@@ -778,19 +787,33 @@ export function App({
     return openTarget?.id === id ? openTarget : row ? targetOf(row) : null;
   }
 
-  /** What the open note's editor shows now, including unsaved typing. */
-  function openContent(): { document: string; text: string } | null {
+  /**
+   * What the open note shows now: the editor's content including unsaved
+   * typing, or for a note without an editor channel (a reader's view, which
+   * live updates replace), its current document.
+   */
+  async function openContent(): Promise<{
+    document: string;
+    text: string;
+  } | null> {
     const shown = openRef.current;
     if (!shown) return null;
-    return (
-      shown.channel?.current() ?? { document: shown.document, text: shown.text }
-    );
+    const current = shown.channel?.current();
+    if (current) return current;
+    const [{ parseStoredDoc }, { plainText }] = await Promise.all([
+      import("@palladian/notes-core/document"),
+      import("@palladian/notes-core/projection"),
+    ]);
+    return {
+      document: shown.document,
+      text: plainText(parseStoredDoc(shown.document)),
+    };
   }
 
   /** The note's document, from the open editor, the cache or the server. */
   async function documentOf(target: NoteTarget): Promise<string | null> {
     const shown = openRef.current;
-    if (shown?.id === target.id) return openContent()!.document;
+    if (shown?.id === target.id) return (await openContent())!.document;
     const body = await store.read(target.accountId, target.id);
     if (body) return body.document;
     if (!live || !liveReady) return null;
@@ -820,12 +843,12 @@ export function App({
     )
       return toast("That action is no longer available for this note.");
     target = now;
-    // The open note this action applies to, if any. Others may open while it
-    // runs; only this one is closed.
-    const shownKey =
-      openRef.current?.id === target.id ? openRef.current.key : null;
+    // The opening of this note on screen, if any. Other notes, or this note
+    // again, may open while the action runs; only this opening is affected.
+    const shownOpening =
+      openRef.current?.id === target.id ? openRef.current.opening : null;
     const closeShown = () => {
-      if (shownKey && openRef.current?.key === shownKey) {
+      if (shownOpening !== null && openRef.current?.opening === shownOpening) {
         openRef.current.channel?.close();
         closeOpen();
       }
@@ -837,9 +860,10 @@ export function App({
         case "move":
           return setDialog({ kind: "move", noteId: target.id });
         case "info": {
-          const text = shownKey
-            ? openContent()?.text
-            : (await store.read(target.accountId, target.id))?.text;
+          const text =
+            shownOpening !== null
+              ? (await openContent())?.text
+              : (await store.read(target.accountId, target.id))?.text;
           return setDialog({
             kind: "info",
             noteId: target.id,
@@ -893,9 +917,11 @@ export function App({
         case "restore": {
           if (!live) return;
           await live.trash(target.id, false);
-          if (shownKey)
+          if (shownOpening !== null)
             setOpen((prev) =>
-              prev?.key === shownKey ? { ...prev, trashed: false } : prev,
+              prev?.opening === shownOpening
+                ? { ...prev, trashed: false }
+                : prev,
             );
           return toast("Restored");
         }
@@ -1001,12 +1027,24 @@ export function App({
     (snapshot.status === "ready" && live && !liveState.connected
       ? " — server unreachable"
       : "");
+  // The open note's actions follow its row: the row has the current role and
+  // Trash state, which may have changed since the note was opened.
+  const openRow = currentOpen
+    ? rows.find(
+        (row) => row.accountId === accountId && row.id === currentOpen.id,
+      )
+    : undefined;
   const openTarget = currentOpen
-    ? targetOf({
-        ...currentOpen,
-        title: rows.find((row) => row.id === currentOpen.id)?.title ?? "",
-        notebookId: rows.find((row) => row.id === currentOpen.id)?.notebookId,
-      })
+    ? {
+        ...targetOf({
+          ...currentOpen,
+          ...(openRow ? { role: openRow.role, trashed: openRow.trashed } : {}),
+          title: openRow?.title ?? "",
+          notebookId: openRow?.notebookId,
+        }),
+        // A plain local draft view has no server actions.
+        ...(currentOpen.kind === "draft" ? { local: true } : {}),
+      }
     : null;
   const openActions = openTarget ? noteActions(openTarget, liveReady) : [];
   // An open menu closes if the note's actions change under it (a role or

@@ -50,6 +50,16 @@ const needsServer: Record<ActionId, boolean> = {
   delete: true,
 };
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * A note written on this device and not yet created on the server ("local-"
+ * IDs, and bare UUIDs from earlier offline creation, as the cache treats
+ * them). A server note with unsent edits keeps its server ID.
+ */
+export function isLocalNoteId(id: string) {
+  return id.startsWith("local-") || UUID.test(id);
+}
+
 /** The actions a note offers, in menu order. */
 export function noteActions(target: ActionTarget, online: boolean): ActionId[] {
   if (target.local) return [];
