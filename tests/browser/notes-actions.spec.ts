@@ -133,11 +133,13 @@ test("phones: releasing the long press over the new sheet does not pick an actio
 }, info) => {
   test.skip(!info.project.name.includes("mobile"), "touch layout");
   // A short screen: the sheet opens under the finger.
-  await page.setViewportSize({ width: 430, height: 380 });
+  await page.setViewportSize({ width: 430, height: 460 });
   await seed(page);
   const fingers = await touch(page);
-  const point = await rowCenter(page, /A longer note/);
-  const sheet = page.getByRole("dialog", { name: "Actions for A longer note" });
+  const point = await rowCenter(page, /^Welcome to your notes/);
+  const sheet = page.getByRole("dialog", {
+    name: "Actions for Welcome to your notes",
+  });
   let downloads = 0;
   page.on("download", () => downloads++);
   await fingers.longPress(point.x, point.y);
@@ -186,4 +188,53 @@ test("phones: swipe up from the bottom bar opens the navigation, swipe down clos
   const box = (await sheet.boundingBox())!;
   await fingers.drag(box.x + box.width / 2, box.y + 30, 0, 160);
   await expect(sheet).toBeHidden();
+});
+
+test("the cached arrangement orders the list offline: pins first, then the chosen order", async ({
+  page,
+}) => {
+  await seed(page);
+  await page.evaluate(async () => {
+    type Store = {
+      captureFence(accountId: string): Promise<unknown>;
+      setArrangement(
+        accountId: string,
+        value: unknown,
+        fence: unknown,
+      ): Promise<void>;
+      list(accountId: string): Promise<{ id: string; title: string }[]>;
+    };
+    const store = (window as unknown as { __notesHarness: { store: Store } })
+      .__notesHarness.store;
+    const rows = await store.list("fixture-account");
+    const longer = rows.find((row) => row.title === "A longer note")!;
+    await store.setArrangement(
+      "fixture-account",
+      {
+        pins: [{ noteId: longer.id, pinnedAt: 1 }],
+        orders: [{ list: "all", order: "alpha" }],
+        positions: [],
+      },
+      await store.captureFence("fixture-account"),
+    );
+  });
+  await expect(page.locator(".note-row strong")).toHaveText([
+    "A longer note",
+    "Welcome to your notes",
+  ]);
+  await expect(
+    page.locator(".note-row").first().locator(".row-pin"),
+  ).toHaveCount(1);
+  // Offline, the order shows but cannot be changed.
+  await expect(page.getByRole("combobox", { name: "Sort notes" })).toHaveValue(
+    "alpha",
+  );
+  await expect(
+    page.getByRole("combobox", { name: "Sort notes" }),
+  ).toBeDisabled();
+  // The arrangement is kept with the account's cache across a reload.
+  await page.goto("/?fixture=1&session=stall");
+  await expect(page.locator(".note-row strong").first()).toHaveText(
+    "A longer note",
+  );
 });

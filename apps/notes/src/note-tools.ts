@@ -1,9 +1,11 @@
+import type { OptimisticLocalStore } from "convex/browser";
 import type { ConvexReactClient } from "convex/react";
 import { api } from "@palladian/notes-backend/api";
 import type { Id } from "@palladian/notes-backend/dataModel";
 import { docToMarkdown, notesSchema } from "@palladian/notes-core";
 import { parseStoredDoc } from "@palladian/notes-core/document";
 import { DOMSerializer } from "prosemirror-model";
+import type { Arrangement } from "./cache";
 
 /**
  * Note actions that need the editor schema or the backend API, loaded only
@@ -22,6 +24,74 @@ export async function duplicateNote(
     ...(notebookId ? { notebookId: notebookId as Id<"notebooks"> } : {}),
   });
   return result.noteId;
+}
+
+/**
+ * Pins, sort orders and custom positions are personal (D102). Each write
+ * carries the change as an optimistic update of the arrangement query, so the
+ * synced arrangement shows it at once and never steps back to an older
+ * snapshot while the write is in flight; a failed write drops it again.
+ */
+export type ArrangementChange = (current: Arrangement) => Arrangement;
+
+function optimistic(change: ArrangementChange) {
+  return (store: OptimisticLocalStore) => {
+    const current = store.getQuery(api.arrangement.mine, {});
+    if (current)
+      store.setQuery(
+        api.arrangement.mine,
+        {},
+        change(current) as typeof current,
+      );
+  };
+}
+
+export async function setPin(
+  client: ConvexReactClient,
+  noteId: string,
+  pinned: boolean,
+  change: ArrangementChange,
+) {
+  await client.mutation(
+    api.arrangement.setPin,
+    { noteId: noteId as Id<"notes">, pinned },
+    { optimisticUpdate: optimistic(change) },
+  );
+}
+
+export async function setOrder(
+  client: ConvexReactClient,
+  list: string,
+  order: "edited" | "alpha" | "created" | "custom",
+  change: ArrangementChange,
+) {
+  await client.mutation(
+    api.arrangement.setOrder,
+    { list, order },
+    { optimisticUpdate: optimistic(change) },
+  );
+}
+
+/** Writes positions in batches the server accepts. */
+export async function setPositions(
+  client: ConvexReactClient,
+  notebookId: string,
+  entries: { noteId: string; key: string }[],
+  change: ArrangementChange,
+) {
+  for (let start = 0; start < entries.length; start += 500)
+    await client.mutation(
+      api.arrangement.setPositions,
+      {
+        notebookId: notebookId as Id<"notebooks">,
+        entries: entries.slice(start, start + 500).map((entry) => ({
+          noteId: entry.noteId as Id<"notes">,
+          key: entry.key,
+        })),
+      },
+      // Every batch shows the whole change, so a long respace does not flicker.
+      { optimisticUpdate: optimistic(change) },
+    );
 }
 
 export function fileName(title: string, extension: string) {

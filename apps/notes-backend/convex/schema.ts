@@ -250,4 +250,36 @@ export default defineSchema({
   })
     .index("by_key_and_created_at", ["key", "createdAt"])
     .index("by_created_at", ["createdAt"]),
+
+  /** A person's pinned notes (D102). Personal: other members never see them. */
+  pins: defineTable({
+    principalId: v.id("principals"),
+    noteId: v.id("notes"),
+    pinnedAt: v.number(),
+  })
+    .index("by_principal_and_note", ["principalId", "noteId"])
+    .index("by_note", ["noteId"]),
+
+  /** A person's sort order for All Notes ("all") or one notebook (D102). */
+  listOrders: defineTable({
+    principalId: v.id("principals"),
+    list: v.string(),
+    order: v.union(
+      v.literal("edited"),
+      v.literal("alpha"),
+      v.literal("created"),
+      v.literal("custom"),
+    ),
+  }).index("by_principal_and_list", ["principalId", "list"]),
+
+  /** A person's custom position for a note in a notebook (fractional key). */
+  notePositions: defineTable({
+    principalId: v.id("principals"),
+    notebookId: v.id("notebooks"),
+    noteId: v.id("notes"),
+    key: v.string(),
+  })
+    .index("by_principal_and_notebook", ["principalId", "notebookId"])
+    .index("by_principal_and_note", ["principalId", "noteId"])
+    .index("by_note", ["noteId"]),
 });

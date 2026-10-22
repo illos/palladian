@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { SessionController } from "./session";
 import type {
+  Arrangement,
   CachedNotebook,
   NoteBody,
   NoteRole,
@@ -23,6 +24,9 @@ import { PanelBoundary } from "./PanelBoundary";
 import { ActionMenu } from "./ActionMenu";
 import { SwipeRow, actionIcons } from "./SwipeRow";
 import { ToastHost, useToasts } from "./Toasts";
+import { arrangeRows, orderOf, type ListOrder } from "./arrange";
+import { dropIndex, placement } from "./reorder";
+import type { ArrangementChange } from "./note-tools";
 import {
   actionLabels,
   isLocalNoteId,
@@ -205,10 +209,15 @@ export function App({
   const [openSwipe, setOpenSwipe] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const sheetGesture = useRef<number | null>(null);
+  const noteList = useRef<HTMLDivElement>(null);
+  /** Where a dragged note would land, as a line in the list (custom order). */
+  const [reorderLine, setReorderLine] = useState<number | null>(null);
   const { toasts, show: toast, dismiss: dismissToast } = useToasts();
   const navSheet = useRef<HTMLDialogElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const [rows, setRows] = useState<NoteSummary[]>([]);
+  /** This person's pins, sort orders and custom positions (D102). */
+  const [arrangement, setArrangement] = useState<Arrangement | null>(null);
   const [notebooks, setNotebooks] = useState<CachedNotebook[]>([]);
   const [open, setOpen] = useState<OpenNote | null>(null);
   const [query, setQuery] = useState("");
@@ -293,6 +302,7 @@ export function App({
     let mounted = true;
     setRows([]);
     setNotebooks([]);
+    setArrangement(null);
     setRowLimit(60);
     setOpen(null);
     setError(null);
@@ -301,9 +311,10 @@ export function App({
       const request = ++listRequest.current;
       if (!accountId || !permitted) return;
       try {
-        const [result, books] = await Promise.all([
+        const [result, books, arranged] = await Promise.all([
           store.list(accountId),
           store.notebooks(accountId),
+          store.arrangement(accountId),
         ]);
         if (
           mounted &&
@@ -312,6 +323,7 @@ export function App({
         ) {
           setRows(result);
           setNotebooks(books);
+          setArrangement(arranged);
         }
       } catch {
         if (mounted)
@@ -741,6 +753,161 @@ export function App({
     }
   }
 
+  const pinnedIds = new Set((arrangement?.pins ?? []).map((pin) => pin.noteId));
+
+  /**
+   * Change the arrangement at once on this device, then on the server. The
+   * write carries the change as an optimistic update, so synced snapshots show
+   * it until the server confirms; if the write fails, the next snapshot puts
+   * the server's arrangement back.
+   */
+  async function rearrange(
+    change: ArrangementChange,
+    save: (
+      client: NonNullable<typeof live>["client"],
+      change: ArrangementChange,
+    ) => Promise<void>,
+  ) {
+    if (!live || !accountId) return;
+    const next = change(arrangement ?? { pins: [], orders: [], positions: [] });
+    setArrangement(next);
+    const fence = await store.captureFence(accountId);
+    await store.setArrangement(accountId, next, fence);
+    await save(live.client, change);
+  }
+
+  async function changeOrder(list: string, order: ListOrder) {
+    try {
+      const { setOrder } = await import("./note-tools");
+      await rearrange(
+        (current) => ({
+          ...current,
+          orders: [
+            ...current.orders.filter((o) => o.list !== list),
+            { list, order },
+          ],
+        }),
+        (client, change) => setOrder(client, list, order, change),
+      );
+    } catch (failure) {
+      failed(failure);
+    }
+  }
+
+  /**
+   * Put `noteId` just before `beforeId` (null: last) among the notebook's other
+   * unpinned notes, as they are now.
+   */
+  async function reorder(
+    notebookId: string,
+    noteId: string,
+    beforeId: string | null,
+  ) {
+    const keys = new Map(
+      (arrangement?.positions ?? [])
+        .filter((p) => p.notebookId === notebookId)
+        .map((p) => [p.noteId, p.key]),
+    );
+    const others = reorderable
+      .filter((row) => row.id !== noteId)
+      .map((row) => ({ id: row.id, key: keys.get(row.id) }));
+    const index =
+      beforeId === null
+        ? others.length
+        : others.findIndex((row) => row.id === beforeId);
+    // The note it was dropped by has left the list meanwhile.
+    if (index < 0) return;
+    const writes = placement(others, index, noteId);
+    try {
+      const { setPositions } = await import("./note-tools");
+      await rearrange(
+        (current) => {
+          const changed = new Set(writes.map((w) => w.noteId));
+          return {
+            ...current,
+            positions: [
+              ...current.positions.filter((p) => !changed.has(p.noteId)),
+              ...writes.map((w) => ({ notebookId, ...w })),
+            ],
+          };
+        },
+        (client, change) => setPositions(client, notebookId, writes, change),
+      );
+    } catch (failure) {
+      failed(failure);
+    }
+  }
+  // A drag outlives the render it started in; it drops with the latest list.
+  const reorderRef = useRef(reorder);
+  reorderRef.current = reorder;
+
+  /** Drag a note by its handle to a new place (mouse, pen or touch). */
+  function startDrag(
+    event: React.PointerEvent<HTMLElement>,
+    noteId: string,
+    notebookId: string,
+  ) {
+    const list = noteList.current;
+    const handle = event.currentTarget;
+    const moved = handle.closest<HTMLElement>(".note-row-wrap");
+    if (!list || !moved || event.button !== 0) return;
+    event.preventDefault();
+    const pointer = event.pointerId;
+    handle.setPointerCapture(pointer);
+    const others = [
+      ...list.querySelectorAll<HTMLElement>(".note-row-wrap[data-reorder]"),
+    ].filter((element) => element !== moved);
+    // The same rows as `others`, in the same order, as rendered.
+    const otherIds = reorderable
+      .filter((row) => row.id !== noteId)
+      .map((row) => row.id);
+    if (otherIds.length !== others.length) return;
+    const middles = others.map((el) => el.offsetTop + el.offsetHeight / 2);
+    const contentY = (clientY: number) =>
+      clientY - list.getBoundingClientRect().top + list.scrollTop;
+    const start = contentY(event.clientY);
+    const from = others.filter((el) => el.offsetTop < moved.offsetTop).length;
+    let index = from;
+    moved.classList.add("reordering");
+    const move = (e: PointerEvent) => {
+      if (e.pointerId !== pointer) return;
+      const box = list.getBoundingClientRect();
+      // Scroll while dragging near the top or bottom edge.
+      if (e.clientY < box.top + 40) list.scrollTop -= 12;
+      else if (e.clientY > box.bottom - 40) list.scrollTop += 12;
+      const y = contentY(e.clientY);
+      moved.style.transform = `translateY(${y - start}px)`;
+      index = dropIndex(middles, y);
+      setReorderLine(
+        index < others.length
+          ? others[index]!.offsetTop
+          : (others.at(-1)?.offsetTop ?? 0) +
+              (others.at(-1)?.offsetHeight ?? 0),
+      );
+    };
+    // Listen on the window: if a sync update re-renders the handle mid-drag,
+    // it loses the pointer capture, but the release still ends the drag.
+    const finish = (commit: boolean) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      moved.classList.remove("reordering");
+      moved.style.transform = "";
+      setReorderLine(null);
+      if (commit && index !== from)
+        void reorderRef.current(notebookId, noteId, otherIds[index] ?? null);
+    };
+    const up = (e: PointerEvent) => {
+      if (e.pointerId === pointer) finish(true);
+    };
+    const cancel = (e: PointerEvent) => {
+      if (e.pointerId === pointer) finish(false);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+  }
+
   function targetOf(note: {
     accountId: string;
     id: string;
@@ -756,6 +923,7 @@ export function App({
       title: note.title || "Untitled",
       // A server note with unsent edits is still a server note.
       local: isLocalNoteId(note.id),
+      pinned: pinnedIds.has(note.id),
       role: note.role,
       trashed: !!note.trashed,
       notebookId: note.notebookId,
@@ -883,6 +1051,23 @@ export function App({
             );
           return;
         }
+        case "pin":
+        case "unpin": {
+          const pinned = action === "pin";
+          const pinnedAt = Date.now();
+          const { setPin } = await import("./note-tools");
+          await rearrange(
+            (current) => ({
+              ...current,
+              pins: [
+                ...current.pins.filter((pin) => pin.noteId !== target.id),
+                ...(pinned ? [{ noteId: target.id, pinnedAt }] : []),
+              ],
+            }),
+            (client, change) => setPin(client, target.id, pinned, change),
+          );
+          return toast(pinned ? "Pinned" : "Unpinned");
+        }
         case "duplicate": {
           if (!live) return;
           const doc = await documentOf(target);
@@ -985,9 +1170,31 @@ export function App({
       })
     : [];
   const needle = query.toLocaleLowerCase();
-  const visibleRows = sectionRows.filter((row) =>
+  /** All Notes ("all") or the notebook; Trash keeps last-edited order. */
+  const listKey =
+    section.kind === "all"
+      ? "all"
+      : section.kind === "notebook"
+        ? section.id
+        : null;
+  const listOrder = listKey ? orderOf(arrangement, listKey) : "edited";
+  const orderedRows = listKey
+    ? arrangeRows(sectionRows, arrangement, listKey, { pins: true })
+    : sectionRows;
+  const visibleRows = orderedRows.filter((row) =>
     (row.title + " " + row.preview).toLocaleLowerCase().includes(needle),
   );
+  /** Custom order: notes dragged into place; pinned notes stay on top. */
+  const canReorder =
+    section.kind === "notebook" &&
+    listOrder === "custom" &&
+    liveReady &&
+    !query.trim();
+  const reorderable = canReorder
+    ? visibleRows.filter(
+        (row) => !pinnedIds.has(row.id) && !targetOf(row).local,
+      )
+    : [];
   const shownIds = new Set(visibleRows.map((r) => r.id));
   const extraHits =
     permitted &&
@@ -1245,6 +1452,26 @@ export function App({
                       }.`}
                 </p>
               )}
+              {listKey && (
+                <label className="sort-control">
+                  <span>Sort</span>
+                  <select
+                    aria-label="Sort notes"
+                    value={listOrder}
+                    disabled={!liveReady}
+                    onChange={(event) =>
+                      void changeOrder(listKey, event.target.value as ListOrder)
+                    }
+                  >
+                    <option value="edited">Last edited</option>
+                    <option value="alpha">Alphabetical</option>
+                    <option value="created">Date created</option>
+                    {section.kind === "notebook" && (
+                      <option value="custom">Custom order</option>
+                    )}
+                  </select>
+                </label>
+              )}
               <p className="note-count">
                 {visibleRows.length} notes
                 {section.kind === "trash" &&
@@ -1307,6 +1534,7 @@ export function App({
             />
           </label>
           <div
+            ref={noteList}
             className="note-list"
             aria-label="Cached notes"
             onScroll={(event) => {
@@ -1329,7 +1557,13 @@ export function App({
               const draggable =
                 !phone && liveReady && row.role === "owner" && !row.trashed;
               return (
-                <div className="note-row-wrap" key={row.id}>
+                <div
+                  className="note-row-wrap"
+                  key={row.id}
+                  data-reorder={
+                    reorderable.some((r) => r.id === row.id) ? "" : undefined
+                  }
+                >
                   <SwipeRow
                     layout={swipeLayout(target, liveReady)}
                     open={openSwipe === row.id}
@@ -1357,7 +1591,14 @@ export function App({
                         void selectNote(row);
                       }}
                     >
-                      <strong>{row.title || "Untitled"}</strong>
+                      <strong>
+                        {pinnedIds.has(row.id) && (
+                          <span className="row-pin" title="Pinned">
+                            <Icon name="pin" size={13} />
+                          </span>
+                        )}
+                        {row.title || "Untitled"}
+                      </strong>
                       <span className="row-detail">
                         <time dateTime={new Date(row.updatedAt).toISOString()}>
                           {smartDate(row.updatedAt)}
@@ -1403,9 +1644,47 @@ export function App({
                       <Icon name="more" size={18} />
                     </button>
                   )}
+                  {canReorder &&
+                    section.kind === "notebook" &&
+                    reorderable.some((r) => r.id === row.id) && (
+                      <button
+                        type="button"
+                        className="reorder-handle"
+                        aria-label={`Reorder ${row.title || "Untitled"}`}
+                        title="Drag to reorder; arrow keys move it"
+                        onPointerDown={(event) =>
+                          startDrag(event, row.id, section.id)
+                        }
+                        onKeyDown={(event) => {
+                          if (
+                            event.key !== "ArrowUp" &&
+                            event.key !== "ArrowDown"
+                          )
+                            return;
+                          event.preventDefault();
+                          const at = reorderable.findIndex(
+                            (r) => r.id === row.id,
+                          );
+                          // Up: before the note above. Down: before the one
+                          // after the note below, or last.
+                          const to = event.key === "ArrowUp" ? at - 1 : at + 2;
+                          if (to < 0 || to > reorderable.length) return;
+                          void reorder(
+                            section.id,
+                            row.id,
+                            reorderable[to]?.id ?? null,
+                          );
+                        }}
+                      >
+                        <Icon name="grip" size={18} />
+                      </button>
+                    )}
                 </div>
               );
             })}
+            {reorderLine !== null && (
+              <div className="reorder-line" style={{ top: reorderLine }} />
+            )}
             {rowLimit < visibleRows.length && (
               <button
                 className="show-more"

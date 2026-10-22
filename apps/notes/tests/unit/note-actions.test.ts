@@ -15,8 +15,9 @@ const note = (over: Partial<ActionTarget> = {}): ActionTarget => ({
 });
 
 describe("note actions", () => {
-  test("an owner's note offers everything, Trash last", () => {
+  test("an owner's note offers everything, Pin first and Trash last", () => {
     expect(noteActions(note(), true)).toEqual([
+      "pin",
       "duplicate",
       "move",
       "share",
@@ -34,6 +35,9 @@ describe("note actions", () => {
     expect(read).not.toContain("move");
     expect(read).not.toContain("trash");
     expect(read).toContain("duplicate");
+    // Pins are personal, so readers pin too.
+    expect(read).toContain("pin");
+    expect(noteActions(note({ pinned: true }), true)[0]).toBe("unpin");
   });
 
   test("in Trash: restore for editors, delete forever for the owner only", () => {
@@ -69,21 +73,25 @@ describe("note actions", () => {
       leading: ["duplicate"],
       trailing: ["move", "share"],
       full: "trash",
+      fullLeading: "pin",
     });
-    expect(swipeLayout(note({ role: "read" }), true)).toEqual({
+    expect(swipeLayout(note({ role: "read", pinned: true }), true)).toEqual({
       leading: ["duplicate"],
       trailing: ["share"],
       full: null,
+      fullLeading: "unpin",
     });
     expect(swipeLayout(note({ trashed: true }), true)).toEqual({
       leading: ["restore"],
       trailing: ["delete"],
       full: null,
+      fullLeading: null,
     });
     expect(swipeLayout(note(), false)).toEqual({
       leading: [],
       trailing: [],
       full: null,
+      fullLeading: null,
     });
   });
 });

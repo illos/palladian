@@ -10,6 +10,7 @@
 
 import type * as access from "../access.js";
 import type * as account from "../account.js";
+import type * as arrangement from "../arrangement.js";
 import type * as auth from "../auth.js";
 import type * as config from "../config.js";
 import type * as connections from "../connections.js";
@@ -41,6 +42,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   access: typeof access;
   account: typeof account;
+  arrangement: typeof arrangement;
   auth: typeof auth;
   config: typeof config;
   connections: typeof connections;

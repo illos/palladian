@@ -54,6 +54,7 @@ function toRemote(row: Summary): RemoteSummary {
     title: row.title,
     preview: row.preview,
     updatedAt: row.editedAt,
+    createdAt: row.createdAt,
     notebookId: row.notebookId,
     role: row.role,
     trashed: row.trashed,
@@ -111,6 +112,7 @@ export class LiveController {
   private stops: (() => void)[] = [];
   private feeds = new Map<string, () => void>();
   private accessQueue: Promise<unknown> = Promise.resolve();
+  private arrangementQueue: Promise<unknown> = Promise.resolve();
   private visibleNotebooks: Set<string> | null = null;
   private fetchQueue = new Map<string, number>();
   private fetching = 0;
@@ -265,6 +267,20 @@ export class LiveController {
           .then(() =>
             current() ? this.applyAccess(accountId, snapshot) : undefined,
           )
+          .catch(() => undefined);
+      }),
+    );
+    // The person's pins, sort orders and positions (D102), cached so lists
+    // arrange the same way offline. Snapshots apply in order.
+    this.stops.push(
+      this.watch(api.arrangement.mine, {}, (arrangement) => {
+        if (!current()) return;
+        this.arrangementQueue = this.arrangementQueue
+          .then(async () => {
+            if (!current()) return;
+            const fence = await this.store.captureFence(accountId);
+            await this.store.setArrangement(accountId, arrangement, fence);
+          })
           .catch(() => undefined);
       }),
     );

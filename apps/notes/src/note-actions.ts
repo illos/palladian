@@ -7,6 +7,8 @@ import type { NoteRole } from "./cache";
  */
 
 export type ActionId =
+  | "pin"
+  | "unpin"
   | "duplicate"
   | "move"
   | "share"
@@ -23,9 +25,13 @@ export interface ActionTarget {
   local: boolean;
   role: NoteRole | null | undefined;
   trashed: boolean;
+  /** Pinned by this person (pins are personal, D102). */
+  pinned?: boolean;
 }
 
 export const actionLabels: Record<ActionId, string> = {
+  pin: "Pin",
+  unpin: "Unpin",
   duplicate: "Duplicate",
   move: "Move…",
   share: "Share…",
@@ -39,6 +45,8 @@ export const actionLabels: Record<ActionId, string> = {
 
 /** Actions that change data stay hidden until the server is reachable. */
 const needsServer: Record<ActionId, boolean> = {
+  pin: true,
+  unpin: true,
   duplicate: true,
   move: true,
   share: true,
@@ -74,6 +82,7 @@ export function noteActions(target: ActionTarget, online: boolean): ActionId[] {
         ...(owner ? (["delete"] as const) : []),
       ]
     : [
+        target.pinned ? "unpin" : "pin",
         "duplicate",
         ...(owner ? (["move"] as const) : []),
         "share",
@@ -92,12 +101,15 @@ export interface SwipeLayout {
   trailing: ActionId[];
   /** Run by swiping left past the full-swipe distance, if any. */
   full: ActionId | null;
+  /** Run by swiping right past the full-swipe distance, if any. */
+  fullLeading: ActionId | null;
 }
 
 /**
- * Swipes: right rests on Duplicate (Restore in Trash); left rests on Move and
- * Share, and a full left swipe moves the note to Trash (Undo follows). In Trash,
- * left rests on Delete forever, which still asks first.
+ * Swipes: right rests on Duplicate (Restore in Trash) and a full right swipe
+ * pins or unpins; left rests on Move and Share, and a full left swipe moves the
+ * note to Trash (Undo follows). In Trash, left rests on Delete forever, which
+ * still asks first.
  */
 export function swipeLayout(
   target: ActionTarget,
@@ -110,10 +122,16 @@ export function swipeLayout(
       leading: pick(["restore"]),
       trailing: pick(["delete"]),
       full: null,
+      fullLeading: null,
     };
   return {
     leading: pick(["duplicate"]),
     trailing: pick(["move", "share"]),
     full: available.has("trash") ? "trash" : null,
+    fullLeading: available.has("unpin")
+      ? "unpin"
+      : available.has("pin")
+        ? "pin"
+        : null,
   };
 }

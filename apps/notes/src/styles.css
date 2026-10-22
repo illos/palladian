@@ -1835,3 +1835,89 @@ ul.member-list {
     bottom: calc(110px + env(safe-area-inset-bottom));
   }
 }
+
+/* ---- Pins, sort orders and custom order (D102) ---- */
+.swipe-action.pin,
+.swipe-action.unpin {
+  background: #d97706;
+}
+.swipe-actions.leading.full .swipe-action {
+  flex: 1;
+  align-items: flex-start;
+  padding-left: 24px;
+}
+.row-pin {
+  display: inline-flex;
+  margin-right: 5px;
+  color: #d97706;
+  vertical-align: -1px;
+}
+.sort-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--secondary);
+}
+.sort-control select {
+  font: inherit;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 4px;
+}
+.note-list {
+  position: relative;
+}
+.reorder-handle {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 44px;
+  color: var(--secondary);
+  cursor: grab;
+  touch-action: none;
+}
+.reorder-handle:active {
+  cursor: grabbing;
+}
+.note-row-wrap[data-reorder] .row-more {
+  right: 46px;
+}
+.note-row-wrap.reordering {
+  z-index: 5;
+  box-shadow: 0 10px 24px rgb(0 0 0 / 0.18);
+}
+.note-row-wrap.reordering .swipe-front {
+  transition: none;
+}
+.reorder-line {
+  position: absolute;
+  z-index: 6;
+  left: 12px;
+  right: 12px;
+  height: 2px;
+  margin-top: -1px;
+  background: var(--accent);
+  border-radius: 1px;
+  pointer-events: none;
+}
+@media (max-width: 760px) {
+  .sort-control {
+    font-size: 12px;
+  }
+  .sort-control select {
+    /* 16px avoids iOS zooming into the picker. */
+    font-size: 16px;
+    padding: 2px 6px;
+  }
+}

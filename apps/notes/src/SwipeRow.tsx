@@ -23,6 +23,8 @@ const LONG_PRESS = 500;
 
 type IconName = Parameters<typeof Icon>[0]["name"];
 export const actionIcons: Record<ActionId, IconName> = {
+  pin: "pin",
+  unpin: "pin",
   duplicate: "copy",
   move: "notebook",
   share: "share",
@@ -34,6 +36,8 @@ export const actionIcons: Record<ActionId, IconName> = {
   delete: "trash",
 };
 const shortLabels: Partial<Record<ActionId, string>> = {
+  pin: "Pin",
+  unpin: "Unpin",
   move: "Move",
   share: "Share",
   trash: "Trash",
@@ -82,7 +86,8 @@ export function SwipeRow({
   const canSwipe =
     layout.leading.length > 0 ||
     layout.trailing.length > 0 ||
-    layout.full !== null;
+    layout.full !== null ||
+    layout.fullLeading !== null;
 
   // Another row opening closes this one.
   useEffect(() => {
@@ -105,7 +110,7 @@ export function SwipeRow({
   const limit = (value: number) =>
     Math.max(
       layout.full || trailingWidth ? -CLAMP : 0,
-      Math.min(leadingWidth ? CLAMP : 0, value),
+      Math.min(layout.fullLeading || leadingWidth ? CLAMP : 0, value),
     );
   const settle = (to: number) => {
     setOffset(to);
@@ -131,6 +136,7 @@ export function SwipeRow({
   };
 
   const full = layout.full !== null && offset <= -FULL;
+  const fullLeading = layout.fullLeading !== null && offset >= FULL;
   return (
     <div
       className={`swipe-row${dragging ? " dragging" : ""}`}
@@ -152,19 +158,29 @@ export function SwipeRow({
         }
       }}
     >
-      {leadingWidth > 0 && offset > 0 && (
-        <div className="swipe-actions leading" style={{ width: offset }}>
-          {layout.leading.map((id) => (
-            <button
-              key={id}
-              type="button"
-              className={`swipe-action ${id}`}
-              onClick={() => run(id)}
-            >
-              <Icon name={actionIcons[id]} size={20} />
-              <span>{shortLabels[id] ?? actionLabels[id]}</span>
-            </button>
-          ))}
+      {offset > 0 && (
+        <div
+          className={`swipe-actions leading${fullLeading ? " full" : ""}`}
+          style={{ width: offset }}
+        >
+          {fullLeading ? (
+            <span className={`swipe-action ${layout.fullLeading}`}>
+              <Icon name={actionIcons[layout.fullLeading!]} size={20} />
+              <span>{shortLabels[layout.fullLeading!]}</span>
+            </span>
+          ) : (
+            layout.leading.map((id) => (
+              <button
+                key={id}
+                type="button"
+                className={`swipe-action ${id}`}
+                onClick={() => run(id)}
+              >
+                <Icon name={actionIcons[id]} size={20} />
+                <span>{shortLabels[id] ?? actionLabels[id]}</span>
+              </button>
+            ))
+          )}
         </div>
       )}
       {offset < 0 && (
@@ -269,6 +285,7 @@ export function SwipeRow({
           swallowClick.current = true;
           const at = limit(g.start + event.clientX - g.x);
           if (layout.full && at <= -FULL) return run(layout.full);
+          if (layout.fullLeading && at >= FULL) return run(layout.fullLeading);
           // A quick flick opens the side it moves into, or closes the row
           // when it flicks back past the resting point.
           const moving = event.timeStamp - g.lastTime < FLICK_EXPIRES;

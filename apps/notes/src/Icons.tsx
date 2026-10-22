@@ -107,6 +107,13 @@ const paths: Record<string, ReactNode> = {
     </>
   ),
   download: <path d="M12 4v11m-5-5 5 5 5-5M5 20h14" />,
+  pin: (
+    <>
+      <path d="M9 4h6l-1 6 3 3H7l3-3z" />
+      <path d="M12 13v7" />
+    </>
+  ),
+  grip: <path d="M8 7h8M8 12h8M8 17h8" />,
   print: (
     <>
       <path d="M7 9V4h10v5" />

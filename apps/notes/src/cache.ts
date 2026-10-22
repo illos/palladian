@@ -13,6 +13,8 @@ export interface NoteSummary {
   trashed?: boolean;
   /** A conflict copy's source note, as on its draft. */
   source?: string;
+  /** When the note was created; absent on rows cached before it was kept. */
+  createdAt?: number;
 }
 /** Server-side summary fields delivered by the library feed. */
 export interface RemoteSummary {
@@ -20,6 +22,7 @@ export interface RemoteSummary {
   title: string;
   preview: string;
   updatedAt: number;
+  createdAt?: number;
   notebookId: string;
   role: NoteRole;
   trashed: boolean;
@@ -50,6 +53,16 @@ export interface Draft extends NoteBody {
    * authorized as that note and removed with it.
    */
   source?: string;
+}
+/**
+ * How this person arranges their lists (D102): pins, sort orders and custom
+ * positions, as the server last delivered them. Personal; see arrangement.ts
+ * in the backend.
+ */
+export interface Arrangement {
+  pins: { noteId: string; pinnedAt: number }[];
+  orders: { list: string; order: "edited" | "alpha" | "created" | "custom" }[];
+  positions: { notebookId: string; noteId: string; key: string }[];
 }
 export interface CachedNotebook {
   accountId: string;
@@ -93,6 +106,11 @@ class NotesDatabase extends Dexie {
     { accountId: string; key: string; value: number },
     [string, string]
   >;
+  /** Account-scoped settings delivered by the server, such as the arrangement. */
+  preferences!: Table<
+    { accountId: string; key: string; value: unknown },
+    [string, string]
+  >;
   revoked!: Table<
     // `nonce` changes with every revocation recorded for the note. A `held`
     // fence hides the note's local work until the server confirms access.
@@ -130,6 +148,8 @@ class NotesDatabase extends Dexie {
             .table("summaries")
             .update([draft.accountId, draft.id], { source: draft.source });
     });
+    // The arrangement of lists (D102) and other account-scoped settings.
+    this.version(5).stores({ preferences: "[accountId+key], accountId" });
   }
 }
 
@@ -723,6 +743,7 @@ export class NotesStore {
         this.db.notebooks,
         this.db.cursors,
         this.db.revoked,
+        this.db.preferences,
       ],
       async () => {
         if (!(await this.db.accounts.get(accountId))?.blocked) return false;
@@ -742,6 +763,7 @@ export class NotesStore {
       this.db.summaries,
       this.db.bodies,
       this.db.drafts,
+      this.db.preferences,
     ])
       await table.where("accountId").equals(accountId).delete();
   }
@@ -1029,6 +1051,7 @@ export class NotesStore {
           this.db.notebooks,
           this.db.cursors,
           this.db.revoked,
+          this.db.preferences,
         ],
         async () => {
           const privacy = await this.db.privacy.get("activation");
@@ -1119,6 +1142,9 @@ export class NotesStore {
             notebookId: row.notebookId,
             role: row.role,
             trashed: row.trashed,
+            ...((row.createdAt ?? previous?.createdAt) !== undefined
+              ? { createdAt: (row.createdAt ?? previous?.createdAt)! }
+              : {}),
           });
         }
         // Lost access removes cached content and any pending work for it.
@@ -1458,6 +1484,32 @@ export class NotesStore {
         await this.db.notebooks.bulkPut(
           notebooks.map((n) => ({ ...n, accountId })),
         );
+      },
+    );
+    this.notify();
+  }
+  async arrangement(accountId: string): Promise<Arrangement | null> {
+    if (this.blocked.has(accountId)) return null;
+    const row = await this.db.preferences.get([accountId, "arrangement"]);
+    return (row?.value as Arrangement | undefined) ?? null;
+  }
+  /** Replace the arrangement, under the same fences as the notebook list. */
+  async setArrangement(
+    accountId: string,
+    value: Arrangement,
+    fence: CacheFence,
+  ): Promise<void> {
+    if (fence.accountId !== accountId)
+      throw new Error("Account cache fence does not match.");
+    const epoch = this.epoch(accountId);
+    this.assertWritable(accountId, epoch);
+    await this.db.transaction(
+      "rw",
+      [this.db.preferences, this.db.accounts],
+      async () => {
+        await this.assertPersistent(accountId, fence.epoch);
+        this.assertWritable(accountId, epoch);
+        await this.db.preferences.put({ accountId, key: "arrangement", value });
       },
     );
     this.notify();
