@@ -117,6 +117,16 @@ Still pending:
 - the App-level mocked-services harness, a separate task;
 - the owner's iPhone checks.
 
+## Release
+
+Released 2026-10-22: main `b0aeee3`, Worker `palladian` version `c41b8d14`, at 100%, deployed 19:18 UTC. No backend change, so Convex was not redeployed.
+
+- Custom domain `notes.parabolic.studio` and cron `23 4 * * *` confirmed through the Cloudflare API, after the known "No access" message on the routes call.
+- `live-e2e.mjs` against production: all checks passed.
+- `apps/notes-edge/scripts/browser-e2e.mjs` against production: all checks passed.
+
+Pending: the owner's iPhone checks of swipes, long press, the action sheet, navigation-sheet swipes and printing from Safari.
+
 ## Found during this work (not changed)
 
 A new note created **offline** and left blank stays in the list as "Untitled · Empty note · Local draft", including after a reload, and would be created on the server once online. Deltos discarded blank new notes. Online, a blank new note is never created. This is the draft journal's behaviour (fundamentals) and is reported to the owner with the two save issues from the Settings work.
