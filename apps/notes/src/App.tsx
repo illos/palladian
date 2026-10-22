@@ -1350,21 +1350,36 @@ export function App({
     if (menuStale) setMenu(null);
   }, [menuStale]);
   // History closes once the note no longer offers it: a lost edit role, Trash,
-  // or the note gone. The list row has the latest role from the server; an
-  // open note keeps the role it opened with. Offline, History hides with the
-  // other dialogs and returns.
+  // or the note gone. An open note keeps the role it opened with, so the role
+  // and Trash state of its list row, which follow the server, count too. (The
+  // row alone is not enough: while the open note's typing is journaled, its
+  // row is a local draft, which offers no actions.) Offline, History hides
+  // with the other dialogs and returns.
+  const historyTarget =
+    dialog?.kind === "history"
+      ? currentTarget(dialog.noteId, dialog.source)
+      : null;
+  const historyRow =
+    dialog?.kind === "history"
+      ? rows.find(
+          (row) => row.accountId === accountId && row.id === dialog.noteId,
+        )
+      : undefined;
   const historyStale =
     dialog?.kind === "history" &&
     liveReady &&
-    [
-      currentTarget(dialog.noteId, dialog.source),
-      currentTarget(dialog.noteId, "row"),
-    ].some(
-      (target) =>
-        !target ||
-        target.accountId !== accountId ||
-        !noteActions(target, true).includes("history"),
-    );
+    (!historyTarget ||
+      historyTarget.accountId !== accountId ||
+      !noteActions(
+        historyRow
+          ? {
+              ...historyTarget,
+              role: historyRow.role,
+              trashed: historyTarget.trashed || !!historyRow.trashed,
+            }
+          : historyTarget,
+        true,
+      ).includes("history"));
   useEffect(() => {
     if (historyStale) setDialog(null);
   }, [historyStale]);

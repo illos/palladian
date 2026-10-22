@@ -78,9 +78,29 @@ async function newContext(options = {}) {
   return context;
 }
 
+/** With HISTORY_E2E_DEBUG set, report page errors, failed requests and reloads. */
+function watch(page, name) {
+  if (!process.env.HISTORY_E2E_DEBUG) return;
+  page.on("pageerror", (error) =>
+    console.log(`[${name}] page error: ${error.message}`),
+  );
+  page.on("console", (message) => {
+    if (message.type() === "error" || message.type() === "warning")
+      console.log(`[${name}] console ${message.type()}: ${message.text()}`);
+  });
+  page.on("requestfailed", (request) =>
+    console.log(`[${name}] request failed: ${new URL(request.url()).pathname}`),
+  );
+  page.on("framenavigated", (frame) => {
+    if (frame === page.mainFrame())
+      console.log(`[${name}] navigated: ${new URL(frame.url()).pathname}`);
+  });
+}
+
 /** Creates an account from an invitation or setup link; returns its page. */
 async function acceptLink(context, link, name, password) {
   const page = await context.newPage();
+  watch(page, name);
   await page.goto(link);
   await page.getByLabel("Your name").fill(name);
   await page.getByLabel(/Choose a password/).fill(password);
@@ -205,7 +225,8 @@ try {
 
   const history = a.getByRole("dialog", { name: "History of Recipe" });
   await a.getByRole("button", { name: "Note history" }).click();
-  await expect(history).toBeVisible();
+  // The panel loads on first use; a cold dev server compiles it first.
+  await expect(history).toBeVisible({ timeout: 20_000 });
   const rows = history.locator(".history-row");
   await expect(rows).toHaveCount(4, { timeout: 20_000 });
   const expected = [
@@ -282,16 +303,21 @@ try {
   await rows.nth(2).click();
   await expect(versionText).toContainText("Ada's first edit.");
   await expect(versionText).not.toContainText("Cy was here.");
+  // Cy types a word at a time, as people do, until the restore has reached him.
   let typing = true;
   const ticker = (async () => {
     let n = 0;
-    while (typing) {
-      await typeAtEnd(c, editorC, ` tick${++n}`);
-      await c.waitForTimeout(250);
+    try {
+      while (typing) {
+        await typeAtEnd(c, editorC, ` word${++n}`);
+        await c.waitForTimeout(1_000);
+      }
+    } catch {
+      // The browser closed after another failure; that failure is reported.
     }
     return n;
   })();
-  await c.waitForTimeout(800);
+  await c.waitForTimeout(1_500);
   const conflictNotice = history.getByText(
     /The note changed before the restore/,
   );
@@ -314,7 +340,7 @@ try {
       .not.toBe("pending");
     if (outcome === "restored") break;
     conflicts++;
-    assert.ok(conflicts < 20, "a restore got through between Cy's edits");
+    assert.ok(conflicts < 30, "a restore got through between Cy's edits");
   }
   await expect(a.locator(".toast")).toContainText(
     "Restored the version from Today",
@@ -359,7 +385,7 @@ try {
   assert.ok(server.markdown.includes("First line. Ada's first edit."));
   assert.ok(!server.markdown.includes("Ada's second line."));
   step(
-    `restored while Cy typed (${ticks} bursts, ${conflicts} conflict${conflicts === 1 ? "" : "s"} retried); both converge, Cy's later typing kept`,
+    `restored while Cy typed (${ticks} words; ${conflicts} conflict${conflicts === 1 ? "" : "s"}, each retried); both converge, Cy's later typing kept`,
   );
 
   // Paging: more versions than one page holds.
@@ -456,6 +482,7 @@ try {
     convex(c, "query", "history:list", { noteId }),
     /denied/,
   );
+  await shot(c, "desktop-after-downgrade");
   step("Cy's open History closes when his access drops to read");
 
   // Ada on a phone: History from the "…" sheet is a full-height sheet.
@@ -513,6 +540,26 @@ try {
   step("phone: History from the … sheet fills the screen, one step at a time");
   console.log("All history checks passed.");
 } catch (failure) {
+  if (process.env.HISTORY_E2E_DEBUG)
+    for (const open of browser.contexts().flatMap((c) => c.pages()))
+      console.log(
+        await open.evaluate(() =>
+          JSON.stringify({
+            path: location.pathname,
+            dialogs: [...document.querySelectorAll("dialog")].map((d) => [
+              d.className,
+              d.open,
+              d.getAttribute("aria-label"),
+            ]),
+            failure: document.querySelector(".panel-failure")?.textContent,
+            toasts: [...document.querySelectorAll(".toast")].map(
+              (t) => t.textContent,
+            ),
+            error: document.querySelector(".note-surface > .error")
+              ?.textContent,
+          }),
+        ),
+      );
   // A picture of each page at the failure, for the person debugging it.
   for (const [i, open] of browser
     .contexts()

@@ -66,8 +66,11 @@
   color: var(--body);
   font-size: 13px;
 }
-.history-row:hover {
-  background: var(--sel);
+/* Touch screens keep :hover after a tap; only pointers that hover get it. */
+@media (hover: hover) {
+  .history-row:hover {
+    background: var(--sel);
+  }
 }
 .history-row[aria-pressed="true"] {
   background: var(--sel);
@@ -172,6 +175,9 @@
 }
 .history-content {
   flex: 1;
+}
+.history-content .history-loading {
+  padding: 0;
 }
 .history-doc,
 .history-diff {

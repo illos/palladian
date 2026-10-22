@@ -259,6 +259,8 @@ None of this changes the shared schema in `packages/notes-core`.
 
 ### A4. History (M)
 
+Implemented 2026-10-22, in review (`docs/reviews/notes-history-implementation.md`).
+
 Deltos reference: `components/HistoryPanel.tsx`, for the UI only. Deltos kept per-device snapshots; Palladian has server revisions, so `lib/historyCapture.ts` does not port.
 
 - **Access.** A History sheet in the note actions, shown only with edit access (D13). Read-only members and public visitors never see it.
