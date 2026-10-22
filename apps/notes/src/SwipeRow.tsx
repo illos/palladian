@@ -72,6 +72,9 @@ export function SwipeRow({
     velocity: number;
   } | null>(null);
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The list may open another row while a finger is down on this one.
+  const openNow = useRef(open);
+  openNow.current = open;
   const swallowClick = useRef(false);
   const lastPointer = useRef<string>("mouse");
   const leadingWidth = layout.leading.length * ACTION_WIDTH;
@@ -109,11 +112,14 @@ export function SwipeRow({
     onOpenChange(to !== 0);
   };
   /**
-   * After any gesture ends: rest on the actions as they are now, or close if
-   * that side has none (they may have changed while the finger was down).
+   * After a gesture that did not drag the row ends: close if the list opened
+   * another row meanwhile, otherwise rest on the actions as they are now, or
+   * close if that side has none (they may have changed while the finger was
+   * down).
    */
   const reconcile = () => {
     if (offset === 0) return;
+    if (!openNow.current) return setOffset(0);
     const next = offset > 0 ? leadingWidth : -trailingWidth;
     if (next === offset) return;
     setOffset(next);
@@ -204,8 +210,10 @@ export function SwipeRow({
           }
         }}
         onPointerDown={(event) => {
-          // A swallowed click belongs to the previous gesture only.
-          swallowClick.current = false;
+          // A swallowed click belongs to the previous gesture only. A tap on
+          // an open row only closes it, even if the row closes before the
+          // click arrives.
+          swallowClick.current = offset !== 0;
           lastPointer.current = event.pointerType;
           if (event.pointerType === "mouse" || !event.isPrimary) return;
           gesture.current = {
@@ -279,12 +287,15 @@ export function SwipeRow({
           gesture.current = null;
           setDragging(false);
           // Back to where the gesture started, as the actions are now: they
-          // may have changed during the gesture.
-          if (g?.axis === "x")
-            settle(
-              g.start > 0 ? leadingWidth : g.start < 0 ? -trailingWidth : 0,
-            );
-          else reconcile();
+          // may have changed during the gesture. If the list opened another
+          // row meanwhile, this one stays closed and does not reclaim it.
+          if (g?.axis === "x") {
+            if (g.start !== 0 && !openNow.current) setOffset(0);
+            else
+              settle(
+                g.start > 0 ? leadingWidth : g.start < 0 ? -trailingWidth : 0,
+              );
+          } else reconcile();
         }}
       >
         {children}
