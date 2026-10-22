@@ -67,6 +67,22 @@ Report: `notes-note-actions-round2-astra-review.md`.
 
 Round 2 evidence: typecheck pass; app unit tests 107; browser tests 56 passed on both Chromium projects; `actions-e2e.mjs` against dev Convex, now 17 steps, passing on two consecutive runs.
 
+## Review round 3 responses
+
+Report: `notes-note-actions-round3-astra-review.md`.
+
+| Finding                                            | Response                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R3-1 — cancel before axis lock keeps an old offset | Fixed. Every way a gesture can end re-rests the row on its current actions, or closes it if that side has none: a release without a horizontal drag, a vertical scroll taking over, or a cancel before or after axis lock. No automated regression yet: the case needs the actions to change while a finger rests on the row for less than the 500 ms long press, and a real-service call takes longer than that, so the long press opens the sheet first. It belongs with the mocked-services harness in R3-2. |
+| R3-2 — controlled tests need no protected wiring   | Accepted as a follow-up, not done in this branch. A test-only entry that mounts the unchanged `App` with mocked session, store and live box (as the reviewer's probe did) would cover delayed completions, pending journals, reader updates and mixed-ownership Empty Trash. That harness would serve every plan 08 branch (A2, A4, A5, A6), so it is planned as its own test-infrastructure task, keeping production `main.tsx` unchanged.                                                                     |
+
+Round 3 evidence:
+
+- typecheck: pass.
+- App unit tests: 107.
+- Browser tests: 56 passed on both Chromium projects. These ran on a private port through a temporary config that only changes the port, because other work held 5178.
+- `actions-e2e.mjs` against dev Convex: 17 steps, passing.
+
 ## Found during this work (not changed)
 
 A new note created **offline** and left blank stays in the list as "Untitled · Empty note · Local draft", including after a reload, and would be created on the server once online. Deltos discarded blank new notes. Online, a blank new note is never created. This is the draft journal's behaviour (fundamentals) and is reported to the owner with the two save issues from the Settings work.

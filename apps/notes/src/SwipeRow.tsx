@@ -108,6 +108,17 @@ export function SwipeRow({
     setOffset(to);
     onOpenChange(to !== 0);
   };
+  /**
+   * After any gesture ends: rest on the actions as they are now, or close if
+   * that side has none (they may have changed while the finger was down).
+   */
+  const reconcile = () => {
+    if (offset === 0) return;
+    const next = offset > 0 ? leadingWidth : -trailingWidth;
+    if (next === offset) return;
+    setOffset(next);
+    if (next === 0) onOpenChange(false);
+  };
   const run = (action: ActionId) => {
     settle(0);
     onAction(action);
@@ -228,6 +239,7 @@ export function SwipeRow({
             g.axis = Math.abs(dx) > Math.abs(dy) && canSwipe ? "x" : "y";
             if (g.axis === "y") {
               gesture.current = null;
+              reconcile();
               return;
             }
             event.currentTarget.setPointerCapture(event.pointerId);
@@ -243,7 +255,8 @@ export function SwipeRow({
           clearPress();
           const g = gesture.current;
           gesture.current = null;
-          if (!g || g.pointer !== event.pointerId || g.axis !== "x") return;
+          if (!g || g.pointer !== event.pointerId || g.axis !== "x")
+            return reconcile();
           setDragging(false);
           swallowClick.current = true;
           const at = limit(g.start + event.clientX - g.x);
@@ -271,6 +284,7 @@ export function SwipeRow({
             settle(
               g.start > 0 ? leadingWidth : g.start < 0 ? -trailingWidth : 0,
             );
+          else reconcile();
         }}
       >
         {children}
