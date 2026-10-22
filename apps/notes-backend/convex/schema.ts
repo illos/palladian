@@ -82,6 +82,17 @@ export default defineSchema({
     seq: v.number(),
   }).index("by_notebook", ["notebookId"]),
 
+  /**
+   * Notebooks their owners deleted (plan 08, A5). Lets the owner's other
+   * devices create notes they typed in it before learning of the deletion;
+   * nobody else's (D86).
+   */
+  deletedNotebooks: defineTable({
+    notebookId: v.id("notebooks"),
+    ownerId: v.id("principals"),
+    deletedAt: v.number(),
+  }).index("by_notebook", ["notebookId"]),
+
   notebookMembers: defineTable({
     notebookId: v.id("notebooks"),
     principalId: v.id("principals"),

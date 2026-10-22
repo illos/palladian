@@ -5,8 +5,9 @@
 // default, new note here, deleting with the notes moved (a member losing
 // access, with the warning first) and deleting to Trash, the default
 // notebook asking for another default first, and (review round 1) a member's
-// device leaving the deleted notebook and a note typed offline in a deleted
-// notebook landing in the default notebook. Disposable @example.test
+// device leaving the deleted notebook and, on the owner's own phone, a note
+// typed offline in a notebook the owner deleted landing in the owner's
+// default notebook. Disposable @example.test
 // accounts; prints no secrets.
 //
 // CONVEX_DEPLOYMENT selects the development deployment, CONVEX_SITE_URL and
@@ -396,8 +397,10 @@ try {
   await members.getByRole("button", { name: "Done" }).click();
   step("phone: a long press on a notebook opens its sheet; Sharing opens");
 
-  // Review round 1, F1/F3: a note typed offline in a notebook that is
-  // deleted meanwhile lands in the default notebook instead of being lost.
+  // Review round 1, F1/F3: on the owner's own phone, a note typed offline in
+  // a notebook the owner deletes meanwhile (on the desktop) lands in the
+  // owner's default notebook instead of being lost. Only the owner's devices
+  // get this; a collaborator's draft is refused as before (D86).
   await convex(page, "mutation", "notebooks:create", { name: "Later" });
   await phone.getByRole("button", { name: "Menu" }).click();
   const laterItem = sheet.getByRole("button", { name: "Later", exact: true });
@@ -445,7 +448,7 @@ try {
     { timeout: 20_000 },
   );
   step(
-    "phone: a note typed offline in a notebook deleted meanwhile lands in Notes",
+    "owner's phone: a note typed offline in a notebook the owner deleted meanwhile lands in Notes",
   );
 } finally {
   await browser.close();

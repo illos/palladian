@@ -756,13 +756,8 @@ describe("notebook deletion", () => {
       done: true,
       notes: 0,
     });
-    // A person's note for the deleted notebook goes to their own default
-    // notebook (review round 1), not into anything of Ada's.
-    const tooLate = await note(bea, journal, "Too late");
-    expect(await row(t, tooLate)).toMatchObject({
-      notebookId: bea.notebookId,
-      ownerId: bea.id,
-    });
+    // A collaborator's note for the deleted notebook is refused (D86).
+    await expect(note(bea, journal, "Too late")).rejects.toThrow(/not found/);
   });
 
   test("the preview is only for the owner and a valid destination", async () => {
@@ -820,11 +815,30 @@ function docOf(text: string) {
 }
 
 describe("review round 1 regressions", () => {
-  test("F1/F3: a person's note for a deleted notebook goes to their default notebook", async () => {
+  test("F1/F3: the owner's other device creating into their deleted notebook lands in the default notebook", async () => {
     const t = setup();
     const ada = await human(t, "Ada");
     const journal = await notebook(ada, "Journal");
+    const kept = await note(ada, journal, "Kept");
+    const records = () =>
+      t.run((ctx) => ctx.db.query("deletedNotebooks").collect());
+    // Part way, nothing is recorded and the notebook still takes notes.
+    expect(
+      await ada.as.mutation(api.notebooks.remove, {
+        notebookId: journal,
+        destinationId: ada.notebookId,
+        trash: false,
+      }),
+    ).toEqual({ done: false, notes: 1 });
+    expect(await records()).toEqual([]);
     await removeAll(ada, journal, ada.notebookId, false);
+    expect(await records()).toEqual([
+      expect.objectContaining({
+        notebookId: journal,
+        ownerId: ada.id,
+        deletedAt: expect.any(Number),
+      }),
+    ]);
     // A draft typed in Journal on another device, created after it went.
     const created = await ada.as.mutation(api.notes.create, {
       notebookId: journal,
@@ -845,7 +859,14 @@ describe("review round 1 regressions", () => {
         doc: docOf("Written offline"),
       }),
     ).toEqual({ noteId: created.noteId, revision: 0, replayed: true });
-    // The Markdown path behaves the same for people.
+    // A conflict copy of one of the owner's notes, and the Markdown path.
+    const copy = await ada.as.mutation(api.notes.create, {
+      notebookId: journal,
+      clientKey: "local-copy",
+      doc: docOf("Kept, other version"),
+      sourceNoteId: kept,
+    });
+    expect((await row(t, copy.noteId))!.notebookId).toBe(ada.notebookId);
     const markdown = await ada.as.mutation(api.notes.createFromMarkdown, {
       notebookId: journal,
       markdown: "From Markdown",
@@ -853,40 +874,89 @@ describe("review round 1 regressions", () => {
     expect(markdown.notebookId).toBe(ada.notebookId);
   });
 
-  test("F1/F3: a person whose membership was removed or made read-only keeps their note in their own default", async () => {
+  test("F1/F3 (D86): a collaborator creating into a notebook its owner deleted is refused as before", async () => {
+    const t = setup();
+    const ada = await human(t, "Ada");
+    const bea = await human(t, "Bea");
+    const dee = await human(t, "Dee");
+    const team = await notebook(ada, "Team");
+    await share(t, team, bea.id, "edit", ada.id);
+    const shared = await note(ada, team, "Shared");
+    await ada.as.mutation(api.sharing.setNoteMember, {
+      noteId: shared,
+      principalId: bea.id,
+      role: "edit",
+    });
+    await removeAll(ada, team, ada.notebookId, false);
+    const notFound = {
+      data: { code: "not_found", message: "Notebook not found." },
+    };
+    for (const person of [bea, dee]) {
+      await expect(
+        person.as.mutation(api.notes.create, {
+          notebookId: team,
+          clientKey: "local-team",
+          doc: docOf("Typed in Team"),
+        }),
+      ).rejects.toMatchObject(notFound);
+      await expect(
+        person.as.mutation(api.notes.createFromMarkdown, {
+          notebookId: team,
+          markdown: "Typed in Team",
+        }),
+      ).rejects.toMatchObject(notFound);
+    }
+    // Even a conflict copy of a note Bea can still open.
+    await expect(
+      bea.as.mutation(api.notes.create, {
+        notebookId: team,
+        clientKey: "local-copy",
+        doc: docOf("Shared, my version"),
+        sourceNoteId: shared,
+      }),
+    ).rejects.toMatchObject(notFound);
+    const mine = await t.run((ctx) =>
+      ctx.db
+        .query("notes")
+        .withIndex("by_creator_and_client_key", (q) =>
+          q.eq("creatorId", bea.id),
+        )
+        .collect(),
+    );
+    expect(mine).toEqual([]);
+  });
+
+  test("F1/F3 (D86): removed and read-only members are refused as before", async () => {
     const t = setup();
     const ada = await human(t, "Ada");
     const bea = await human(t, "Bea");
     const team = await notebook(ada, "Team");
     const member = await share(t, team, bea.id, "edit", ada.id);
     await t.run((ctx) => ctx.db.delete(member));
-    const removed = await bea.as.mutation(api.notes.create, {
-      notebookId: team,
-      clientKey: "local-removed",
-      doc: docOf("Typed before removal"),
-    });
-    expect(await row(t, removed.noteId)).toMatchObject({
-      notebookId: bea.notebookId,
-      ownerId: bea.id,
+    await expect(
+      bea.as.mutation(api.notes.create, {
+        notebookId: team,
+        clientKey: "local-removed",
+        doc: docOf("Typed before removal"),
+      }),
+    ).rejects.toMatchObject({
+      data: { code: "not_found", message: "Notebook not found." },
     });
     await share(t, team, bea.id, "read", ada.id);
-    const readOnly = await bea.as.mutation(api.notes.create, {
-      notebookId: team,
-      clientKey: "local-read",
-      doc: docOf("Typed before becoming a reader"),
+    await expect(
+      bea.as.mutation(api.notes.create, {
+        notebookId: team,
+        clientKey: "local-read",
+        doc: docOf("Typed before becoming a reader"),
+      }),
+    ).rejects.toMatchObject({
+      data: {
+        code: "denied",
+        message: "This action needs edit access to the notebook.",
+      },
     });
-    expect(await row(t, readOnly.noteId)).toMatchObject({
-      notebookId: bea.notebookId,
-      ownerId: bea.id,
-    });
-    // Nothing reached Ada's notebook.
-    const inTeam = await t.run((ctx) =>
-      ctx.db
-        .query("notes")
-        .withIndex("by_notebook_and_seq", (q) => q.eq("notebookId", team))
-        .collect(),
-    );
-    expect(inTeam).toEqual([]);
+    const created = await t.run((ctx) => ctx.db.query("notes").collect());
+    expect(created).toEqual([]);
   });
 
   test("F1/F3: agents, replays and conflict copies of unreadable notes are refused as before", async () => {
@@ -898,14 +968,22 @@ describe("review round 1 regressions", () => {
     await share(t, journal, claude.id, "edit", ada.id);
     await share(t, ada.notebookId, claude.id, "read", ada.id);
     await removeAll(ada, journal, ada.notebookId, false);
-    // Agents: a missing notebook and a read-only one still refuse.
+    // Agents, even their owner's: a deleted notebook and a read-only one.
     await expect(
       claude.as.mutation(api.notes.create, {
         notebookId: journal,
         clientKey: "agent-missing",
         doc: docOf("Agent note"),
       }),
-    ).rejects.toThrow(/not found/);
+    ).rejects.toMatchObject({
+      data: { code: "not_found", message: "Notebook not found." },
+    });
+    await expect(
+      claude.as.mutation(api.notes.createFromMarkdown, {
+        notebookId: journal,
+        markdown: "Agent note",
+      }),
+    ).rejects.toMatchObject({ data: { code: "not_found" } });
     await expect(
       claude.as.mutation(api.notes.createFromMarkdown, {
         notebookId: ada.notebookId,
@@ -929,38 +1007,17 @@ describe("review round 1 regressions", () => {
       }),
     ).rejects.toThrow(/not found/);
     // A conflict copy of a note the person cannot open is still refused,
-    // whatever its notebook.
+    // whatever its notebook, the owner's deleted one included.
     const source = await note(ada, team, "Source");
-    await expect(
-      bea.as.mutation(api.notes.create, {
-        notebookId: team,
-        clientKey: "local-copy",
-        doc: docOf("Copy"),
-        sourceNoteId: source,
-      }),
-    ).rejects.toThrow(/not found/);
-  });
-
-  test("F1/F3: a conflict copy of a note the person can open goes to their default when its notebook went", async () => {
-    const t = setup();
-    const ada = await human(t, "Ada");
-    const bea = await human(t, "Bea");
-    const shared = await notebook(ada, "Shared");
-    await share(t, shared, bea.id, "edit", ada.id);
-    const open = await note(ada, shared, "Open source");
-    await ada.as.mutation(api.sharing.setNoteMember, {
-      noteId: open,
-      principalId: bea.id,
-      role: "edit",
-    });
-    await removeAll(ada, shared, ada.notebookId, false);
-    const copy = await bea.as.mutation(api.notes.create, {
-      notebookId: shared,
-      clientKey: "local-open-copy",
-      doc: docOf("Open source, my version"),
-      sourceNoteId: open,
-    });
-    expect((await row(t, copy.noteId))!.notebookId).toBe(bea.notebookId);
+    for (const notebookId of [team, journal])
+      await expect(
+        bea.as.mutation(api.notes.create, {
+          notebookId,
+          clientKey: "local-copy",
+          doc: docOf("Copy"),
+          sourceNoteId: source,
+        }),
+      ).rejects.toThrow(/not found/);
   });
 
   test("F2: large notes are deleted in calls bounded by bytes, within transaction limits", async () => {

@@ -47,25 +47,23 @@ import { accessRole, noteEdit, noteSummary, toSummary } from "./validators";
 /**
  * Pick the destination notebook, requiring edit access.
  *
- * A person's note for a notebook that no longer exists or no longer takes
- * their notes (deleted, membership removed, or read-only now) goes where a
- * note without a notebook goes: their default notebook. Work typed against a
- * notebook that went away meanwhile, on this device or offline on another,
- * is therefore kept rather than refused (plan 08 A5, review round 1; a
- * recovery-placement decision for review, Q11). Agents are refused as before.
+ * One exception (plan 08 A5, review round 1): a person creating a note in a
+ * notebook they deleted themselves, typically on another of their devices
+ * before it learned of the deletion, gets their default notebook instead of
+ * a refusal, so their own typing is kept. Every other caller and case is
+ * refused as before, with the same error: collaborators, removed or
+ * read-only members, notebooks deleted by someone else, and agents. Their
+ * unsaved work follows the access-loss path, which D86 requires
+ * (04-documents.md: "users cannot export unsaved work after notebook access
+ * is removed").
  */
 async function destination(
   ctx: MutationCtx,
   actor: Principal,
   notebookId: Id<"notebooks"> | undefined,
 ): Promise<Doc<"notebooks">> {
-  if (notebookId && actor.kind !== "human")
+  if (notebookId && !(await deletedByCaller(ctx, actor, notebookId)))
     return (await loadNotebook(ctx, actor, notebookId, "edit")).notebook;
-  if (notebookId) {
-    const named = await ctx.db.get(notebookId);
-    if (named && atLeast(await notebookRole(ctx, actor, named), "edit"))
-      return named;
-  }
   if (actor.kind === "human" && actor.defaultNotebookId) {
     const notebook = await ctx.db.get(actor.defaultNotebookId);
     if (notebook && atLeast(await notebookRole(ctx, actor, notebook), "edit"))
@@ -95,6 +93,20 @@ function checkSources(sourceNoteIds: Id<"notes">[]) {
   if (sourceNoteIds.length > MAX_SOURCE_NOTES)
     fail("invalid", `Name at most ${MAX_SOURCE_NOTES} source notes.`);
   return sourceNoteIds;
+}
+
+/** Whether this person deleted the notebook themselves (`deletedNotebooks`). */
+async function deletedByCaller(
+  ctx: MutationCtx,
+  actor: Principal,
+  notebookId: Id<"notebooks">,
+) {
+  if (actor.kind !== "human") return false;
+  const record = await ctx.db
+    .query("deletedNotebooks")
+    .withIndex("by_notebook", (q) => q.eq("notebookId", notebookId))
+    .first();
+  return record !== null && record.ownerId === actor._id;
 }
 
 function editFailure(error: unknown): never {

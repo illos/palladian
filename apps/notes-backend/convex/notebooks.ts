@@ -143,7 +143,8 @@ export const setDefault = mutation({
  * someone else stops the deletion: the caller has no authority over it.
  *
  * Then the notebook's memberships go, its open invitations are revoked, and
- * its feed entries and the notebook itself are removed. Everyone's sort
+ * its feed entries and the notebook itself are removed, leaving a record in
+ * `deletedNotebooks` for the owner's other devices (see notes.create). Everyone's sort
  * order and custom positions for it follow in scheduled batches
  * (`arrangement.forgetNotebook`), as moved notes' positions do
  * (`arrangement.forgetStale`); reads leave them out meanwhile.
@@ -432,6 +433,13 @@ export const remove = mutation({
       .unique();
     if (sequence) await ctx.db.delete(sequence._id);
     await ctx.db.delete(notebook._id);
+    // Kept for good: the owner's other devices may still create notes they
+    // typed in it (notes.create files them in the default notebook).
+    await ctx.db.insert("deletedNotebooks", {
+      notebookId: notebook._id,
+      ownerId: notebook.ownerId,
+      deletedAt: Date.now(),
+    });
     // Everyone's sort order and positions for it go in batches afterwards;
     // reads leave them out once the notebook is gone.
     await ctx.scheduler.runAfter(0, internal.arrangement.forgetNotebook, {
