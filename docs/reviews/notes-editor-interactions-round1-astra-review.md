@@ -1,0 +1,15 @@
+# Editor interactions — independent review, round 1
+
+Reviewer: GPT-6-Astra (Codex, high reasoning), delegated read-only on 2026-10-22. Reviewed `f59008e..e938f77` on `feat/notes-editor-interactions`. Report recorded verbatim below; responses are in `notes-editor-interactions-implementation.md`.
+
+---
+
+CHANGES NEEDED
+
+1. **F1 — blocking: Link form overwrites collaborators' edits.** [editor.tsx:666](/srv/presidium/projects/palladian/code/.worktrees/editor-interactions/apps/notes/src/editor.tsx:666) snapshots the label; [editor-links.ts:271](/srv/presidium/projects/palladian/code/.worktrees/editor-interactions/apps/notes/src/editor-links.ts:271) replaces the mapped range when its current text differs. Reproduced with `receiveTransaction`: open the form on `hello`, receive `heREMOTEllo`, apply without changing the label → `hello`. **Fix:** Track whether the label was explicitly edited. For URL-only changes, apply a mark to the current mapped text. Invalidate or reconcile the form when remote changes overlap an explicitly edited label. Test remote insertion, deletion and replacement before Apply.
+
+2. **F2 — blocking: Partial list conversion can stop saving.** [editor-commands.ts:195](/srv/presidium/projects/palladian/code/.worktrees/editor-interactions/apps/notes/src/editor-commands.ts:195) computes the remaining ordered list's start without enforcing the server ceiling. Reproduced with a valid two-item list starting at `1,000,000`: converting its first item to a checklist creates a remainder starting at `1,000,001`; `applySafeStep` rejects step 0 with `Invalid list start.` **Fix:** Bound the generated numbering or refuse the conversion before dispatch. Replay every emitted step through server validation in boundary tests.
+
+3. **F3 — should fix: Markdown preprocessing changes valid syntax and code text.** [editor-clipboard.ts:57](/srv/presidium/projects/palladian/code/.worktrees/editor-interactions/apps/notes/src/editor-clipboard.ts:57) appends markers before Markdown parsing; nested fences are not recognized. Reproduced: `# Title\n\n---\nbelow` pastes `---` as ordinary text instead of a divider. A fenced JavaScript block inside a quote acquires an extra trailing space. Existing literal U+E000 characters are also consumed by `splitLines`. **Fix:** Preserve soft breaks after parsing, without modifying structural delimiters, code contents or literal characters. Add these paste regressions.
+
+Validation: 20 Node tests, 147 Vitest tests, typecheck and both offline Chromium tests passed. Additional local collaboration/undo probes preserved remote text and unique IDs in ordinary list, divider and heading cases. Existing link-form tests check range mapping but never Apply after an overlapping remote edit. The browser suite remained blocked by occupied port 5178 on retry; no process was stopped. Browser fixtures use synthetic clipboard events and mocked `window.open`. Live two-client sync, real IME and iPhone checks remain unverified. URL-validation and `noopener` paths looked correct on inspection.
