@@ -2,7 +2,7 @@
 
 Date: 2026-10-22. Branch `feat/notes-settings-account`, base `86bb0b6`. Owner request: "Yes" to starting the Deltos feature port with Settings and account plus the editor bugs ([plan 08](../specs/notes-app/08-deltos-feature-port.md), A1 and bugs 1–6).
 
-Independent review rounds 1–5 (`notes-settings-account-round{1,2,3,4,5}-astra-review.md`) requested changes; responses are below. After round 3, **Update now was removed from this branch** and deferred to its own task; see [round 3](#review-round-3-responses).
+Independent review rounds 1–5 (`notes-settings-account-round{1..5}-astra-review.md`) requested changes; responses are below. Round 6 (`notes-settings-account-round6-astra-review.md`) **accepted** `86bb0b6..8e904de` with no blocking or should-fix findings. After round 3, **Update now was removed from this branch** and deferred to its own task; see [round 3](#review-round-3-responses).
 
 ## Result
 
@@ -77,6 +77,10 @@ Round 4 also confirmed the R3-2 stranding is reachable with the ordinary Back bu
 | Finding                                  | Response                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | R5-1 — required page splits omit devices | Fixed. For a bounded page `devices.list` returns the requested `endCursor` as `continueCursor` (the adapter's stream otherwise reports where the read limit stopped); unbounded pages keep the adapter's cursor. The helper then splits a cut-short page between its start and its real end. New test "the app's pagination hook sees every device across large splits" replays the helper's algorithm from `convex-helpers/react.ts` 0.1.124 (re-run pages; split on `SplitRecommended`/`SplitRequired` into start → `splitCursor` and `splitCursor` → `continueCursor`; Show more pins the last page): 62 devices loaded, 250 more sign in, all 312 shown once, this device first. Without the fix it shows 212 of 312, as the reviewer found. |
+
+## Review round 6
+
+Accepted. Its one note, R6-1, suggests keeping a regression that runs the installed `convex-helpers` hook itself (React over `convex-test` with a mocked query transport), as the reviewer's harness did, beside the committed test that replays the hook's algorithm. The backend tests have no React test setup today; this is recorded as a follow-up rather than added here.
 
 ## Evidence
 

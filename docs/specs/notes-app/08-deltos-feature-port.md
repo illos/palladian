@@ -57,6 +57,8 @@ Track A needs no backend schema change except notebook deletion (A5).
 
 ### A1. Settings and account (S–M)
 
+Implemented 2026-10-22 with bugs 1–6 and accepted after independent review (`docs/reviews/notes-settings-account-implementation.md`); Update now is deferred (below).
+
 Deltos reference: `routes/settings/*`, `SettingsRail.tsx`, `SettingsRoute.tsx`, `SettingsPane.tsx`, `SessionsSection.tsx`, `AboutTab.tsx`, `lib/forceUpdate.ts`; ROAD-0009 and DEC-0002.
 
 **Shell**
