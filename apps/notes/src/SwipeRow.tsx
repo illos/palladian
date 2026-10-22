@@ -28,6 +28,7 @@ export const actionIcons: Record<ActionId, IconName> = {
   duplicate: "copy",
   move: "notebook",
   share: "share",
+  history: "history",
   info: "info",
   export: "download",
   print: "print",

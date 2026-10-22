@@ -17,6 +17,7 @@ import type {
   NotesStore,
 } from "./cache";
 import { emptyDocument, validateCachedDocument } from "./document";
+import { dayAndTime, smartDate } from "./dates";
 import { EditorSurface } from "./EditorSurface";
 import { Icon } from "./Icons";
 import { Appearance } from "./Appearance";
@@ -62,6 +63,7 @@ import "./theme.css";
 import "./styles.css";
 
 const Panels = lazy(() => import("./panels"));
+const HistoryPanel = lazy(() => import("./HistoryPanel"));
 
 type OpenKind = "cached" | "draft" | "live" | "reader";
 interface OpenNote extends NoteBody {
@@ -81,6 +83,7 @@ type Dialog =
   | { kind: "move"; noteId: string; notebookId?: string }
   | { kind: "info"; noteId: string; text?: string }
   | { kind: "notebook"; notebookId: string | null }
+  | { kind: "history"; noteId: string; title: string; source: Menu["source"] }
   | null;
 /** A note's actions menu: the long-press sheet, row menu or "…" menu. */
 interface Menu {
@@ -101,6 +104,7 @@ interface NoteTarget extends ActionTarget {
 const toolbarIcons: ActionId[] = [
   "share",
   "move",
+  "history",
   "info",
   "restore",
   "trash",
@@ -109,6 +113,7 @@ const toolbarIcons: ActionId[] = [
 const toolbarLabels: Partial<Record<ActionId, string>> = {
   share: "Share note",
   move: "Move to another notebook",
+  history: "Note history",
   info: "Note info",
   restore: "Restore note",
   trash: "Move note to Trash",
@@ -1098,6 +1103,13 @@ export function App({
           return setDialog({ kind: "share", noteId: target.id });
         case "move":
           return setDialog({ kind: "move", noteId: target.id });
+        case "history":
+          return setDialog({
+            kind: "history",
+            noteId: target.id,
+            title: target.title,
+            source,
+          });
         case "info": {
           const text =
             shownOpening !== null
@@ -1337,6 +1349,25 @@ export function App({
   useEffect(() => {
     if (menuStale) setMenu(null);
   }, [menuStale]);
+  // History closes once the note no longer offers it: a lost edit role, Trash,
+  // or the note gone. The list row has the latest role from the server; an
+  // open note keeps the role it opened with. Offline, History hides with the
+  // other dialogs and returns.
+  const historyStale =
+    dialog?.kind === "history" &&
+    liveReady &&
+    [
+      currentTarget(dialog.noteId, dialog.source),
+      currentTarget(dialog.noteId, "row"),
+    ].some(
+      (target) =>
+        !target ||
+        target.accountId !== accountId ||
+        !noteActions(target, true).includes("history"),
+    );
+  useEffect(() => {
+    if (historyStale) setDialog(null);
+  }, [historyStale]);
   const ownTrash =
     section.kind === "trash"
       ? sectionRows.filter((row) => row.role === "owner").map(targetOf)
@@ -2037,7 +2068,26 @@ export function App({
           )}
         </section>
       </main>
-      {dialog && live && liveReady && (
+      {dialog?.kind === "history" && live && liveReady && !historyStale && (
+        <PanelBoundary onSignedOut={() => session.retry()}>
+          <Suspense fallback={null}>
+            <HistoryPanel
+              key={dialog.noteId}
+              live={live}
+              noteId={dialog.noteId}
+              title={dialog.title}
+              onClose={() => setDialog(null)}
+              onRestored={(version) => {
+                setDialog(null);
+                toast(
+                  `Restored the version from ${dayAndTime(version.endedAt)}`,
+                );
+              }}
+            />
+          </Suspense>
+        </PanelBoundary>
+      )}
+      {dialog && dialog.kind !== "history" && live && liveReady && (
         <PanelBoundary onSignedOut={() => session.retry()}>
           <Suspense fallback={null}>
             <Panels
@@ -2104,23 +2154,4 @@ export function App({
       </dialog>
     </div>
   );
-}
-function smartDate(timestamp: number): string {
-  const date = new Date(timestamp);
-  const now = new Date();
-  if (date.toDateString() === now.toDateString())
-    return date.toLocaleTimeString(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  const yesterday = new Date(now);
-  yesterday.setDate(now.getDate() - 1);
-  if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
-  return date.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    ...(date.getFullYear() !== now.getFullYear()
-      ? ({ year: "numeric" } as const)
-      : {}),
-  });
 }

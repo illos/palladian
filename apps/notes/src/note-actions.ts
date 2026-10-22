@@ -12,6 +12,7 @@ export type ActionId =
   | "duplicate"
   | "move"
   | "share"
+  | "history"
   | "info"
   | "export"
   | "print"
@@ -35,6 +36,7 @@ export const actionLabels: Record<ActionId, string> = {
   duplicate: "Duplicate",
   move: "Move…",
   share: "Share…",
+  history: "History",
   info: "Info",
   export: "Export as Markdown",
   print: "Print or save as PDF",
@@ -50,6 +52,7 @@ const needsServer: Record<ActionId, boolean> = {
   duplicate: true,
   move: true,
   share: true,
+  history: true,
   info: true,
   export: false,
   print: false,
@@ -86,6 +89,8 @@ export function noteActions(target: ActionTarget, online: boolean): ActionId[] {
         "duplicate",
         ...(owner ? (["move"] as const) : []),
         "share",
+        // Past versions are for editors only (D13), and come from the server.
+        ...(edit ? (["history"] as const) : []),
         "info",
         "export",
         "print",

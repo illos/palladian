@@ -1,0 +1,373 @@
+/* ---- Note history (plan 08, A4): a dialog on wide screens, a full-height
+   sheet on phones. Loaded with the panel. ---- */
+.history-panel {
+  width: min(980px, calc(100vw - 48px));
+  height: min(86dvh, 860px);
+  max-width: none;
+  max-height: none;
+  /* No padding: a click on the dialog itself is a click on the backdrop. */
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--paper);
+  color: var(--body);
+  box-shadow: 0 24px 60px rgb(0 0 0 / 0.18);
+  overflow: hidden;
+}
+.history-panel[open] {
+  display: flex;
+  flex-direction: column;
+}
+.history-panel::backdrop {
+  background: rgb(0 0 0 / 0.28);
+}
+.history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 18px 22px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.history-header h2 {
+  margin: 0;
+  font-size: var(--h2);
+  color: var(--ink);
+}
+.history-note-title {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--secondary);
+  overflow-wrap: anywhere;
+}
+.history-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) 1fr;
+}
+.history-versions {
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  background: var(--list);
+}
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.history-row {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  color: var(--body);
+  font-size: 13px;
+}
+.history-row:hover {
+  background: var(--sel);
+}
+.history-row[aria-pressed="true"] {
+  background: var(--sel);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.history-row-who {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 14px;
+  color: var(--ink);
+}
+.history-row-who strong {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-row time {
+  font-size: 12px;
+  color: var(--secondary);
+}
+.history-badge {
+  flex: none;
+  padding: 1px 5px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.history-badge.current {
+  border-color: var(--border);
+  color: var(--secondary);
+}
+.history-older {
+  margin: 12px 16px;
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--ink);
+}
+.history-empty,
+.history-loading {
+  padding: 16px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--secondary);
+}
+.history-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 16px 24px 20px;
+}
+.history-back {
+  display: none;
+}
+.history-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 14px;
+  color: var(--secondary);
+}
+.history-meta strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+.history-compare {
+  display: inline-flex;
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.history-compare button {
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--secondary);
+}
+.history-compare button + button {
+  border-left: 1px solid var(--border);
+}
+.history-compare button[aria-pressed="true"] {
+  background: var(--sel);
+  color: var(--ink);
+  font-weight: 600;
+}
+.history-legend {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--secondary);
+}
+.history-content {
+  flex: 1;
+}
+.history-doc,
+.history-diff {
+  font-family: var(--ff);
+  font-size: var(--note);
+  line-height: var(--line);
+  color: var(--body);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.history-diff ins {
+  background: color-mix(in srgb, var(--sync) 30%, transparent);
+  text-decoration: none;
+  border-radius: 3px;
+}
+.history-diff del {
+  background: color-mix(in srgb, #c4321f 16%, transparent);
+  text-decoration: line-through;
+  text-decoration-color: #c4321f;
+  border-radius: 3px;
+}
+/* A past version, typeset like the editor (styles.css .ProseMirror). */
+.history-doc p {
+  margin: 0 0 0.55em;
+}
+.history-doc > p:first-child,
+.history-doc > h1:first-child {
+  font-size: calc(var(--h1) * 0.8);
+  font-weight: var(--h1w);
+  color: var(--ink);
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+  margin: 0 0 1rem;
+}
+.history-doc h1 {
+  font-size: calc(var(--h1) * 0.8);
+  font-weight: var(--h1w);
+  color: var(--ink);
+  line-height: 1.15;
+  margin: 1.2em 0 0.4em;
+}
+.history-doc h2 {
+  font-size: var(--h2);
+  font-weight: 600;
+  color: var(--ink);
+  margin: 1.1em 0 0.4em;
+}
+.history-doc h3 {
+  font-size: calc(var(--h2) * 0.84);
+  font-weight: 600;
+  color: var(--ink);
+  margin: 1em 0 0.35em;
+}
+.history-doc blockquote {
+  margin: 0 0 0.55em;
+  padding-left: 16px;
+  border-left: 2px solid var(--accent);
+  font-style: italic;
+  color: var(--secondary);
+}
+.history-doc pre {
+  margin: 0 0 0.55em;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--sel);
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+.history-doc code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--sel);
+  font-family: var(--mono);
+  font-size: 0.88em;
+}
+.history-doc pre code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+.history-doc ul,
+.history-doc ol {
+  margin: 0 0 0.55em;
+  padding-left: 24px;
+}
+.history-doc li {
+  margin-bottom: 0.2em;
+}
+.history-doc ul[data-type="tasks"] {
+  list-style: none;
+  padding-left: 0.25em;
+}
+.history-doc li[data-checked]::before {
+  content: "\2610\00a0";
+}
+.history-doc li[data-checked="true"]::before {
+  content: "\2611\00a0";
+}
+.history-doc li[data-checked] > p {
+  display: inline;
+}
+.history-doc a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.history-doc hr {
+  margin: 20px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+.history-doc img {
+  max-width: 100%;
+}
+.history-actions {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.history-actions .error {
+  margin: 0 0 10px;
+}
+.history-confirm p {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: var(--ink);
+}
+.history-actions button {
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-weight: 500;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.history-actions button.secondary {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--border);
+}
+
+@media (max-width: 760px) {
+  .history-panel {
+    width: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  }
+  .history-header {
+    padding: 14px 20px 10px;
+  }
+  .history-header .link-button {
+    min-height: 44px;
+    font-size: 16px;
+  }
+  .history-body {
+    display: flex;
+    flex-direction: column;
+  }
+  .history-versions,
+  .history-view {
+    flex: 1;
+    min-height: 0;
+    border-right: 0;
+  }
+  /* One step at a time: the list, then the version. */
+  .history-panel.has-selection .history-versions,
+  .history-panel:not(.has-selection) .history-view {
+    display: none;
+  }
+  .history-view {
+    padding: 4px 20px 16px;
+  }
+  .history-back {
+    display: inline-flex;
+    align-items: center;
+    align-self: flex-start;
+    gap: 4px;
+    min-height: 44px;
+    font-size: 15px;
+    color: var(--accent);
+  }
+  .history-row {
+    min-height: 60px;
+    padding: 12px 20px;
+  }
+  .history-compare button {
+    min-height: 40px;
+    font-size: 14px;
+  }
+  .history-actions button,
+  .history-older {
+    min-height: 44px;
+  }
+}

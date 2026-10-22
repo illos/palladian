@@ -21,6 +21,7 @@ describe("note actions", () => {
       "duplicate",
       "move",
       "share",
+      "history",
       "info",
       "export",
       "print",
@@ -38,6 +39,33 @@ describe("note actions", () => {
     // Pins are personal, so readers pin too.
     expect(read).toContain("pin");
     expect(noteActions(note({ pinned: true }), true)[0]).toBe("unpin");
+  });
+
+  test("History is for editors, outside Trash, and online (D13)", () => {
+    expect(noteActions(note({ role: "edit" }), true)).toEqual([
+      "duplicate",
+      "share",
+      "history",
+      "info",
+      "export",
+      "print",
+      "trash",
+    ]);
+    expect(noteActions(note({ role: "read" }), true)).not.toContain("history");
+    expect(noteActions(note({ role: null }), true)).not.toContain("history");
+    expect(noteActions(note({ role: undefined }), true)).not.toContain(
+      "history",
+    );
+    expect(noteActions(note({ trashed: true }), true)).not.toContain("history");
+    expect(noteActions(note(), false)).not.toContain("history");
+    expect(noteActions(note({ local: true }), true)).not.toContain("history");
+  });
+
+  test("History is never a swipe", () => {
+    const layout = swipeLayout(note(), true);
+    expect([...layout.leading, ...layout.trailing, layout.full]).not.toContain(
+      "history",
+    );
   });
 
   test("in Trash: restore for editors, delete forever for the owner only", () => {
