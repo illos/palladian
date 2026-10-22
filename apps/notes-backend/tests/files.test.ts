@@ -839,6 +839,20 @@ describe("restoring and purging", () => {
     ).toEqual({ access: "denied" });
   });
 
+  test("active objects are never purged, however old", async () => {
+    const t = setup();
+    const ada = await human(t, "Ada");
+    await ada.as.mutation(api.lifecycle.setTrashRetention, { days: 1 });
+    const noteId = await createNote(ada.as, "Note");
+    const photo = await upload(t, ada.as, { noteId });
+    await replaceAll(ada.as, noteId, `Note\n\n${image(photo)}`);
+    vi.advanceTimersByTime(300 * DAY);
+    await t.mutation(internal.files.purgeExpired, {});
+    await t.mutation(internal.files.expireUploads, {});
+    expect((await object(t, photo))!.state).toBe("ready");
+    expect(await deletions(t)).toEqual([]);
+  });
+
   test("retention follows the object owner's setting; manual keeps it", async () => {
     const t = setup();
     const ada = await human(t, "Ada");

@@ -299,11 +299,23 @@ AGENT_JWT_PRIVATE_KEY='{"kty":"EC",…,"kid":"…","alg":"ES256"}'
 ```sh
 pnpm --filter @palladian/notes build          # once, for assets
 cd apps/notes-edge
-npx wrangler dev --port 8787 --ip 127.0.0.1
+npx wrangler dev --port 8787 --ip 127.0.0.1 \
+  --local-upstream localhost:8787 --upstream-protocol http
 ```
 
 Use `http://localhost:8787`, not `127.0.0.1`. Tokens are bound to the
 `PUBLIC_ORIGIN` resource, and the provider rejects requests on another host.
+`--local-upstream` matters since the production route was added: without it
+`wrangler dev` presents every request as `https://notes.parabolic.studio`,
+so the OAuth provider's resource check fails and the `/mcp` challenge omits
+`resource_metadata`.
+
+`scripts/files-e2e.mjs` checks attachments end to end against such a setup:
+start `wrangler dev` additionally with `--test-scheduled --persist-to <dir>`
+and pass `R2_PERSIST_TO=<dir>`. Against a deployment that does not trust
+this Worker's signing key (such as the shared dev deployment), set
+`SERVICE_KEY_TRUSTED=0`: the script then checks that the Worker's upload is
+refused and finalizes through `npx convex run --identity` instead.
 
 ## Checks
 

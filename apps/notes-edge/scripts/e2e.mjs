@@ -86,6 +86,7 @@ async function createPerson() {
   const human = new ConvexHttpClient(CONVEX_URL, quiet);
   human.setAuth(jwt);
   log("signed in through Better Auth and obtained a Convex JWT");
+  human.jwt = jwt;
   return human;
 }
 
@@ -352,7 +353,13 @@ async function call(client, name, args = {}) {
   return result;
 }
 
-async function exerciseTools(client, privateNoteId) {
+/** A 1×1 PNG. */
+const PIXEL = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+async function exerciseTools(client, privateNoteId, personJwt) {
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name).sort();
   assert(names.length === 13, `13 tools listed (${names.join(", ")})`);
@@ -481,6 +488,50 @@ async function exerciseTools(client, privateNoteId) {
     `note_history (${history.structuredContent.versions.length} entries) and read_revision 0`,
   );
 
+  const attachRequest = randomUUID();
+  const attached = await call(client, "attach_file", {
+    note_id: noteId,
+    filename: "pixel.png",
+    mime_type: "image/png",
+    content_base64: PIXEL.toString("base64"),
+    request_id: attachRequest,
+  });
+  const objectId = attached.structuredContent.object_id;
+  const again = await call(client, "attach_file", {
+    note_id: noteId,
+    filename: "pixel.png",
+    mime_type: "image/png",
+    content_base64: PIXEL.toString("base64"),
+    request_id: attachRequest,
+  });
+  assert(
+    again.structuredContent.replayed &&
+      again.structuredContent.object_id === objectId,
+    "attach_file replay attaches once",
+  );
+  const withImage = await call(client, "read_note", { note_id: noteId });
+  assert(
+    withImage.structuredContent.markdown.includes(
+      `![pixel\\.png](attachment:${objectId})`,
+    ) ||
+      withImage.structuredContent.markdown.includes(
+        `![pixel.png](attachment:${objectId})`,
+      ),
+    "the note shows the attached image",
+  );
+  const bytes = await fetch(`${WORKER}/files/notes/${noteId}/${objectId}`, {
+    headers: { Authorization: `Bearer ${personJwt}` },
+  });
+  assert(
+    bytes.status === 200 &&
+      bytes.headers.get("content-type") === "image/png" &&
+      Buffer.from(await bytes.arrayBuffer()).equals(PIXEL),
+    "the person reads the agent's upload back through the Worker",
+  );
+  log(
+    "attach_file uploaded a PNG into the note once (request_id replay), and the person read it back from /files",
+  );
+
   const hidden = await call(client, "search_notes", {
     query: "unsharedsecret",
   });
@@ -554,7 +605,7 @@ async function main() {
 
   const modern = await mcpClient(agent.accessToken, "modern");
   assert(modern.getProtocolEra() === "modern", "modern era negotiated");
-  await exerciseTools(modern, privateNote.noteId);
+  await exerciseTools(modern, privateNote.noteId, human.jwt);
   await modern.close();
 
   const legacy = await mcpClient(agent.accessToken, "legacy");
