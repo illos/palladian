@@ -108,6 +108,7 @@ describe("/mcp", () => {
       expect(client.getProtocolEra()).toBe(mode);
       const { tools } = await client.listTools();
       expect(tools.map((t) => t.name).sort()).toEqual([
+        "attach_file",
         "create_note",
         "create_notebook",
         "edit_note",

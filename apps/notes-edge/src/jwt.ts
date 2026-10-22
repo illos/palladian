@@ -103,3 +103,41 @@ export async function mintAgentJwt(input: AgentJwtInput): Promise<string> {
   );
   return `${signingInput}.${base64url(new Uint8Array(signature))}`;
 }
+
+/** Subject of the file service's JWTs; Convex's files.ts accepts only this. */
+export const FILES_SERVICE_SUBJECT = "service:files";
+export const SERVICE_JWT_LIFETIME_SECONDS = 60;
+
+export interface ServiceJwtInput {
+  privateKey: string;
+  issuer: string;
+  /** Seconds since the epoch; defaults to now. */
+  now?: number;
+}
+
+/**
+ * A short-lived JWT for the Worker's own calls to Convex's file service
+ * functions (upload checks, finalize, byte deletion). Signed with the agent
+ * key and issuer, but it names no agent or connection, so Convex resolves no
+ * principal from it: every other function treats it as signed out.
+ */
+export async function mintServiceJwt(input: ServiceJwtInput): Promise<string> {
+  if (!input.issuer) throw new Error("AGENT_JWT_ISSUER is not configured.");
+  const { key, kid } = await signingKey(input.privateKey);
+  const iat = input.now ?? Math.floor(Date.now() / 1000);
+  const header = encodeSegment({ alg: "ES256", typ: "JWT", kid });
+  const payload = encodeSegment({
+    iss: input.issuer,
+    aud: AGENT_JWT_AUDIENCE,
+    sub: FILES_SERVICE_SUBJECT,
+    iat,
+    exp: iat + SERVICE_JWT_LIFETIME_SECONDS,
+  });
+  const signingInput = `${header}.${payload}`;
+  const signature = await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    key,
+    new TextEncoder().encode(signingInput),
+  );
+  return `${signingInput}.${base64url(new Uint8Array(signature))}`;
+}

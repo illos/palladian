@@ -11,6 +11,7 @@ import {
 } from "./consent.ts";
 import { D1KV, purgeAbandonedClients, reserveRegistration } from "./d1-kv.ts";
 import { EMAIL_RELAY_PATH, handleEmailRelay } from "./email.ts";
+import { FILES_PREFIX, handleFiles, sweepDeletedFiles } from "./files.ts";
 import {
   MCP_PATH,
   publicOrigin,
@@ -150,6 +151,8 @@ export default {
   async fetch(request, deployed, ctx) {
     if (new URL(request.url).pathname === EMAIL_RELAY_PATH)
       return handleEmailRelay(request, deployed);
+    if (new URL(request.url).pathname.startsWith(FILES_PREFIX))
+      return handleFiles(request, deployed);
     if (
       new URL(request.url).pathname === "/oauth/register" &&
       !(await registrationAllowed(request, deployed))
@@ -180,5 +183,14 @@ export default {
   async scheduled(_controller, deployed, ctx) {
     if (deployed.OAUTH_DB)
       ctx.waitUntil(purgeAbandonedClients(deployed.OAUTH_DB));
+    // Bytes of permanently deleted and failed uploads (Convex keeps the list).
+    if (deployed.FILES)
+      ctx.waitUntil(
+        sweepDeletedFiles(deployed).catch((error: unknown) =>
+          console.warn("File deletion sweep failed", {
+            error: error instanceof Error ? error.name : "unknown",
+          }),
+        ),
+      );
   },
 } satisfies ExportedHandler<DeployedEnv>;

@@ -36,6 +36,18 @@ const same = <
 declare const proof: Ok;
 
 export const contract = [
+  same<typeof api.files.createUpload, typeof fns.files.createUpload>(proof),
+  same<typeof api.files.uploadTarget, typeof fns.files.uploadTarget>(proof),
+  same<typeof api.files.finalize, typeof fns.files.finalize>(proof),
+  same<typeof api.files.authorizeRead, typeof fns.files.authorizeRead>(proof),
+  same<
+    typeof api.files.authorizePublicRead,
+    typeof fns.files.authorizePublicRead
+  >(proof),
+  same<typeof api.files.deletionBatch, typeof fns.files.deletionBatch>(proof),
+  same<typeof api.files.confirmDeletions, typeof fns.files.confirmDeletions>(
+    proof,
+  ),
   same<typeof api.connections.redeem, typeof fns.connections.redeem>(proof),
   same<typeof api.library.notebooks, typeof fns.library.notebooks>(proof),
   same<typeof api.library.recent, typeof fns.library.recent>(proof),

@@ -17,6 +17,7 @@ src/consent.ts       /authorize, /oauth/request/<key>, /oauth/approve, /oauth/de
 src/mcp/handler.ts   /mcp: per-request stateless MCP server, revoked connection → 401
 src/mcp/tools.ts     the tools and the server instructions
 src/mcp/results.ts   Convex failure → tool result mapping
+src/files.ts         /files/*: attachment upload and reads (private R2), deletion sweep
 src/jwt.ts           short-lived ES256 agent JWTs (Web Crypto)
 src/convex.ts        Convex HTTP client with failure classification
 src/convex-api.ts    typed Convex function references (see "Types")
@@ -27,16 +28,17 @@ scripts/e2e.mjs      end-to-end check against wrangler dev and a local Convex ba
 
 ## Configuration
 
-| Name                    | Kind       | Value                                                                                                                                                                                                                                              |
-| ----------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PUBLIC_ORIGIN`         | var        | Exact public origin, e.g. `https://palladian.<account>.workers.dev`. HTTPS, except `http://localhost`/`127.0.0.1` for local dev. The OAuth issuer, resource (`${PUBLIC_ORIGIN}/mcp`) and note URLs (`${PUBLIC_ORIGIN}/notes/<id>`) derive from it. |
-| `AGENT_JWT_ISSUER`      | var        | `iss` of agent JWTs. Must equal Convex's `AGENT_JWT_ISSUER`. Use `PUBLIC_ORIGIN` in production.                                                                                                                                                    |
-| `CONVEX_URL`            | var        | Convex deployment URL (`https://<name>.convex.cloud`).                                                                                                                                                                                             |
-| `AGENT_JWT_PRIVATE_KEY` | **secret** | Private ES256 JWK as one line of JSON, with a `kid`. Never put it in `wrangler.jsonc`.                                                                                                                                                             |
-| `EMAIL` / `EMAIL_FROM`  | send_email | Cloudflare Email Sending binding and the sender on the onboarded domain (`notes@parabolic.studio`). Account email only (`src/email.ts`).                                                                                                           |
-| `EMAIL_RELAY_SECRET`    | **secret** | Shared with Convex's `EMAIL_RELAY_SECRET`; Convex posts reset and invitation emails to `/internal/email` with it. Without it the relay answers 503.                                                                                                |
-| `OAUTH_DB` / `OAUTH_KV` | D1 or KV   | Grants, tokens (stored hashed), DCR clients, pending consent requests. Production binds D1 (`OAUTH_DB`), adapted to the KV interface by `src/d1-kv.ts`, because the deploy token lacks KV permission; binding `OAUTH_KV` uses KV directly.         |
-| `ASSETS`                | assets     | `../notes/dist`. Build the SPA first.                                                                                                                                                                                                              |
+| Name                    | Kind       | Value                                                                                                                                                                                                                                                                  |
+| ----------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PUBLIC_ORIGIN`         | var        | Exact public origin, e.g. `https://palladian.<account>.workers.dev`. HTTPS, except `http://localhost`/`127.0.0.1` for local dev. The OAuth issuer, resource (`${PUBLIC_ORIGIN}/mcp`) and note URLs (`${PUBLIC_ORIGIN}/notes/<id>`) derive from it.                     |
+| `AGENT_JWT_ISSUER`      | var        | `iss` of agent JWTs. Must equal Convex's `AGENT_JWT_ISSUER`. Use `PUBLIC_ORIGIN` in production.                                                                                                                                                                        |
+| `CONVEX_URL`            | var        | Convex deployment URL (`https://<name>.convex.cloud`).                                                                                                                                                                                                                 |
+| `AGENT_JWT_PRIVATE_KEY` | **secret** | Private ES256 JWK as one line of JSON, with a `kid`. Never put it in `wrangler.jsonc`.                                                                                                                                                                                 |
+| `EMAIL` / `EMAIL_FROM`  | send_email | Cloudflare Email Sending binding and the sender on the onboarded domain (`notes@parabolic.studio`). Account email only (`src/email.ts`).                                                                                                                               |
+| `EMAIL_RELAY_SECRET`    | **secret** | Shared with Convex's `EMAIL_RELAY_SECRET`; Convex posts reset and invitation emails to `/internal/email` with it. Without it the relay answers 503.                                                                                                                    |
+| `OAUTH_DB` / `OAUTH_KV` | D1 or KV   | Grants, tokens (stored hashed), DCR clients, pending consent requests. Production binds D1 (`OAUTH_DB`), adapted to the KV interface by `src/d1-kv.ts`, because the deploy token lacks KV permission; binding `OAUTH_KV` uses KV directly.                             |
+| `FILES`                 | R2         | Private bucket `palladian-notes-files` for attachment bytes (`objects/<objectId>`). Create it before the first deploy with this binding; `wrangler dev` simulates it locally. Without it `/files/*` answers 503 and `attach_file` reports file storage as unavailable. |
+| `ASSETS`                | assets     | `../notes/dist`. Build the SPA first.                                                                                                                                                                                                                                  |
 
 `wrangler.jsonc` holds the production values: origin
 `https://notes.parabolic.studio` (a Worker custom domain; `workers.dev` is
@@ -258,6 +260,28 @@ what the Worker reads. A backend change that breaks the Worker fails
 `pnpm typecheck`. `src/types/buffer.d.ts` names the `Buffer` type the MCP
 SDK's declarations mention, because Workers types declare it only as a value.
 
+## Files (`/files/*`)
+
+Attachment bytes live in the private `FILES` bucket and leave only through
+these routes, each after Convex (`apps/notes-backend/convex/files.ts`)
+authorizes the request. See `docs/reviews/notes-files-backend-implementation.md`.
+
+| Route                                       | Credential                                                 | Convex decides with                                        |
+| ------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
+| `PUT /files/upload/<objectId>`              | `Authorization: Bearer <ticket>` from `files.createUpload` | `files.uploadTarget`, then `files.finalize` (file service) |
+| `GET/HEAD /files/notes/<noteId>/<objectId>` | `Authorization: Bearer <the caller's Convex token>`        | `files.authorizeRead`, as the caller                       |
+| `GET/HEAD /files/public/<token>/<objectId>` | the public link token in the path                          | `files.authorizePublicRead`, signed out                    |
+
+The Worker calls the file service functions with a 60-second JWT it signs
+with `AGENT_JWT_PRIVATE_KEY`, subject `service:files`; it names no agent or
+connection, so every other Convex function treats it as signed out. Uploads
+are at most 25 MB; the Worker checks size and SHA-256 against the ticket
+before writing R2. Only PNG, JPEG, GIF and WebP are served inline; anything
+else is an `application/octet-stream` attachment. Every response has
+`X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src
+'none'; sandbox` and `Cache-Control: private, no-store`. The daily cron also
+deletes the bytes Convex has queued in `objectDeletions`.
+
 ## Local development
 
 A local Convex backend for `apps/notes-backend` must be running, with
@@ -312,7 +336,7 @@ run makes a disposable account. It then:
    cross-site and other-browser (no binding cookie) requests, approve, a
    refused key reuse, then the code and refresh exchanges.
 3. Uses `@modelcontextprotocol/client` 2.3.1 pinned to 2026-07-28 for
-   everything else: lists 12 annotated tools, creates a note from Markdown and
+   everything else: lists 13 annotated tools, creates a note from Markdown and
    replays its `request_id`, searches, lists, reads Markdown and outline, edits
    with `replace_text` and `set_checked`, reads history and revision 0, and
    checks that a note in an unshared notebook is invisible. A default

@@ -35,7 +35,12 @@ const BACKEND_CODES = new Set<string>([
  */
 export type CallFailure =
   | { kind: "backend"; code: BackendErrorCode; message: string }
-  | { kind: "rejected"; message: string }
+  | {
+      kind: "rejected";
+      message: string;
+      /** Convex refused the credentials (HTTP 401/403) before running anything. */
+      credentials?: true;
+    }
   | { kind: "uncertain"; message: string };
 
 export class ConvexCallError extends Error {
@@ -143,6 +148,7 @@ export function convexCaller(
       if (lastStatus === 401 || lastStatus === 403)
         throw new ConvexCallError({
           kind: "rejected",
+          credentials: true,
           message:
             "The notes service did not accept this server's agent credentials (a server configuration problem). Nothing was changed.",
         });

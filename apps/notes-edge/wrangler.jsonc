@@ -26,8 +26,16 @@
       "/.well-known/*",
       "/connect",
       "/internal/*",
+      "/files/*",
     ],
   },
+  // Attachment bytes (port plan B1): a private bucket, never public. Bytes
+  // leave only through /files/* after Convex authorizes the caller
+  // (src/files.ts). `wrangler dev` simulates it locally; production needs
+  // the bucket created before the first deploy that includes this binding.
+  "r2_buckets": [
+    { "binding": "FILES", "bucket_name": "palladian-notes-files" },
+  ],
   // OAuth storage. The provider expects KV; the Worker adapts this D1
   // database to the KV interface (src/d1-kv.ts) because the deploy token has
   // D1 but not KV permissions. Bind OAUTH_KV instead to use KV directly.
@@ -54,7 +62,8 @@
       "allowed_sender_addresses": ["notes@parabolic.studio"],
     },
   ],
-  // Daily removal of registrations that never completed an authorization.
+  // Daily removal of registrations that never completed an authorization,
+  // and of the R2 bytes of permanently deleted attachments.
   "triggers": { "crons": ["23 4 * * *"] },
   "vars": {
     // Production values; local development overrides them from .dev.vars.

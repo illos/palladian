@@ -1,0 +1,9 @@
+{
+  // Only the attachment bucket, for tests against wrangler's local R2
+  // simulation (getPlatformProxy). Nothing here reaches Cloudflare.
+  "name": "palladian-files-test",
+  "compatibility_date": "2026-09-08",
+  "r2_buckets": [
+    { "binding": "FILES", "bucket_name": "palladian-notes-files-test" },
+  ],
+}

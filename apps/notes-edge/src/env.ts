@@ -13,6 +13,8 @@ export interface Env {
   CONVEX_URL: string;
   /** Secret: private ES256 JWK as a JSON string. */
   AGENT_JWT_PRIVATE_KEY: string;
+  /** Private R2 bucket for attachment bytes (src/files.ts); uploads need it. */
+  FILES?: R2Bucket;
   /** Injected by OAuthProvider before either handler runs. */
   OAUTH_PROVIDER: OAuthHelpers;
 }

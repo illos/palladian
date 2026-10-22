@@ -355,7 +355,7 @@ async function call(client, name, args = {}) {
 async function exerciseTools(client, privateNoteId) {
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name).sort();
-  assert(names.length === 12, `12 tools listed (${names.join(", ")})`);
+  assert(names.length === 13, `13 tools listed (${names.join(", ")})`);
   assert(
     tools.every(
       (t) => t.annotations && typeof t.annotations.readOnlyHint === "boolean",
@@ -562,7 +562,7 @@ async function main() {
   const legacyTools = await legacy.listTools();
   const legacyNotebooks = await call(legacy, "list_notebooks");
   assert(
-    legacyTools.tools.length === 12 &&
+    legacyTools.tools.length === 13 &&
       legacyNotebooks.structuredContent.notebooks.length === 1,
     "legacy client works",
   );

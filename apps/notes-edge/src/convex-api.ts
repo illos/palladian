@@ -76,7 +76,74 @@ export interface VersionSummary {
   deviceTime: number | null;
 }
 
+export type ObjectState = "pending" | "ready" | "failed";
+
+export interface ObjectMeta {
+  name: string;
+  mimeType: string;
+  size: number;
+  sha256: string;
+}
+
 export const fns = {
+  files: {
+    createUpload: makeFunctionReference<
+      "mutation",
+      {
+        noteId?: Id<"notes">;
+        notebookId?: Id<"notebooks">;
+        name: string;
+        mimeType: string;
+        size: number;
+        sha256: string;
+        requestId?: string;
+      },
+      {
+        objectId: Id<"objects">;
+        state: ObjectState;
+        ticket: string | null;
+        expiresAt: number | null;
+        name: string;
+        mimeType: string;
+        replayed: boolean;
+      }
+    >("files:createUpload"),
+    uploadTarget: makeFunctionReference<
+      "query",
+      { objectId: string; ticket: string },
+      | { status: "pending"; size: number; sha256: string; mimeType: string }
+      | { status: "ready"; size: number; sha256: string }
+      | { status: "gone" }
+      | { status: "denied" }
+    >("files:uploadTarget"),
+    finalize: makeFunctionReference<
+      "mutation",
+      { objectId: string; ticket: string; size: number; sha256: string },
+      { status: "ready" } | { status: "gone" } | { status: "denied" }
+    >("files:finalize"),
+    authorizeRead: makeFunctionReference<
+      "query",
+      { noteId: string; objectId: string },
+      | ({ access: "granted" } & ObjectMeta)
+      | { access: "unauthenticated" }
+      | { access: "denied" }
+    >("files:authorizeRead"),
+    authorizePublicRead: makeFunctionReference<
+      "query",
+      { token: string; objectId: string },
+      ObjectMeta | null
+    >("files:authorizePublicRead"),
+    deletionBatch: makeFunctionReference<
+      "query",
+      { limit: number },
+      { id: Id<"objectDeletions">; key: string }[]
+    >("files:deletionBatch"),
+    confirmDeletions: makeFunctionReference<
+      "mutation",
+      { ids: Id<"objectDeletions">[] },
+      null
+    >("files:confirmDeletions"),
+  },
   connections: {
     redeem: makeFunctionReference<
       "mutation",

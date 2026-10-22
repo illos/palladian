@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_JWT_AUDIENCE, mintAgentJwt } from "../src/jwt.ts";
+import {
+  AGENT_JWT_AUDIENCE,
+  FILES_SERVICE_SUBJECT,
+  mintAgentJwt,
+  mintServiceJwt,
+} from "../src/jwt.ts";
 
 async function keyPair(kid: string) {
   const pair = (await crypto.subtle.generateKey(
@@ -115,5 +120,41 @@ describe("mintAgentJwt", () => {
     await expect(
       mintAgentJwt({ ...input, issuer: "", privateKey: secret }),
     ).rejects.toThrow(/ISSUER/);
+  });
+});
+
+describe("mintServiceJwt", () => {
+  it("names the file service, and no agent or connection", async () => {
+    const { secret, publicKey } = await keyPair("kid-service");
+    const jwt = await mintServiceJwt({
+      privateKey: secret,
+      issuer: "https://palladian.example.workers.dev",
+      now: 1_800_000_000,
+    });
+    const [header, payload] = jwt.split(".");
+    expect(decode(header!)).toEqual({
+      alg: "ES256",
+      typ: "JWT",
+      kid: "kid-service",
+    });
+    expect(decode(payload!)).toEqual({
+      iss: "https://palladian.example.workers.dev",
+      aud: AGENT_JWT_AUDIENCE,
+      sub: FILES_SERVICE_SUBJECT,
+      iat: 1_800_000_000,
+      exp: 1_800_000_060,
+    });
+    expect(FILES_SERVICE_SUBJECT).toBe("service:files");
+    expect(await verifies(jwt, publicKey)).toBe(true);
+  });
+
+  it("requires the issuer and a signing key", async () => {
+    const { secret } = await keyPair("kid");
+    await expect(
+      mintServiceJwt({ privateKey: secret, issuer: "" }),
+    ).rejects.toThrow(/AGENT_JWT_ISSUER/);
+    await expect(
+      mintServiceJwt({ privateKey: "", issuer: "https://x.test" }),
+    ).rejects.toThrow(/AGENT_JWT_PRIVATE_KEY/);
   });
 });

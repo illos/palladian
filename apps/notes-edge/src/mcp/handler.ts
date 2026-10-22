@@ -8,6 +8,7 @@ import {
   type AgentProps,
   type Env,
 } from "../env.ts";
+import { storeObject, type FilesDeps } from "../files.ts";
 import { mintAgentJwt } from "../jwt.ts";
 import { REQUIRED_SCOPES } from "../scopes.ts";
 import { createNotesServer } from "./tools.ts";
@@ -23,6 +24,8 @@ export type McpContext = ExecutionContext & {
 export interface McpDeps {
   /** Convex client for this agent; tests substitute a fake. */
   convex?: (env: Env, props: AgentProps) => Promise<ConvexCaller>;
+  /** The file service's Convex client, for attach_file; tests substitute a fake. */
+  files?: FilesDeps;
 }
 
 async function agentConvex(env: Env, props: AgentProps): Promise<ConvexCaller> {
@@ -112,6 +115,7 @@ export async function handleMcp(
   let revoked = false;
   let convex: Promise<ConvexCaller> | undefined;
   const makeConvex = deps.convex ?? agentConvex;
+  const files = env.FILES;
   const handler = createMcpHandler(
     () =>
       createNotesServer({
@@ -120,6 +124,22 @@ export async function handleMcp(
         onRevoked: () => {
           revoked = true;
         },
+        ...(files
+          ? {
+              storeFile: (
+                objectId: string,
+                ticket: string,
+                bytes: Uint8Array,
+              ) =>
+                storeObject(
+                  { ...env, FILES: files },
+                  objectId,
+                  ticket,
+                  async (max) => (bytes.byteLength <= max ? bytes : null),
+                  deps.files,
+                ),
+            }
+          : {}),
       }),
     {
       onerror: (error) =>
