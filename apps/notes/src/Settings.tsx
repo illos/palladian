@@ -171,9 +171,11 @@ const outcomes: Record<UpdateOutcome, string> = {
   latest: "You're on the latest version.",
   offline: "Connect to the internet to check for updates.",
   unsupported: "Updates install automatically in this browser.",
+  unsaved:
+    "Your latest typing is not stored on this device yet, so Palladian has not reloaded. Try again in a moment; if this keeps happening, storage may be full, so copy your text somewhere safe first.",
 };
 
-export function About() {
+export function About({ ready }: { ready: () => Promise<boolean> }) {
   const [state, setState] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [waiting, setWaiting] = useState(false);
@@ -207,7 +209,7 @@ export function About() {
         <p className="muted">
           {waiting
             ? "A new version is ready. Update now to start using it."
-            : "Palladian checks for a new version when you ask. Your notes and unsaved typing are kept when it reloads."}
+            : "Palladian checks for a new version when you ask. It reloads only once everything you have typed is stored on this device."}
         </p>
         <button
           type="button"
@@ -215,7 +217,7 @@ export function About() {
           onClick={() => {
             setChecking(true);
             setState("Checking…");
-            void updateApp()
+            void updateApp({ ready })
               .then((outcome) => {
                 setState(outcomes[outcome]);
                 if (outcome !== "updating") setChecking(false);

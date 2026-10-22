@@ -823,6 +823,21 @@ export class NotesStore {
         lock ? { ran: true, value: await work() } : { ran: false },
     );
   }
+  /**
+   * Whether this tab holds typing for the account that is not stored durably
+   * yet: a draft write still queued, or one that failed (for example when
+   * storage is full). Waits for queued writes first. Read-only.
+   */
+  async hasUndurableWork(accountId: string): Promise<boolean> {
+    await Promise.all(
+      [...this.draftQueues.values()].map((queue) =>
+        queue.catch(() => undefined),
+      ),
+    );
+    for (const draft of this.recoveryDrafts.values())
+      if (draft.accountId === accountId) return true;
+    return false;
+  }
   /** Whether unsaved work is kept for this account; see `unsavedWork`. */
   async hasDrafts(accountId: string) {
     return (await this.unsavedWork(accountId)).total > 0;

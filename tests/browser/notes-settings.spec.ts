@@ -132,3 +132,69 @@ test("a Settings link opens its tab directly, and About shows the build", async 
   ).toBeVisible();
   await expect(page).not.toHaveURL(/settings/);
 });
+
+/** Settings from the open note: phones use the navigation sheet. */
+async function settingsFromNote(page: Page, mobile: boolean) {
+  if (mobile)
+    await page.getByRole("button", { name: "Open navigation" }).first().click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+}
+
+test("reloading in Settings, then going back, reopens the note in the address", async ({
+  page,
+}, info) => {
+  const mobile = info.project.name.includes("mobile");
+  await seed(page);
+  await page.getByRole("button", { name: /Welcome to your notes/ }).click();
+  await expect(page).toHaveURL(/\/notes\/[A-Za-z0-9_-]+$/);
+  const noteUrl = page.url();
+  const editor = page.getByRole("textbox", { name: "Note content" });
+  await expect(editor).toContainText(
+    "Opening it does not need a session token",
+  );
+  await settingsFromNote(page, mobile);
+  await expect(page).toHaveURL(/\/settings/);
+  await page.reload();
+  await expect(page).toHaveURL(/\/settings/);
+  await page.getByRole("button", { name: "Notes", exact: true }).click();
+  await expect(page).toHaveURL(noteUrl);
+  await expect(editor).toContainText(
+    "Opening it does not need a session token",
+  );
+});
+
+test("a note that finishes opening while Settings shows does not replace the Settings address", async ({
+  page,
+}, info) => {
+  test.skip(
+    info.project.name.includes("mobile"),
+    "wide layout keeps Settings one tap away",
+  );
+  await seed(page);
+  // Hold the cached-note read so the open completes after Settings opens.
+  await page.evaluate(() => {
+    const harness = (
+      window as unknown as {
+        __notesHarness: {
+          store: { read: (...args: unknown[]) => Promise<unknown> };
+        };
+      }
+    ).__notesHarness;
+    const read = harness.store.read.bind(harness.store);
+    harness.store.read = (...args) =>
+      new Promise((resolve) => setTimeout(() => resolve(read(...args)), 800));
+  });
+  await page.getByRole("button", { name: /Welcome to your notes/ }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page).toHaveURL(/\/settings\/account$/);
+  await page.waitForTimeout(1200);
+  await expect(page).toHaveURL(/\/settings\/account$/);
+  await expect(
+    page.getByRole("heading", { name: "Account", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Notes", exact: true }).click();
+  await expect(page).toHaveURL(/\/notes\/[A-Za-z0-9_-]+$/);
+  await expect(
+    page.getByRole("textbox", { name: "Note content" }),
+  ).toContainText("Opening it does not need a session token");
+});

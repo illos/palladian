@@ -1137,7 +1137,8 @@ function shortDate(timestamp: number) {
 
 /** Devices signed in to this account, listed by ID; tokens stay on the server. */
 function DevicesSection() {
-  const devices = useQuery(api.devices.list, {});
+  const listed = useQuery(api.devices.list, {});
+  const devices = listed?.devices;
   const revoke = useMutation(api.devices.revoke);
   const revokeOthers = useMutation(api.devices.revokeOthers);
   const { error, busy, run } = useAction();
@@ -1201,6 +1202,9 @@ function DevicesSection() {
           </li>
         ))}
       </ul>
+      {listed?.more && (
+        <p className="muted">Showing the {devices?.length} most recent.</p>
+      )}
       {others.length > 1 &&
         (confirming === "others" ? (
           <span className="button-row">
@@ -1209,10 +1213,14 @@ function DevicesSection() {
               className="danger"
               disabled={busy}
               onClick={() =>
-                void run(() => revokeOthers({})).then(() => setConfirming(null))
+                void run(async () => {
+                  // The server signs devices out in batches.
+                  for (let batch = 0; batch < 50; batch++)
+                    if ((await revokeOthers({})).done) return;
+                }).then(() => setConfirming(null))
               }
             >
-              Sign out {others.length} devices
+              Sign out {listed?.more ? "all other" : others.length} devices
             </button>
             <button
               type="button"

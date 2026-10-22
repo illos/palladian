@@ -28,32 +28,15 @@ interface SessionRow {
   userAgent?: string | null;
 }
 
-const PAGE = 100;
+/** Devices listed at once, newest sign-ins first; this device is always shown. */
+const LIST_LIMIT = 50;
+/** Sessions examined by one "sign out all other devices" call. */
+const BATCH = 100;
 
-/** Every unexpired session of the person, read a page at a time. */
-async function sessionsOf(
-  ctx: QueryCtx | MutationCtx,
-  person: Principal,
-): Promise<SessionRow[]> {
+function authUser(person: Principal): string {
   if (!person.authUserId)
     fail("denied", "Only people can perform this action.");
-  const now = Date.now();
-  const rows: SessionRow[] = [];
-  let cursor: string | null = null;
-  for (;;) {
-    const result: {
-      page: SessionRow[];
-      isDone: boolean;
-      continueCursor: string;
-    } = await ctx.runQuery(components.betterAuth.adapter.findMany, {
-      model: "session",
-      where: [{ field: "userId", value: person.authUserId }],
-      paginationOpts: { numItems: PAGE, cursor },
-    });
-    rows.push(...result.page.filter((row) => row.expiresAt > now));
-    if (result.isDone) return rows;
-    cursor = result.continueCursor;
-  }
+  return person.authUserId;
 }
 
 /** The session the caller is using, from its token's claims. */
@@ -98,12 +81,29 @@ export function deviceLabel(userAgent: string | null | undefined): string {
 
 export const list = query({
   args: {},
-  returns: v.array(device),
+  returns: v.object({ devices: v.array(device), more: v.boolean() }),
   handler: async (ctx) => {
-    const person = await requireHuman(ctx);
+    const userId = authUser(await requireHuman(ctx));
     const current = await currentSession(ctx);
-    const rows = await sessionsOf(ctx, person);
-    return rows
+    const now = Date.now();
+    const result = (await ctx.runQuery(components.betterAuth.adapter.findMany, {
+      model: "session",
+      where: [
+        { field: "userId", value: userId },
+        { field: "expiresAt", operator: "gt", value: now },
+      ],
+      sortBy: { field: "createdAt", direction: "desc" },
+      paginationOpts: { numItems: LIST_LIMIT, cursor: null },
+    })) as { page: SessionRow[]; isDone: boolean };
+    const rows = [...result.page];
+    if (current && !rows.some((row) => row._id === current)) {
+      const own = (await ctx.runQuery(components.betterAuth.adapter.findOne, {
+        model: "session",
+        where: [{ field: "_id", value: current }],
+      })) as SessionRow | null;
+      if (own && own.userId === userId && own.expiresAt > now) rows.push(own);
+    }
+    const devices = rows
       .sort(
         (a, b) =>
           Number(b._id === current) - Number(a._id === current) ||
@@ -116,6 +116,7 @@ export const list = query({
         lastActiveAt: row.updatedAt,
         current: row._id === current,
       }));
+    return { devices, more: !result.isDone };
   },
 });
 
@@ -124,14 +125,14 @@ export const revoke = mutation({
   args: { id: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const person = await requireHuman(ctx);
+    const userId = authUser(await requireHuman(ctx));
     if (args.id === (await currentSession(ctx)))
       fail("invalid", "Use Sign out to sign this device out.");
     const row = (await ctx.runQuery(components.betterAuth.adapter.findOne, {
       model: "session",
       where: [{ field: "_id", value: args.id }],
     })) as SessionRow | null;
-    if (!row || row.userId !== person.authUserId)
+    if (!row || row.userId !== userId)
       fail("not_found", "That device is already signed out.");
     await ctx.runMutation(components.betterAuth.adapter.deleteOne, {
       input: { model: "session", where: [{ field: "_id", value: row._id }] },
@@ -140,21 +141,32 @@ export const revoke = mutation({
   },
 });
 
-/** Sign out every device except this one; returns how many were signed out. */
+/**
+ * Sign out other devices, one bounded batch per call: the caller repeats until
+ * `done`. Expired sessions met on the way are removed too; `revoked` counts
+ * only devices that were still signed in. This device is never touched.
+ */
 export const revokeOthers = mutation({
   args: {},
-  returns: v.number(),
+  returns: v.object({ revoked: v.number(), done: v.boolean() }),
   handler: async (ctx) => {
-    const person = await requireHuman(ctx);
+    const userId = authUser(await requireHuman(ctx));
     const current = await currentSession(ctx);
     if (!current) fail("unauthenticated", "Sign in to continue.");
-    const others = (await sessionsOf(ctx, person)).filter(
-      (row) => row._id !== current,
-    );
-    for (const row of others)
+    const result = (await ctx.runQuery(components.betterAuth.adapter.findMany, {
+      model: "session",
+      where: [{ field: "userId", value: userId }],
+      paginationOpts: { numItems: BATCH, cursor: null },
+    })) as { page: SessionRow[]; isDone: boolean };
+    const now = Date.now();
+    let revoked = 0;
+    for (const row of result.page) {
+      if (row._id === current) continue;
       await ctx.runMutation(components.betterAuth.adapter.deleteOne, {
         input: { model: "session", where: [{ field: "_id", value: row._id }] },
       });
-    return others.length;
+      if (row.expiresAt > now) revoked++;
+    }
+    return { revoked, done: result.isDone };
   },
 });

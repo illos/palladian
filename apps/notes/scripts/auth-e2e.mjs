@@ -307,6 +307,12 @@ try {
   await expect(
     laptop.getByRole("textbox", { name: "Note content" }),
   ).toContainText("Only for my devices", { timeout: 15_000 });
+  // The laptop watches its own device list while it is signed out.
+  await laptop.getByRole("button", { name: "Settings" }).first().click();
+  await laptop.getByRole("button", { name: "Security & devices" }).click();
+  await expect(laptop.locator(".devices-section li")).toHaveCount(2, {
+    timeout: 20_000,
+  });
   await page.getByRole("button", { name: "Settings" }).first().click();
   await page.getByRole("button", { name: "Security & devices" }).click();
   const rows = page.locator(".devices-section li");
@@ -319,6 +325,18 @@ try {
     .click();
   await expect(rows).toHaveCount(1, { timeout: 20_000 });
   await expect(rows).toContainText("This device");
+  // Without a reload, the laptop asks to sign in again instead of going blank,
+  // and its cached notes stay readable.
+  await expect(
+    laptop.getByRole("heading", { name: "Sign in to sync" }),
+  ).toBeVisible({ timeout: 30_000 });
+  await expect(
+    laptop.getByRole("heading", { name: "Security & devices" }),
+  ).toBeVisible();
+  await laptop.locator(".settings-back").click();
+  await expect(
+    laptop.getByRole("button", { name: /Private note/ }),
+  ).toBeVisible();
   await laptop.reload();
   await expect(
     laptop.getByRole("heading", { name: "Sign in to sync" }),
@@ -330,7 +348,7 @@ try {
   await page.locator(".settings-back").click();
   await connected(page);
   step(
-    "signing a device out from Settings ends its session; it keeps its copies",
+    "signing a device out from Settings ends its session at once; it asks to sign in and keeps its copies",
   );
 
   const mobile = await browser.newContext({ ...devices["iPhone 15 Plus"] });

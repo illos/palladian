@@ -1562,3 +1562,20 @@ ul.member-list {
     flex-wrap: wrap;
   }
 }
+.panel-failure {
+  max-width: 640px;
+  margin: 8px 0 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.panel-failure p {
+  margin: 0 0 10px;
+  color: var(--ink);
+}
+.panel-failure button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 14px;
+  color: var(--ink);
+}

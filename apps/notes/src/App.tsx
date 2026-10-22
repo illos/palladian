@@ -19,6 +19,7 @@ import { emptyDocument, validateCachedDocument } from "./document";
 import { EditorSurface } from "./EditorSurface";
 import { Icon } from "./Icons";
 import { Appearance } from "./Appearance";
+import { PanelBoundary } from "./PanelBoundary";
 import {
   About,
   SessionControls,
@@ -101,6 +102,13 @@ function channelLabel(status: ChannelStatus | null, ready: boolean) {
   }
 }
 
+/** The address of what the notes view shows: a saved note, or the library. */
+function notePath(note: { id: string; kind: OpenKind } | null) {
+  return note && !note.id.startsWith("local-") && note.kind !== "draft"
+    ? "/notes/" + note.id
+    : "/";
+}
+
 function routeNoteId() {
   const match = /^\/notes\/([A-Za-z0-9_-]+)$/.exec(location.pathname);
   return match ? match[1]! : null;
@@ -157,6 +165,13 @@ export function App({
   const listRequest = useRef(0);
   const writeRequest = useRef(0);
   const pendingRoute = useRef(routeNoteId());
+  /** Bumped when Back or Forward lands on a note the app should open. */
+  const [routeTick, setRouteTick] = useState(0);
+  /**
+   * A notes address that changed while Settings was showing; it is applied
+   * once the notes are shown again rather than over the Settings entry.
+   */
+  const deferredNotesPath = useRef<string | null>(null);
   const openKey = useRef<string | null>(null);
   openKey.current = open?.key ?? null;
   const openRef = useRef(open);
@@ -183,7 +198,22 @@ export function App({
     const moved = () => {
       const route = settingsRoute(location.pathname);
       setView(route ? "settings" : "notes");
-      if (route) setSettingsTab(route.tab);
+      if (route) return setSettingsTab(route.tab);
+      // Back on the notes, the address follows what is shown, or what is
+      // shown follows the address when the shown note has gone (a reload in
+      // Settings, for example).
+      if (deferredNotesPath.current !== null) {
+        history.replaceState(null, "", deferredNotesPath.current);
+        deferredNotesPath.current = null;
+        return;
+      }
+      const shown = notePath(openRef.current);
+      if (location.pathname === shown) return;
+      const id = routeNoteId();
+      if (id) {
+        pendingRoute.current = id;
+        setRouteTick((tick) => tick + 1);
+      } else history.replaceState(null, "", shown);
     };
     addEventListener("popstate", moved);
     return () => removeEventListener("popstate", moved);
@@ -369,15 +399,20 @@ export function App({
       pendingRoute.current = null;
       void openRemote(id);
     }
-  }, [rows, permitted, liveReady, snapshot.generation]);
+  }, [rows, permitted, liveReady, snapshot.generation, routeTick]);
+
+  /** Address the notes view, unless Settings is showing (see deferredNotesPath). */
+  function writeNotesPath(path: string) {
+    if (settingsRoute(location.pathname)) deferredNotesPath.current = path;
+    else if (location.pathname !== path) history.replaceState(null, "", path);
+  }
 
   function closeOpen() {
     openRequest.current++;
     open?.channel?.close();
     setOpen(null);
     setChannelStatus(null);
-    if (location.pathname !== "/" && !settingsRoute(location.pathname))
-      history.replaceState(null, "", "/");
+    writeNotesPath("/");
   }
 
   function show(note: OpenNote) {
@@ -386,9 +421,7 @@ export function App({
     setChannelStatus(null);
     openKey.current = note.key;
     setOpen(note);
-    if (!note.id.startsWith("local-") && note.kind !== "draft")
-      history.replaceState(null, "", "/notes/" + note.id);
-    else if (location.pathname !== "/") history.replaceState(null, "", "/");
+    writeNotesPath(notePath(note));
   }
 
   async function makeChannel(
@@ -420,7 +453,7 @@ export function App({
       onAccessLost: (noteId) => accessLost(noteId),
       onCreated: (noteId) => {
         setOpen((prev) => (prev?.key === key ? { ...prev, id: noteId } : prev));
-        history.replaceState(null, "", "/notes/" + noteId);
+        if (openKey.current === key) writeNotesPath("/notes/" + noteId);
       },
     });
     return channel;
@@ -758,15 +791,18 @@ export function App({
     const depth = settingsDepth();
     if (depth > 0) return history.go(-depth);
     // Opened from a Settings link: replace it with the notes address.
-    const note = openRef.current;
-    history.replaceState(
-      null,
-      "",
-      note && !note.id.startsWith("local-") && note.kind !== "draft"
-        ? "/notes/" + note.id
-        : "/",
-    );
+    const path = deferredNotesPath.current ?? notePath(openRef.current);
+    deferredNotesPath.current = null;
+    history.replaceState(null, "", path);
     setView("notes");
+  }
+  /** Update now reloads only once everything typed is stored on the device. */
+  async function readyToUpdate() {
+    const id = snapshotRef.current.accountId;
+    if (!id) return true;
+    // Typing reaches the recovery journal after a short pause; let it land.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    return !(await store.hasUndurableWork(id));
   }
   function choose(next: Section) {
     setSection(next);
@@ -1199,67 +1235,76 @@ export function App({
             )}
             <h2>{shownTab ? settingsLabel(shownTab) : "Settings"}</h2>
           </header>
-          <div className="settings-pane-body">
-            {shownTab === null ? (
-              <SettingsList onOpen={(tab) => openSettings(tab)} />
-            ) : shownTab === "appearance" ? (
-              <Appearance />
-            ) : shownTab === "about" ? (
-              <About />
-            ) : (
-              <>
-                {live && liveReady ? (
-                  <Suspense fallback={<p>Loading…</p>}>
-                    <Panels
-                      live={live}
-                      panel={shownTab}
-                      notebooks={notebooks}
+          {view === "settings" && (
+            <div className="settings-pane-body">
+              {shownTab === null ? (
+                <SettingsList onOpen={(tab) => openSettings(tab)} />
+              ) : shownTab === "appearance" ? (
+                <Appearance />
+              ) : shownTab === "about" ? (
+                <About ready={readyToUpdate} />
+              ) : (
+                <>
+                  {live && liveReady ? (
+                    <PanelBoundary
+                      key={shownTab}
+                      onSignedOut={() => session.retry()}
+                    >
+                      <Suspense fallback={<p>Loading…</p>}>
+                        <Panels
+                          live={live}
+                          panel={shownTab}
+                          notebooks={notebooks}
+                        />
+                      </Suspense>
+                    </PanelBoundary>
+                  ) : (
+                    <p className="muted">
+                      {shownTab === "account"
+                        ? "Connect to the server to change your name, default notebook and Trash settings."
+                        : "Connect to the server to manage this."}
+                    </p>
+                  )}
+                  {shownTab === "account" && (
+                    <SessionControls
+                      status={sessionStatus}
+                      detail={snapshot.error ?? null}
+                      canSignOut={permitted}
+                      onRetry={() => session.retry()}
+                      onSignOut={() => session.logout()}
                     />
-                  </Suspense>
-                ) : (
-                  <p className="muted">
-                    {shownTab === "account"
-                      ? "Connect to the server to change your name, default notebook and Trash settings."
-                      : "Connect to the server to manage this."}
-                  </p>
-                )}
-                {shownTab === "account" && (
-                  <SessionControls
-                    status={sessionStatus}
-                    detail={snapshot.error ?? null}
-                    canSignOut={permitted}
-                    onRetry={() => session.retry()}
-                    onSignOut={() => session.logout()}
-                  />
-                )}
-              </>
-            )}
-          </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </section>
       </main>
       {dialog && live && liveReady && (
-        <Suspense fallback={null}>
-          <Panels
-            live={live}
-            panel={dialog.kind}
-            notebooks={notebooks}
-            noteId={
-              dialog.kind === "share" || dialog.kind === "move"
-                ? dialog.noteId
-                : undefined
-            }
-            notebookId={
-              dialog.kind === "notebook"
-                ? (dialog.notebookId ?? undefined)
-                : undefined
-            }
-            onClose={() => setDialog(null)}
-            onNotebookCreated={(id) => {
-              setDialog(null);
-              choose({ kind: "notebook", id });
-            }}
-          />
-        </Suspense>
+        <PanelBoundary onSignedOut={() => session.retry()}>
+          <Suspense fallback={null}>
+            <Panels
+              live={live}
+              panel={dialog.kind}
+              notebooks={notebooks}
+              noteId={
+                dialog.kind === "share" || dialog.kind === "move"
+                  ? dialog.noteId
+                  : undefined
+              }
+              notebookId={
+                dialog.kind === "notebook"
+                  ? (dialog.notebookId ?? undefined)
+                  : undefined
+              }
+              onClose={() => setDialog(null)}
+              onNotebookCreated={(id) => {
+                setDialog(null);
+                choose({ kind: "notebook", id });
+              }}
+            />
+          </Suspense>
+        </PanelBoundary>
       )}
       <dialog
         ref={navSheet}
