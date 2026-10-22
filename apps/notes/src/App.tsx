@@ -127,9 +127,19 @@ export function App({
   const live = useSyncExternalStore(liveBox.subscribe, liveBox.get);
   const source = useMemo(() => liveStateSource(live), [live]);
   const liveState = useSyncExternalStore(source.subscribe, source.get);
-  const [view, setView] = useState<"notes" | "settings">(() =>
+  const [view, setViewState] = useState<"notes" | "settings">(() =>
     settingsRoute(location.pathname) ? "settings" : "notes",
   );
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  /**
+   * Opening a note shows the notes. While Settings shows, a note that finishes
+   * opening (a slow read or fetch begun earlier) opens behind it instead; its
+   * address waits too (writeNotesPath). Leaving Settings uses setViewState.
+   */
+  function setView(next: "notes") {
+    if (viewRef.current !== "settings") setViewState(next);
+  }
   // Null is the phone's Settings list; wide screens show Account instead.
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(
     () => settingsRoute(location.pathname)?.tab ?? null,
@@ -197,7 +207,7 @@ export function App({
   useEffect(() => {
     const moved = () => {
       const route = settingsRoute(location.pathname);
-      setView(route ? "settings" : "notes");
+      setViewState(route ? "settings" : "notes");
       if (route) return setSettingsTab(route.tab);
       // Back on the notes, the address follows what is shown, or what is
       // shown follows the address when the shown note has gone (a reload in
@@ -770,7 +780,7 @@ export function App({
       "",
       tab ? "/settings/" + tab : "/settings",
     );
-    setView("settings");
+    setViewState("settings");
     setSettingsTab(tab);
     navSheet.current?.close();
   }
@@ -795,20 +805,7 @@ export function App({
     const path = deferredNotesPath.current ?? notePath(openRef.current);
     deferredNotesPath.current = null;
     history.replaceState(null, "", path);
-    setView("notes");
-  }
-  /**
-   * Update now reloads only once everything typed is stored on the device.
-   * Before the new build activates, the open note is closed: its editor hands
-   * pending typing to the recovery journal at once, and nothing more can be
-   * typed here. Just before the reload it checks again, and holds the reload
-   * if a note has been opened since.
-   */
-  async function readyToUpdate(stage: "activate" | "reload") {
-    if (stage === "activate") closeOpen();
-    else if (openRef.current) return false;
-    const id = snapshotRef.current.accountId;
-    return !id || !(await store.hasUndurableWork(id));
+    setViewState("notes");
   }
   function choose(next: Section) {
     setSection(next);
@@ -1248,7 +1245,7 @@ export function App({
               ) : shownTab === "appearance" ? (
                 <Appearance />
               ) : shownTab === "about" ? (
-                <About ready={readyToUpdate} />
+                <About />
               ) : (
                 <>
                   {live && liveReady ? (

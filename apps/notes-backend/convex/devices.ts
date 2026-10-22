@@ -1,6 +1,9 @@
 import { v } from "convex/values";
 import { components } from "./_generated/api";
-import { paginationOptsValidator } from "convex/server";
+import {
+  paginationOptsValidator,
+  paginationResultValidator,
+} from "convex/server";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { fail, requireHuman, type Principal } from "./access";
@@ -88,11 +91,7 @@ export function deviceLabel(userAgent: string | null | undefined): string {
  */
 export const list = query({
   args: { paginationOpts: paginationOptsValidator },
-  returns: v.object({
-    page: v.array(device),
-    isDone: v.boolean(),
-    continueCursor: v.string(),
-  }),
+  returns: paginationResultValidator(device),
   handler: async (ctx, args) => {
     const userId = authUser(await requireHuman(ctx));
     const current = await currentSession(ctx);
@@ -102,14 +101,22 @@ export const list = query({
       model: "session",
       where: [{ field: "userId", value: userId }],
       sortBy: { field: "createdAt", direction: "desc" },
+      // The whole options pass through, including the end bound the client
+      // pins on loaded pages, so they stay stable as devices come and go.
       paginationOpts: {
-        cursor: args.paginationOpts.cursor,
+        ...args.paginationOpts,
         numItems: Math.min(
           Math.max(args.paginationOpts.numItems, 1),
           PAGE_LIMIT,
         ),
       },
-    })) as { page: SessionRow[]; isDone: boolean; continueCursor: string };
+    })) as {
+      page: SessionRow[];
+      isDone: boolean;
+      continueCursor: string;
+      splitCursor?: string | null;
+      pageStatus?: "SplitRecommended" | "SplitRequired" | null;
+    };
     const rows = result.page.filter(
       (row) => row.expiresAt > now && row._id !== current,
     );
@@ -131,6 +138,12 @@ export const list = query({
       })),
       isDone: result.isDone,
       continueCursor: result.continueCursor,
+      ...(result.splitCursor !== undefined
+        ? { splitCursor: result.splitCursor }
+        : {}),
+      ...(result.pageStatus !== undefined
+        ? { pageStatus: result.pageStatus }
+        : {}),
     };
   },
 });

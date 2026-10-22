@@ -120,7 +120,9 @@ test("a Settings link opens its tab directly, and About shows the build", async 
     page.getByRole("heading", { name: "About", exact: true }),
   ).toBeVisible();
   await expect(page.locator(".about-facts dd").first()).not.toBeEmpty();
-  await expect(page.getByRole("button", { name: "Update now" })).toBeVisible();
+  await expect(
+    page.getByText(/starts once every Palladian window is closed/),
+  ).toBeVisible();
   // Leaving a directly opened tab lands on the notes, not outside the app.
   await page
     .getByRole("button", { name: "Settings", exact: true })

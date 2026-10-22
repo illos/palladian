@@ -62,34 +62,24 @@ export function offlineShell(): Plugin {
 }
 
 /**
- * The service worker for one build. A new build waits until Settings → About →
- * Update now asks it to take over. Files of older builds stay cached while
- * another window may still be running one and lazy-load its chunks; they are
- * removed once a single window is left.
+ * The service worker for one build. A new build installs in the background and
+ * takes over once no window runs the previous one; it then removes the older
+ * builds' files.
  */
 export function serviceWorkerSource(version: string, assets: string[]): string {
   return `const NAME = ${JSON.stringify("palladian-notes-shell-" + version)};
 const ASSETS = ${JSON.stringify(assets)};
 self.addEventListener('install', event => event.waitUntil(caches.open(NAME).then(cache => cache.addAll(ASSETS))));
-self.addEventListener('message', event => { if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting(); });
-// Only retired builds are removed: never while a newer one installs or waits, nor while another window may run an older one.
-const cleanUp = () => self.registration.installing || self.registration.waiting ? Promise.resolve() : self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(windows => windows.length > 1 ? undefined : caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('palladian-notes-shell-') && key !== NAME).map(key => caches.delete(key)))));
-self.addEventListener('activate', event => event.waitUntil(cleanUp().then(() => self.clients.claim())));
+self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('palladian-notes-shell-') && key !== NAME).map(key => caches.delete(key)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.search || event.request.headers.has('authorization') || url.origin !== self.location.origin) return;
   // Note and Settings deep links open the cached shell; the app reads the note from the local cache.
   if (event.request.mode === 'navigate' && (/^\\/notes\\/[A-Za-z0-9_-]+$/.test(url.pathname) || /^\\/settings(\\/[a-z]+)?$/.test(url.pathname))) {
     event.respondWith(caches.open(NAME).then(cache => cache.match('/')).then(hit => hit || fetch(event.request)));
-    event.waitUntil(cleanUp());
     return;
   }
-  if (event.request.mode === 'navigate') event.waitUntil(cleanUp());
-  if (ASSETS.includes(url.pathname)) {
-    event.respondWith(caches.open(NAME).then(cache => cache.match(url.pathname)).then(hit => hit || fetch(event.request)));
-    return;
-  }
-  // A file of an older build, asked for by a window still running it.
-  if (url.pathname.startsWith('/assets/')) event.respondWith(caches.match(url.pathname).then(hit => hit || fetch(event.request)));
+  if (!ASSETS.includes(url.pathname)) return;
+  event.respondWith(caches.open(NAME).then(cache => cache.match(url.pathname)).then(hit => hit || fetch(event.request)));
 });`;
 }

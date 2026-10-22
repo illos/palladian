@@ -98,7 +98,7 @@ async function bulkSessions(
           model: "session",
           data: {
             userId,
-            token: `bulk-${userId}-${i}`.padEnd(40, "x"),
+            token: `bulk-${crypto.randomUUID()}`,
             expiresAt: expired(i) ? now - 1000 : now + 86_400_000,
             createdAt: now + i,
             updatedAt: now + i,
@@ -380,6 +380,44 @@ describe("devices", () => {
     const listed = await devicesOf(as, 50);
     expect(listed.map((row) => row.id)).toContain(phoneRow._id);
     expect(listed).toHaveLength(2);
+  });
+
+  test("loaded pages stay stable as devices sign in and out between them", async () => {
+    const t = setup();
+    const { as, person, laptopRow } = await twoDevices(t);
+    const userId = person.authUserId!;
+    await bulkSessions(t, userId, 6, () => false);
+    const page = (cursor: string | null, endCursor?: string) =>
+      as.query(api.devices.list, {
+        paginationOpts: {
+          numItems: 3,
+          cursor,
+          ...(endCursor ? { endCursor } : {}),
+        },
+      });
+    const first = await page(null);
+    const second = await page(first.continueCursor);
+    // The client keeps each loaded page to its original end, as here.
+    const loaded = async () => [
+      ...(await page(null, first.continueCursor)).page,
+      ...(await page(first.continueCursor, second.continueCursor)).page,
+    ];
+    const before = (await loaded()).map((row) => row.id);
+    expect(new Set(before).size).toBe(before.length);
+    // Another device on the first page signs out.
+    const gone = first.page.find((row) => !row.current)!;
+    await as.mutation(api.devices.revoke, { id: gone.id });
+    const afterSignOut = (await loaded()).map((row) => row.id);
+    expect(new Set(afterSignOut).size).toBe(afterSignOut.length);
+    expect(afterSignOut.sort()).toEqual(
+      before.filter((id) => id !== gone.id).sort(),
+    );
+    // A new device signs in: nothing loaded before disappears.
+    await bulkSessions(t, userId, 1, () => false);
+    const afterSignIn = (await loaded()).map((row) => row.id);
+    expect(new Set(afterSignIn).size).toBe(afterSignIn.length);
+    for (const id of afterSignOut) expect(afterSignIn).toContain(id);
+    expect(afterSignIn[0]).toBe(laptopRow._id);
   });
 
   test("device labels name the system and browser only", () => {

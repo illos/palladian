@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Icon } from "./Icons";
-import { updateApp, type UpdateOutcome } from "./update";
 
 /**
  * The parts of Settings that work without the server: the tab list, the
@@ -166,33 +165,7 @@ export function SessionControls({
   );
 }
 
-const outcomes: Record<UpdateOutcome, string> = {
-  updating: "Updating…",
-  latest: "You're on the latest version.",
-  offline: "Connect to the internet to check for updates.",
-  unsupported: "Updates install automatically in this browser.",
-  unsaved:
-    "Your latest typing is not stored on this device yet, so Palladian has not updated. Try again in a moment; if this keeps happening, storage may be full, so copy your text somewhere safe first.",
-  installed:
-    "The update is installed. It starts the next time Palladian opens, so your open note is not interrupted.",
-  failed: "The update could not be installed. Try again later.",
-};
-
-export function About({
-  ready,
-}: {
-  ready: (stage: "activate" | "reload") => Promise<boolean>;
-}) {
-  const [state, setState] = useState<string | null>(null);
-  const [checking, setChecking] = useState(false);
-  const [waiting, setWaiting] = useState(false);
-  useEffect(() => {
-    if (!("serviceWorker" in navigator)) return;
-    void navigator.serviceWorker
-      .getRegistration()
-      .then((registration) => setWaiting(!!registration?.waiting))
-      .catch(() => undefined);
-  }, []);
+export function About() {
   const built = __NOTES_VERSION__.date
     ? new Date(__NOTES_VERSION__.date).toLocaleString(undefined, {
         dateStyle: "medium",
@@ -214,31 +187,10 @@ export function About({
           )}
         </dl>
         <p className="muted">
-          {waiting
-            ? "A new version is ready. Update now to start using it."
-            : "Palladian checks for a new version when you ask. It reloads only once everything you have typed is stored on this device."}
+          A new version downloads in the background and starts once every
+          Palladian window is closed. On iPhone, swipe Palladian away in the app
+          switcher and open it again.
         </p>
-        <button
-          type="button"
-          disabled={checking}
-          onClick={() => {
-            setChecking(true);
-            setState("Checking…");
-            void updateApp({ ready })
-              .then((outcome) => {
-                setState(outcomes[outcome]);
-                if (outcome !== "updating") setChecking(false);
-                if (outcome === "installed") setWaiting(false);
-              })
-              .catch(() => {
-                setState(outcomes.offline);
-                setChecking(false);
-              });
-          }}
-        >
-          Update now
-        </button>
-        {state && <p role="status">{state}</p>}
       </section>
     </div>
   );

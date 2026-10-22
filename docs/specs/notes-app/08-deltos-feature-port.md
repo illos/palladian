@@ -86,7 +86,7 @@ Deltos reference: `routes/settings/*`, `SettingsRail.tsx`, `SettingsRoute.tsx`, 
 - **Appearance**: unchanged.
 - **About**
   - Version and build time, injected at build time.
-  - **Update now**, as in Deltos DEC-0002. Updates stay manual. The service worker gains a `SKIP_WAITING` message handler, and the app reloads after the new worker activates.
+  - **Update now** is deferred to its own task (2026-10-22). A reload is safe only once the editor channel and recovery journal can prove that all typing is stored, including blocked channels and notes not yet created on the server; review found that closing the note does not prove it. Meanwhile About explains that a new version starts once every window is closed. See `docs/reviews/notes-settings-account-implementation.md`, round 3.
 
 **Footer.** Remove the collapsible "Connection" menu. The footer keeps its one-line status; tapping it opens Settings → Account.
 
