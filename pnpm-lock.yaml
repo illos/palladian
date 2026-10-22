@@ -95,6 +95,9 @@ importers:
       convex:
         specifier: 1.45.0
         version: 1.45.0(react@19.3.0)
+      convex-helpers:
+        specifier: 0.1.124
+        version: 0.1.124(@standard-schema/spec@1.1.0)(convex@1.45.0(react@19.3.0))(react@19.3.0)(typescript@7.0.2)(zod@4.5.4)
       dexie:
         specifier: 4.4.6
         version: 4.4.6

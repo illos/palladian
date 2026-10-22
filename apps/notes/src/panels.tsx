@@ -9,9 +9,11 @@ import {
   ConvexProvider,
   useAction as useConvexAction,
   useMutation,
-  usePaginatedQuery,
   useQuery,
 } from "convex/react";
+// The Convex hook does not pin loaded pages' ends, which component-backed
+// queries such as the device list need to stay stable; this one does.
+import { usePaginatedQuery } from "convex-helpers/react";
 import { api } from "@palladian/notes-backend/api";
 import type { Id } from "@palladian/notes-backend/dataModel";
 import type { CachedNotebook } from "./cache";

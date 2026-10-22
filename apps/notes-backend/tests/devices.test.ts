@@ -395,12 +395,14 @@ describe("devices", () => {
           ...(endCursor ? { endCursor } : {}),
         },
       });
+    // The app's hook (`usePaginatedQuery` from convex-helpers/react) asks for
+    // the first page unbounded; Show more pins that page's end and asks for
+    // the next page, which stays a fixed size until the next Show more.
     const first = await page(null);
-    const second = await page(first.continueCursor);
-    // The client keeps each loaded page to its original end, as here.
+    expect(first.isDone).toBe(false);
     const loaded = async () => [
       ...(await page(null, first.continueCursor)).page,
-      ...(await page(first.continueCursor, second.continueCursor)).page,
+      ...(await page(first.continueCursor)).page,
     ];
     const before = (await loaded()).map((row) => row.id);
     expect(new Set(before).size).toBe(before.length);
