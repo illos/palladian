@@ -1,4 +1,4 @@
-import { notesSchema } from "@palladian/notes-core/schema";
+import { assertSafeFragment, notesSchema } from "@palladian/notes-core/schema";
 import {
   Fragment,
   Slice,
@@ -47,7 +47,8 @@ export function hasMarkdownStructure(fragment: Fragment) {
 
 /** Marks a line end that Markdown would join with the next line. */
 const LINE = "\ue000";
-const LINE_BREAK = /\ue000 ?/;
+// The marker follows a space so link detection never takes it into a URL.
+const LINE_BREAK = / ?\ue000 ?/;
 
 /**
  * Mark single line breaks outside fenced and indented code, so lines the
@@ -71,7 +72,7 @@ function markLines(text: string) {
       }
       const next = lines[index + 1];
       if (!next?.trim() || !line.trim() || /^( {4}|\t)/.test(line)) return line;
-      return line + LINE;
+      return line + " " + LINE;
     })
     .join("\n");
 }
@@ -118,11 +119,87 @@ export function markdownSlice(text: string, markdown: MarkdownCodec) {
     return null;
   }
   if (!fragment.childCount || !hasMarkdownStructure(fragment)) return null;
-  return new Slice(
-    fragment,
-    fragment.firstChild!.type === paragraph ? 1 : 0,
-    fragment.lastChild!.type === paragraph ? 1 : 0,
+  return safeSlice(
+    new Slice(
+      fragment,
+      fragment.firstChild!.type === paragraph ? 1 : 0,
+      fragment.lastChild!.type === paragraph ? 1 : 0,
+    ),
   );
+}
+
+const BLOCK_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const LANGUAGE = /^[\w+#.-]{0,40}$/;
+function clip(value: unknown, max: number) {
+  return typeof value === "string" ? value.slice(0, max) : null;
+}
+
+/**
+ * Pasted content within the limits the server checks for every step
+ * (`assertSafeNode`): list numbering, titles, alt text, code languages and
+ * block IDs. A value outside them would make the server refuse the edit and
+ * stop the note from saving.
+ */
+function withinLimits(fragment: Fragment): Fragment {
+  const nodes: ProseMirrorNode[] = [];
+  fragment.forEach((node) => {
+    const marks = node.marks.map((mark) =>
+      mark.type.name === "link" && mark.attrs.title !== null
+        ? mark.type.create({
+            ...mark.attrs,
+            title: clip(mark.attrs.title, 500),
+          })
+        : mark,
+    );
+    if (node.isText) {
+      nodes.push(node.mark(marks));
+      return;
+    }
+    const attrs: Record<string, unknown> = { ...node.attrs };
+    if (
+      "id" in attrs &&
+      attrs.id !== null &&
+      !(typeof attrs.id === "string" && BLOCK_ID.test(attrs.id))
+    )
+      attrs.id = null;
+    if (node.type.name === "ordered_list") {
+      const order = Number(attrs.order);
+      attrs.order = Number.isSafeInteger(order)
+        ? Math.min(Math.max(order, 0), 1_000_000)
+        : 1;
+    }
+    if (node.type.name === "image") {
+      attrs.alt = clip(attrs.alt, 1000);
+      attrs.title = clip(attrs.title, 500);
+    }
+    if (
+      node.type.name === "code_block" &&
+      !(typeof attrs.language === "string" && LANGUAGE.test(attrs.language))
+    )
+      attrs.language = "";
+    nodes.push(node.type.create(attrs, withinLimits(node.content), marks));
+  });
+  return Fragment.fromArray(nodes);
+}
+
+/**
+ * The editor's `transformPasted`, also used for Markdown: pasted content
+ * kept within the server's limits; anything still refused pastes as text.
+ */
+export function safeSlice(slice: Slice): Slice {
+  const content = withinLimits(slice.content);
+  try {
+    assertSafeFragment(content);
+    return new Slice(content, slice.openStart, slice.openEnd);
+  } catch {
+    const lines = slice.content
+      .textBetween(0, slice.content.size, "\n", " ")
+      .split("\n")
+      .map((line) =>
+        paragraph.create(null, line ? notesSchema.text(line) : null),
+      );
+    return new Slice(Fragment.fromArray(lines), 1, 1);
+  }
 }
 
 /** A pasted slice with nothing but unformatted paragraphs, e.g. from a code editor. */
@@ -153,7 +230,10 @@ export function pasteMarkdown(
   if ($from.marks().some((mark) => mark.type.spec.code)) return false;
   const text = data.getData("text/plain");
   if (!text.trim()) return false;
-  if (data.getData("text/html") && !isPlainSlice(slice)) return false;
+  const html = data.getData("text/html");
+  // Palladian's own copies (`data-pm-slice`) and rich HTML keep their structure.
+  if (html && (html.includes("data-pm-slice") || !isPlainSlice(slice)))
+    return false;
   const parsed = markdownSlice(text, codec);
   if (!parsed) return false;
   view.dispatch(

@@ -42,7 +42,7 @@ const SCHEME_END = new RegExp(SCHEME + "$", "i");
 const BARE_END = new RegExp(BARE + "$", "i");
 
 const EMAIL = /^[^\s@/:]+@[^\s@/:]+\.[^\s@/:]+$/;
-const HOST = /^(localhost|[^\s/?#.]+(\.[^\s/?#.]+)+)(:\d+)?([/?#]|$)/i;
+const HOST = /^(localhost|[^\s/?#.:@]+(\.[^\s/?#.:@]+)+)(:\d+)?([/?#]|$)/i;
 
 /**
  * A safe link address from typed input, or null. Bare domains get https://,
@@ -53,10 +53,11 @@ export function normalizeHref(input: string): string | null {
   if (!value) return null;
   let href = value;
   if (EMAIL.test(value)) href = "mailto:" + value;
-  else if (!/^[a-z][a-z\d+.-]*:/i.test(value)) {
+  else if (!/^(https?:\/\/|mailto:)/i.test(value)) {
+    // A host, with or without a port; anything else keeps its own scheme
+    // and must pass isSafeHref.
     const bare = value.replace(/^\/\//, "");
-    if (!HOST.test(bare)) return null;
-    href = "https://" + bare;
+    if (HOST.test(bare)) href = "https://" + bare;
   }
   if (!isSafeHref(href)) return null;
   try {

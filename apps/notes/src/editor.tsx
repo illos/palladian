@@ -70,6 +70,7 @@ import {
 import {
   loadMarkdown,
   pasteMarkdown,
+  safeSlice,
   sanitizePastedHtml,
   serializeClipboardText,
 } from "./editor-clipboard";
@@ -488,8 +489,9 @@ export const markdownShortcuts = inputRules({
       level: match[1]!.length,
     })),
     wrapRule(/^\s*([-+*])\s$/, bullet_list!),
+    // Up to six digits: the server accepts list starts up to 1,000,000.
     wrapRule(
-      /^(\d+)\.\s$/,
+      /^(\d{1,6})\.\s$/,
       ordered_list!,
       (match) => ({ order: Number(match[1]) }),
       (match, node) =>
@@ -497,7 +499,8 @@ export const markdownShortcuts = inputRules({
     ),
     wrapRule(/^\[( |x)?\]\s$/, task_list!),
     wrapRule(/^\s*>\s$/, blockquote!),
-    new InputRule(/^---$/, (state, _match, start, end) =>
+    // iOS Smart Punctuation turns "--" into an em dash before the third "-".
+    new InputRule(/^(?:---|\u2014-)$/, (state, _match, start, end) =>
       withIds(dividerRule(state, start, end)),
     ),
     markRule(/\*\*([^*]+)\*\*$/, marks.strong!),
@@ -691,6 +694,7 @@ export function NoteEditor({
       },
       handlePaste: pasteMarkdown,
       transformPastedHTML: sanitizePastedHtml,
+      transformPasted: safeSlice,
       clipboardTextSerializer: serializeClipboardText,
       handleDOMEvents: {
         click(target, event) {

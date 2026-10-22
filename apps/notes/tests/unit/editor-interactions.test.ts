@@ -8,8 +8,10 @@ import {
   notesSchema,
   parseMarkdownFragment,
 } from "@palladian/notes-core";
+import { assertSafeFragment } from "@palladian/notes-core/schema";
 import { Slice, type Node as ProseMirrorNode } from "prosemirror-model";
 import { baseKeymap, chainCommands } from "prosemirror-commands";
+import { collab, receiveTransaction } from "prosemirror-collab";
 import { history } from "prosemirror-history";
 import { Transform, type Step } from "prosemirror-transform";
 import {
@@ -52,6 +54,7 @@ import {
   loadMarkdown,
   markdownSlice,
   pasteMarkdown,
+  safeSlice,
 } from "../../src/editor-clipboard";
 import { slashKey, slashPalette } from "../../src/editor-slash";
 
@@ -940,5 +943,173 @@ describe("collaboration", () => {
     ])
       expect(types).toContain(name);
     h.replay(start);
+  });
+});
+
+describe("lists under collaboration", () => {
+  const cases: [
+    string,
+    string,
+    (doc: ProseMirrorNode) => TextSelection,
+    Command,
+  ][] = [
+    [
+      "bullet item to checklist",
+      "- a\n- b\n- c",
+      caret("b"),
+      applyListType("checklist"),
+    ],
+    [
+      "paragraphs to bullets",
+      "a\n\nb",
+      select("a", "b"),
+      applyListType("bullet"),
+    ],
+    [
+      "bullets to paragraphs",
+      "- a\n- b",
+      select("a", "b"),
+      applyListType("bullet"),
+    ],
+    [
+      "checklist to numbered",
+      "- [ ] a\n- [ ] b",
+      caret("a"),
+      applyListType("ordered"),
+    ],
+    [
+      "paragraph and checklist",
+      "a\n\n- [ ] b",
+      select("a", "b"),
+      applyListType("checklist"),
+    ],
+  ];
+  const client = (doc: ProseMirrorNode, selection: TextSelection) =>
+    EditorState.create({
+      doc,
+      selection,
+      plugins: [collab({ version: 0, clientID: "me" })],
+    });
+
+  test.each(cases)(
+    "%s keeps concurrent text in both rebase directions",
+    (_name, markdown, selection, command) => {
+      const doc = markdownToDoc(markdown);
+      const remoteInsert = new Transform(doc).insert(
+        at(doc, "b"),
+        notesSchema.text("REMOTE "),
+      );
+
+      // An unconfirmed local list change, then a collaborator's typing arrives.
+      let local = client(doc, selection(doc));
+      expect(command(local, (tr) => (local = local.apply(tr)))).toBe(true);
+      local = local.apply(
+        receiveTransaction(
+          local,
+          remoteInsert.steps,
+          remoteInsert.steps.map(() => "them"),
+        ),
+      );
+      local.doc.check();
+      expect(local.doc.textContent).toContain("REMOTE");
+
+      // Unconfirmed local typing, then a collaborator's list change arrives.
+      let typing = client(doc, TextSelection.create(doc, at(doc, "b")));
+      typing = typing.apply(typing.tr.insertText("LOCAL ", at(doc, "b")));
+      let change: Transaction | null = null;
+      command(
+        EditorState.create({ doc, selection: selection(doc) }),
+        (tr) => (change = tr),
+      );
+      const steps = change!.steps;
+      typing = typing.apply(
+        receiveTransaction(
+          typing,
+          steps,
+          steps.map(() => "them"),
+        ),
+      );
+      typing.doc.check();
+      expect(typing.doc.textContent).toContain("LOCAL");
+    },
+  );
+});
+
+describe("review round fixes", () => {
+  test("link addresses may carry a port; other schemes stay refused", () => {
+    expect(normalizeHref("example.com:8080/x")).toBe(
+      "https://example.com:8080/x",
+    );
+    expect(normalizeHref("localhost:3000")).toBe("https://localhost:3000");
+    expect(normalizeHref("javascript:alert(document.cookie)")).toBeNull();
+    expect(normalizeHref("ftp://example.com")).toBeNull();
+  });
+
+  test("a URL at the end of a pasted line links exactly and the next line has no stray space", () => {
+    const slice = markdownSlice(
+      "Check this out\nhttps://example.com/page\nThanks",
+      codec,
+    )!;
+    expect(slice.content.content.map((node) => node.textContent)).toEqual([
+      "Check this out",
+      "https://example.com/page",
+      "Thanks",
+    ]);
+    expect(slice.content.child(1).firstChild!.marks[0]!.attrs.href).toBe(
+      "https://example.com/page",
+    );
+  });
+
+  test("pasted content stays within the server's limits", () => {
+    const numbered = markdownSlice("1234567. item", codec)!;
+    expect(numbered.content.firstChild!.attrs.order).toBe(1_000_000);
+    const title = "t".repeat(600);
+    const linked = markdownSlice(`[x](https://a.dev "${title}")`, codec)!;
+    expect(
+      linked.content.firstChild!.firstChild!.marks[0]!.attrs.title,
+    ).toHaveLength(500);
+    const odd = new Slice(
+      nodes.doc!.create(null, [
+        nodes.paragraph!.create({ id: "not valid!" }, notesSchema.text("x")),
+      ]).content,
+      0,
+      0,
+    );
+    const safe = safeSlice(odd);
+    expect(safe.content.firstChild!.attrs.id).toBeNull();
+    for (const result of [numbered, linked, safe])
+      assertSafeFragment(result.content);
+    // The typed shortcut leaves a number the server would refuse as text.
+    const typed = new Harness(paragraphs("")).type("1234567. ");
+    expect(typed.state.doc.firstChild!.type.name).toBe("paragraph");
+  });
+
+  test("Palladian's own copies are not reparsed as Markdown", async () => {
+    await loadMarkdown();
+    const h = new Harness(paragraphs(""));
+    const handled = pasteMarkdown(
+      h.view,
+      {
+        clipboardData: {
+          getData: (type: string) =>
+            type === "text/plain"
+              ? "1. Buy milk"
+              : type === "text/html"
+                ? '<p data-pm-slice="1 1 []">1. Buy milk</p>'
+                : "",
+        },
+      } as unknown as ClipboardEvent,
+      new Slice(paragraphs("1. Buy milk").content, 1, 1),
+    );
+    expect(handled).toBe(false);
+  });
+
+  test("iOS's em dash still makes a divider", () => {
+    const h = new Harness(paragraphs("Above", "")).type("\u2014-");
+    expect(shape(h.state.doc)).toEqual([
+      { paragraph: ["Above"] },
+      "horizontal_rule",
+      "paragraph",
+    ]);
   });
 });

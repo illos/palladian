@@ -1,9 +1,12 @@
 import { notesSchema } from "@palladian/notes-core/schema";
 import {
   Fragment,
+  NodeRange,
+  Slice,
   type Attrs,
   type Node as ProseMirrorNode,
   type NodeType,
+  type ResolvedPos,
 } from "prosemirror-model";
 import {
   Selection,
@@ -12,7 +15,12 @@ import {
   type EditorState,
   type Transaction,
 } from "prosemirror-state";
-import { canJoin } from "prosemirror-transform";
+import {
+  canJoin,
+  canSplit,
+  findWrapping,
+  ReplaceAroundStep,
+} from "prosemirror-transform";
 import {
   chainCommands,
   lift,
@@ -28,8 +36,6 @@ const hardBreak = nodes.hard_break!;
 const bulletList = nodes.bullet_list!;
 const orderedList = nodes.ordered_list!;
 const taskList = nodes.task_list!;
-const listItem = nodes.list_item!;
-const taskItem = nodes.task_item!;
 
 function hasAttrs(node: ProseMirrorNode, type: NodeType, attrs: Attrs) {
   return (
@@ -123,18 +129,6 @@ function kindOf(type: NodeType): ListKind | null {
         ? "checklist"
         : null;
 }
-function itemFor(list: NodeType) {
-  return list === taskList ? taskItem : listItem;
-}
-function convertItem(item: ProseMirrorNode, type: NodeType) {
-  if (item.type === type) return item;
-  return type.create(
-    type === taskItem
-      ? { id: item.attrs.id, checked: false }
-      : { id: item.attrs.id },
-    item.content,
-  );
-}
 
 /** The kind of the innermost list around the caret, for the toolbar. */
 export function currentListKind(state: EditorState): ListKind | null {
@@ -147,8 +141,7 @@ export function currentListKind(state: EditorState): ListKind | null {
 }
 
 /** Depth of the innermost list that contains both ends of the selection, or -1. */
-function sharedListDepth(state: EditorState) {
-  const { $from, $to } = state.selection;
+function sharedListDepth($from: ResolvedPos, $to: ResolvedPos) {
   for (let depth = Math.min($from.depth, $to.depth); depth > 0; depth--)
     if (
       kindOf($from.node(depth).type) &&
@@ -158,229 +151,199 @@ function sharedListDepth(state: EditorState) {
   return -1;
 }
 
-/** Where a position sits as (textblock number, offset) within [from, to). */
-function textAnchor(
-  doc: ProseMirrorNode,
-  from: number,
-  to: number,
-  pos: number,
-) {
-  const $pos = doc.resolve(pos);
-  if (!$pos.parent.isTextblock) return null;
-  const start = $pos.start();
-  let index = 0;
-  let found = -1;
-  doc.nodesBetween(from, to, (node, nodePos) => {
-    if (found >= 0) return false;
-    if (!node.isTextblock) return true;
-    if (nodePos + 1 === start) found = index;
-    index++;
-    return false;
-  });
-  return found < 0 ? null : { index: found, offset: $pos.parentOffset };
-}
-function anchorPosition(
-  doc: ProseMirrorNode,
-  from: number,
-  to: number,
-  anchor: { index: number; offset: number } | null,
-) {
-  if (!anchor) return null;
-  let index = 0;
-  let result: number | null = null;
-  doc.nodesBetween(from, to, (node, pos) => {
-    if (result !== null) return false;
-    if (!node.isTextblock) return true;
-    if (index === anchor.index)
-      result = pos + 1 + Math.min(anchor.offset, node.content.size);
-    index++;
-    return false;
-  });
-  return result;
+/*
+ * List changes use only steps that keep the text they move (wrapping,
+ * lifting, splitting, joining, retyping), as prosemirror-schema-list does, so
+ * a collaborator's concurrent typing inside the list survives a rebase.
+ */
+
+/**
+ * Lift the items in `range` out of their list: their content moves to the
+ * list's level and the rest of the list stays around it, a numbered list
+ * counting on. Returns where the lifted blocks now are. Ported from
+ * prosemirror-schema-list's `liftOutOfList`, for every list kind.
+ */
+function liftItems(tr: Transaction, range: NodeRange) {
+  const list = range.parent;
+  const steps = tr.steps.length;
+  for (let pos = range.end, i = range.endIndex - 1; i > range.startIndex; i--) {
+    pos -= list.child(i).nodeSize;
+    tr.delete(pos - 1, pos + 1);
+  }
+  const $start = tr.doc.resolve(range.start);
+  const item = $start.nodeAfter;
+  if (
+    !item ||
+    tr.mapping.slice(steps).map(range.end) !== range.start + item.nodeSize
+  )
+    return null;
+  const atStart = range.startIndex === 0;
+  const atEnd = range.endIndex === list.childCount;
+  const parent = $start.node(-1);
+  const index = $start.index(-1);
+  const rest = atEnd ? Fragment.empty : Fragment.from(list);
+  if (
+    !parent.canReplace(
+      index + (atStart ? 0 : 1),
+      index + 1,
+      item.content.append(rest),
+    )
+  )
+    return null;
+  const start = $start.pos;
+  const end = start + item.nodeSize;
+  const after = list.type.create(
+    list.type === orderedList
+      ? { order: Number(list.attrs.order) + range.endIndex }
+      : null,
+  );
+  tr.step(
+    new ReplaceAroundStep(
+      start - (atStart ? 1 : 0),
+      end + (atEnd ? 1 : 0),
+      start + 1,
+      end - 1,
+      new Slice(
+        (atStart
+          ? Fragment.empty
+          : Fragment.from(list.copy(Fragment.empty))
+        ).append(atEnd ? Fragment.empty : Fragment.from(after)),
+        atStart ? 0 : 1,
+        atEnd ? 0 : 1,
+      ),
+      atStart ? 0 : 1,
+    ),
+  );
+  const from = atStart ? start - 1 : start + 1;
+  return { from, to: from + item.content.size };
 }
 
 /**
- * Replace whole blocks with restructured ones (same textblocks, new wrappers),
- * keeping the selection on the same text so a follow-up command covers it too.
+ * Wrap the blocks between two block boundaries in a list of `type`, one item
+ * per block where an item may start (prosemirror-schema-list's `wrapInList`).
  */
-function restructure(
-  state: EditorState,
-  from: number,
-  to: number,
-  content: ProseMirrorNode[],
-): Transaction {
-  const fragment = Fragment.fromArray(content);
-  const { anchor, head } = state.selection;
-  const anchorAt = textAnchor(state.doc, from, to, anchor);
-  const headAt = textAnchor(state.doc, from, to, head);
-  const tr = state.tr.replaceWith(from, to, fragment);
-  const end = from + fragment.size;
-  const newAnchor = anchorPosition(tr.doc, from, end, anchorAt);
-  const newHead = anchorPosition(tr.doc, from, end, headAt);
-  if (newAnchor !== null && newHead !== null)
-    tr.setSelection(TextSelection.create(tr.doc, newAnchor, newHead));
-  return tr;
-}
-
-/** Join a list with a neighbour of the same kind across the boundary at `pos`. */
-function joinLists(tr: Transaction, pos: number) {
-  const $pos = tr.doc.resolve(pos);
-  const before = $pos.nodeBefore;
-  const after = $pos.nodeAfter;
-  if (
-    before &&
-    after &&
-    before.type === after.type &&
-    kindOf(before.type) &&
-    canJoin(tr.doc, pos)
-  )
-    tr.join(pos);
-}
-function joinAround(tr: Transaction, from: number, to: number) {
-  joinLists(tr, to);
-  joinLists(tr, from);
-}
-
-/** The selected items of the list at `depth` lifted out to plain blocks. */
-function unwrapItems(
-  state: EditorState,
-  dispatch: ((tr: Transaction) => void) | undefined,
-  depth: number,
-) {
-  const { $from, $to } = state.selection;
-  const list = $from.node(depth);
-  const pos = $from.before(depth);
-  const first = $from.index(depth);
-  const last = $to.index(depth);
-  const before: ProseMirrorNode[] = [];
-  const lifted: ProseMirrorNode[] = [];
-  const after: ProseMirrorNode[] = [];
-  list.forEach((item, _offset, index) => {
-    if (index < first) before.push(item);
-    else if (index > last) after.push(item);
-    else item.forEach((child) => lifted.push(child));
-  });
-  const out: ProseMirrorNode[] = [];
-  if (before.length) out.push(list.type.create(list.attrs, before));
-  out.push(...lifted);
-  if (after.length)
-    out.push(list.type.create(nextListAttrs(list, last), after));
-  const parent = $from.node(depth - 1);
-  const index = $from.index(depth - 1);
-  if (!parent.canReplace(index, index + 1, Fragment.fromArray(out)))
-    return false;
-  if (dispatch)
-    dispatch(
-      restructure(state, pos, pos + list.nodeSize, out).scrollIntoView(),
-    );
-  return true;
-}
-
-/** Attributes for the part of a split list after `last`; numbering continues. */
-function nextListAttrs(list: ProseMirrorNode, last: number) {
-  return list.type === orderedList
-    ? { order: Number(list.attrs.order) + last + 1 }
-    : null;
-}
-
-/** Convert the selected items of the list at `depth` into a list of `target`. */
-function convertItems(
-  state: EditorState,
-  dispatch: ((tr: Transaction) => void) | undefined,
-  depth: number,
-  target: NodeType,
-) {
-  if (!dispatch) return true;
-  const { $from, $to } = state.selection;
-  const list = $from.node(depth);
-  const pos = $from.before(depth);
-  const first = $from.index(depth);
-  const last = $to.index(depth);
-  const item = itemFor(target);
-  const before: ProseMirrorNode[] = [];
-  const converted: ProseMirrorNode[] = [];
-  const after: ProseMirrorNode[] = [];
-  list.forEach((child, _offset, index) => {
-    if (index < first) before.push(child);
-    else if (index > last) after.push(child);
-    else converted.push(convertItem(child, item));
-  });
-  const out: ProseMirrorNode[] = [];
-  if (before.length) out.push(list.type.create(list.attrs, before));
-  out.push(
-    target.create(before.length ? null : { id: list.attrs.id }, converted),
-  );
-  if (after.length)
-    out.push(list.type.create(nextListAttrs(list, last), after));
-  const tr = restructure(state, pos, pos + list.nodeSize, out);
-  joinAround(tr, pos, pos + Fragment.fromArray(out).size);
-  dispatch(tr.scrollIntoView());
-  return true;
-}
-
-/** Wrap each selected paragraph (and the items of selected lists) as one list. */
-function wrapBlocks(
-  state: EditorState,
-  dispatch: ((tr: Transaction) => void) | undefined,
-  target: NodeType,
-) {
-  const { $from, $to } = state.selection;
-  const range = $from.blockRange($to);
-  if (!range) return false;
+function wrapBlocks(tr: Transaction, from: number, to: number, type: NodeType) {
+  const range = tr.doc.resolve(from).blockRange(tr.doc.resolve(to));
+  const wrappers = range && findWrapping(range, type);
+  if (!range || !wrappers) return false;
+  tr.wrap(range, wrappers);
+  let pos = range.start + wrappers.length;
   for (let index = range.startIndex; index < range.endIndex; index++) {
-    const block = range.parent.child(index);
-    if (block.type !== paragraph && !kindOf(block.type)) return false;
-  }
-  if (
-    range.startIndex === range.endIndex ||
-    !range.parent.canReplaceWith(range.startIndex, range.endIndex, target)
-  )
-    return false;
-  if (!dispatch) return true;
-  const item = itemFor(target);
-  const items: ProseMirrorNode[] = [];
-  let id: unknown = null;
-  for (let index = range.startIndex; index < range.endIndex; index++) {
-    const block = range.parent.child(index);
-    if (block.type === paragraph) items.push(item.create(null, block));
-    else {
-      id ??= block.attrs.id;
-      block.forEach((child) => items.push(convertItem(child, item)));
+    if (index > range.startIndex && canSplit(tr.doc, pos, 1)) {
+      tr.split(pos, 1);
+      pos += 2;
     }
+    pos += range.parent.child(index).nodeSize;
   }
-  const list = target.create({ id }, items);
-  const tr = restructure(state, range.start, range.end, [list]);
-  joinAround(tr, range.start, range.start + list.nodeSize);
-  dispatch(tr.scrollIntoView());
   return true;
+}
+
+/** Join neighbouring lists of the same kind at block boundaries in [from, to]. */
+function joinLists(tr: Transaction, from: number, to: number) {
+  const $from = tr.doc.resolve(from);
+  const parent = $from.parent;
+  const start = $from.start();
+  const joins: number[] = [];
+  parent.forEach((child, offset, index) => {
+    const pos = start + offset;
+    const before = index > 0 ? parent.child(index - 1) : null;
+    if (
+      pos >= from &&
+      pos <= to &&
+      before?.type === child.type &&
+      kindOf(child.type)
+    )
+      joins.push(pos);
+  });
+  for (const pos of joins.reverse()) if (canJoin(tr.doc, pos)) tr.join(pos);
+}
+
+/** Make the whole list at `pos` a list of `kind`. */
+function convertList(tr: Transaction, pos: number, kind: ListKind) {
+  const list = tr.doc.nodeAt(pos)!;
+  const current = kindOf(list.type);
+  if (current === kind) return true;
+  if (current !== "checklist" && kind !== "checklist") {
+    tr.setNodeMarkup(pos, listTypes[kind], { id: list.attrs.id });
+    return true;
+  }
+  const $inside = tr.doc.resolve(pos + 1);
+  const lifted = liftItems(
+    tr,
+    new NodeRange(
+      $inside,
+      tr.doc.resolve(pos + list.nodeSize - 1),
+      $inside.depth,
+    ),
+  );
+  return !!lifted && wrapBlocks(tr, lifted.from, lifted.to, listTypes[kind]);
 }
 
 /**
  * Bullet, numbered and checklist are exclusive (ported from Deltos's
  * `applyListType`): choosing the current kind lifts the selected items back
- * to paragraphs; bullet and numbered switch a whole list; switching to or
+ * to plain blocks; bullet and numbered switch a whole list; switching to or
  * from a checklist converts the selected items; paragraphs become one item
  * each. Adjacent lists of the same kind join.
  */
 export function applyListType(kind: ListKind): Command {
   const target = listTypes[kind];
   return (state, dispatch) => {
-    const depth = sharedListDepth(state);
-    if (depth < 0) return wrapBlocks(state, dispatch, target);
-    const { $from } = state.selection;
-    const list = $from.node(depth);
-    const current = kindOf(list.type)!;
-    if (current === kind) return unwrapItems(state, dispatch, depth);
-    if (current !== "checklist" && kind !== "checklist") {
-      if (dispatch) {
+    const { $from, $to } = state.selection;
+    const depth = sharedListDepth($from, $to);
+    const tr = state.tr;
+    if (depth > 0) {
+      if (!dispatch) return true;
+      const list = $from.node(depth);
+      const items = new NodeRange($from, $to, depth);
+      const current = kindOf(list.type)!;
+      if (current === kind) {
+        if (!liftItems(tr, items)) return false;
+      } else if (current !== "checklist" && kind !== "checklist") {
         const pos = $from.before(depth);
-        const tr = state.tr.setNodeMarkup(pos, target, { id: list.attrs.id });
-        joinAround(tr, pos, pos + list.nodeSize);
-        dispatch(tr.scrollIntoView());
+        convertList(tr, pos, kind);
+        joinLists(tr, pos, pos + list.nodeSize);
+      } else {
+        const lifted = liftItems(tr, items);
+        if (!lifted) return false;
+        const steps = tr.steps.length;
+        if (!wrapBlocks(tr, lifted.from, lifted.to, target)) return false;
+        joinLists(tr, lifted.from, tr.mapping.slice(steps).map(lifted.to));
       }
+      dispatch(tr.scrollIntoView());
       return true;
     }
-    return convertItems(state, dispatch, depth, target);
+    // No list around the selection: its paragraphs, and any lists among
+    // them, become one list.
+    const range = $from.blockRange($to);
+    if (
+      !range ||
+      !range.parent.canReplaceWith(range.startIndex, range.endIndex, target)
+    )
+      return false;
+    for (let index = range.startIndex; index < range.endIndex; index++) {
+      const block = range.parent.child(index);
+      if (block.type !== paragraph && !kindOf(block.type)) return false;
+    }
+    if (!dispatch) return true;
+    // From the last block back, so earlier positions stay valid.
+    let end = range.end;
+    let run: number | null = null;
+    for (let index = range.endIndex - 1; index >= range.startIndex; index--) {
+      const block = range.parent.child(index);
+      const start = end - block.nodeSize;
+      if (block.type === paragraph) run ??= end;
+      else {
+        if (run !== null && !wrapBlocks(tr, end, run, target)) return false;
+        run = null;
+        if (!convertList(tr, start, kind)) return false;
+      }
+      end = start;
+    }
+    if (run !== null && !wrapBlocks(tr, range.start, run, target)) return false;
+    joinLists(tr, range.start, tr.mapping.map(range.end));
+    dispatch(tr.scrollIntoView());
+    return true;
   };
 }
 
