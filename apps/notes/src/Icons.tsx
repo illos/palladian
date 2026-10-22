@@ -114,6 +114,10 @@ const paths: Record<string, ReactNode> = {
     </>
   ),
   grip: <path d="M8 7h8M8 12h8M8 17h8" />,
+  edit: <path d="M16.5 4.5a2.1 2.1 0 0 1 3 3L9 18l-4 1 1-4z" />,
+  star: (
+    <path d="m12 4 2.4 5 5.4.6-4 3.7 1.1 5.4-4.9-2.8-4.9 2.8 1.1-5.4-4-3.7 5.4-.6z" />
+  ),
   print: (
     <>
       <path d="M7 9V4h10v5" />

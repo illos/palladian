@@ -36,6 +36,16 @@ export async function duplicateNote(
   return result.noteId;
 }
 
+/** Where new notes from All Notes go (owner's notebooks only). */
+export async function setDefaultNotebook(
+  client: ConvexReactClient,
+  notebookId: string,
+) {
+  await client.mutation(api.notebooks.setDefault, {
+    notebookId: notebookId as Id<"notebooks">,
+  });
+}
+
 /**
  * Pins, sort orders and custom positions are personal (D102). Each write
  * names the account it was made in, so the server refuses it if it arrives

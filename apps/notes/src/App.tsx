@@ -24,7 +24,8 @@ import { EditorSurface } from "./EditorSurface";
 import { Icon } from "./Icons";
 import { Appearance } from "./Appearance";
 import { PanelBoundary } from "./PanelBoundary";
-import { ActionMenu } from "./ActionMenu";
+import { ActionMenu, noteMenuItems, type MenuItem } from "./ActionMenu";
+import { NotebookNavItem } from "./NotebookNav";
 import { SwipeRow, actionIcons } from "./SwipeRow";
 import { ToastHost, useToasts } from "./Toasts";
 import {
@@ -40,6 +41,13 @@ import {
   type PendingEdit,
 } from "./arrange";
 import { dropIndex, placement } from "./reorder";
+import {
+  notebookActionLabels,
+  notebookActions,
+  notebookCounts,
+  type NotebookActionId,
+  type NotebookTarget,
+} from "./notebook-actions";
 import {
   actionLabels,
   isLocalNoteId,
@@ -84,8 +92,13 @@ type Dialog =
   | { kind: "share"; noteId: string }
   | { kind: "move"; noteId: string; notebookId?: string }
   | { kind: "info"; noteId: string; text?: string }
-  | { kind: "notebook"; notebookId: string | null }
+  | {
+      kind: "notebook";
+      notebookId: string | null;
+      focus?: "name" | "members";
+    }
   | { kind: "history"; noteId: string; title: string; source: Menu["source"] }
+  | { kind: "delete-notebook"; notebookId: string; name: string }
   | null;
 /** A note's actions menu: the long-press sheet, row menu or "…" menu. */
 interface Menu {
@@ -96,6 +109,20 @@ interface Menu {
   anchor: { x: number; y: number } | null;
   only?: ((action: ActionId) => boolean) | undefined;
 }
+/** A notebook's menu: right-click, hover "…", long press or header "…". */
+interface NotebookMenu {
+  target: NotebookTarget;
+  actions: NotebookActionId[];
+  anchor: { x: number; y: number } | null;
+}
+const notebookIcons: Record<NotebookActionId, MenuItem<string>["icon"]> = {
+  new: "compose",
+  rename: "edit",
+  sharing: "share",
+  members: "user",
+  default: "star",
+  delete: "trash",
+};
 interface NoteTarget extends ActionTarget {
   accountId: string;
   title: string;
@@ -223,6 +250,9 @@ export function App({
   const [section, setSection] = useState<Section>({ kind: "all" });
   const [dialog, setDialog] = useState<Dialog>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
+  const [notebookMenu, setNotebookMenu] = useState<NotebookMenu | null>(null);
+  /** A notebook whose "New note here" waits for its list to show. */
+  const [newNoteIn, setNewNoteIn] = useState<string | null>(null);
   /** The note row resting open after a swipe; one at a time. */
   const [openSwipe, setOpenSwipe] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -1471,6 +1501,138 @@ export function App({
       : [];
   const retention = liveState.profile?.trashRetentionDays;
 
+  /** A notebook's notes on this device, for its deletion dialog. */
+  function deletionCounts(notebookId: string) {
+    const inside = rows.filter(
+      (row) => row.accountId === accountId && row.notebookId === notebookId,
+    );
+    return {
+      notes: inside.length,
+      trashed: inside.filter((row) => row.trashed).length,
+    };
+  }
+
+  /** Notes per notebook on this device, Trash left out. */
+  const counts = notebookCounts(
+    permitted ? rows.filter((row) => row.accountId === accountId) : [],
+  );
+
+  /** The notebook as this device has it now. */
+  function notebookTarget(id: string): NotebookTarget | null {
+    const book = permitted ? notebooks.find((n) => n.id === id) : undefined;
+    return book
+      ? {
+          id: book.id,
+          name: book.name,
+          role: book.role,
+          isDefault: book.isDefault,
+        }
+      : null;
+  }
+
+  function openNotebookMenu(
+    id: string,
+    anchor: { x: number; y: number } | null,
+  ) {
+    const target = notebookTarget(id);
+    if (!target) return;
+    const actions = notebookActions(target, liveReady);
+    if (actions.length) setNotebookMenu({ target, actions, anchor });
+  }
+
+  /**
+   * Run a notebook action if the notebook still offers it to this person:
+   * the role, default and connection may have changed since the menu opened.
+   */
+  async function runNotebookAction(action: NotebookActionId, id: string) {
+    const target = notebookTarget(id);
+    if (!target || !notebookActions(target, liveReady).includes(action))
+      return toast("That action is no longer available for this notebook.");
+    navSheet.current?.close();
+    try {
+      switch (action) {
+        case "new":
+          choose({ kind: "notebook", id });
+          return setNewNoteIn(id);
+        case "rename":
+          return setDialog({ kind: "notebook", notebookId: id, focus: "name" });
+        case "sharing":
+        case "members":
+          return setDialog({
+            kind: "notebook",
+            notebookId: id,
+            focus: "members",
+          });
+        case "default": {
+          if (!live) return;
+          const { setDefaultNotebook } = await import("./note-tools");
+          await setDefaultNotebook(live.client, id);
+          return toast(`New notes from All Notes now go to “${target.name}”.`);
+        }
+        case "delete":
+          return setDialog({
+            kind: "delete-notebook",
+            notebookId: id,
+            name: target.name,
+          });
+      }
+    } catch (failure) {
+      failed(failure);
+    }
+  }
+
+  // "New note here" starts once that notebook's list shows, so the note is
+  // made there: on the server, or as a draft on this device.
+  useEffect(() => {
+    if (newNoteIn === null) return;
+    setNewNoteIn(null);
+    if (section.kind === "notebook" && section.id === newNoteIn)
+      void createNote();
+  }, [newNoteIn, section]);
+
+  // An open notebook menu closes if its actions change under it.
+  const notebookMenuNow = notebookMenu
+    ? notebookTarget(notebookMenu.target.id)
+    : null;
+  const notebookMenuStale =
+    !!notebookMenu &&
+    (!notebookMenuNow ||
+      notebookActions(notebookMenuNow, liveReady).join() !==
+        notebookMenu.actions.join());
+  useEffect(() => {
+    if (notebookMenuStale) setNotebookMenu(null);
+  }, [notebookMenuStale]);
+
+  /**
+   * Before a deleted notebook's notes go to Trash, close the open one among
+   * them: closing journals its latest typing while it can still be saved.
+   */
+  function notebookDeleting(notebookId: string, trash: boolean) {
+    const shown = openRef.current;
+    if (!trash || !shown) return;
+    const row = rows.find(
+      (r) => r.accountId === accountId && r.id === shown.id,
+    );
+    if (row?.notebookId !== notebookId) return;
+    shown.channel?.close();
+    closeOpen();
+  }
+  function notebookDeleted(
+    notebookId: string,
+    name: string,
+    destinationId: string,
+    trash: boolean,
+  ) {
+    setDialog(null);
+    if (section.kind === "notebook" && section.id === notebookId)
+      choose(trash ? { kind: "all" } : { kind: "notebook", id: destinationId });
+    toast(`Deleted “${name}”`);
+  }
+  // The deletion dialog reports back after many server calls; act on the
+  // state as it is then.
+  const deletionHandlers = useRef({ notebookDeleting, notebookDeleted });
+  deletionHandlers.current = { notebookDeleting, notebookDeleted };
+
   /** Settings opens as a history entry, so Back returns to the notes. */
   function openSettings(tab: SettingsTab | null) {
     const depth = view === "settings" ? settingsDepth() + 1 : 1;
@@ -1546,16 +1708,35 @@ export function App({
         </p>
       )}
       {notebooks.map((notebook) => (
-        <button
+        <NotebookNavItem
           key={notebook.id}
-          className={
+          name={notebook.name}
+          title={
+            notebook.role === "owner"
+              ? notebook.name
+              : `${notebook.name} — shared by ${notebook.ownerName}`
+          }
+          count={counts.get(notebook.id) ?? 0}
+          shared={notebook.role !== "owner"}
+          active={
             view === "notes" &&
             section.kind === "notebook" &&
             section.id === notebook.id
-              ? "nav-item active"
-              : "nav-item"
           }
-          onClick={() => choose({ kind: "notebook", id: notebook.id })}
+          dropping={dropTarget === notebook.id}
+          hasMenu={
+            notebookActions(
+              {
+                id: notebook.id,
+                name: notebook.name,
+                role: notebook.role,
+                isDefault: notebook.isDefault,
+              },
+              liveReady,
+            ).length > 0
+          }
+          onSelect={() => choose({ kind: "notebook", id: notebook.id })}
+          onMenu={(anchor) => openNotebookMenu(notebook.id, anchor)}
           onDragOver={(event) => {
             if (!liveReady || !event.dataTransfer.types.includes(NOTE_DRAG))
               return;
@@ -1575,17 +1756,7 @@ export function App({
             event.preventDefault();
             setDialog({ kind: "move", noteId, notebookId: notebook.id });
           }}
-          data-drop={dropTarget === notebook.id ? "" : undefined}
-          title={
-            notebook.role === "owner"
-              ? notebook.name
-              : `${notebook.name} — shared by ${notebook.ownerName}`
-          }
-        >
-          <Icon name="notebook" size={17} />
-          <span>{notebook.name}</span>
-          {notebook.role !== "owner" && <small>Shared</small>}
-        </button>
+        />
       ))}
       <button
         className={
@@ -1619,6 +1790,11 @@ export function App({
     section.kind === "notebook"
       ? notebooks.find((n) => n.id === section.id)
       : undefined;
+  const activeTarget = activeNotebook
+    ? notebookTarget(activeNotebook.id)
+    : null;
+  const activeHasMenu =
+    !!activeTarget && notebookActions(activeTarget, liveReady).length > 0;
 
   return (
     <div
@@ -1637,7 +1813,26 @@ export function App({
         <div className="library-notes" hidden={view !== "notes"}>
           <header className="library-header">
             <div>
-              <h1>{sectionTitle}</h1>
+              <div className="library-title">
+                <h1>{sectionTitle}</h1>
+                {activeNotebook && activeHasMenu && (
+                  <button
+                    type="button"
+                    className="notebook-more"
+                    aria-label="Notebook actions"
+                    title="Notebook actions"
+                    onClick={(event) => {
+                      const box = event.currentTarget.getBoundingClientRect();
+                      openNotebookMenu(activeNotebook.id, {
+                        x: box.left,
+                        y: box.bottom + 4,
+                      });
+                    }}
+                  >
+                    <Icon name="more" size={18} />
+                  </button>
+                )}
+              </div>
               {section.kind === "trash" && retention !== undefined && (
                 <p className="trash-policy">
                   {retention === 0
@@ -2187,17 +2382,45 @@ export function App({
               live={live}
               panel={dialog.kind}
               notebooks={notebooks}
-              noteId={dialog.kind === "notebook" ? undefined : dialog.noteId}
+              noteId={
+                dialog.kind === "notebook" || dialog.kind === "delete-notebook"
+                  ? undefined
+                  : dialog.noteId
+              }
               notebookId={
-                dialog.kind === "notebook" || dialog.kind === "move"
+                dialog.kind === "notebook" ||
+                dialog.kind === "move" ||
+                dialog.kind === "delete-notebook"
                   ? (dialog.notebookId ?? undefined)
                   : undefined
               }
               text={dialog.kind === "info" ? dialog.text : undefined}
+              focus={dialog.kind === "notebook" ? dialog.focus : undefined}
+              counts={
+                dialog.kind === "delete-notebook"
+                  ? deletionCounts(dialog.notebookId)
+                  : undefined
+              }
               onClose={() => setDialog(null)}
               onNotebookCreated={(id) => {
                 setDialog(null);
                 choose({ kind: "notebook", id });
+              }}
+              onNotebookDeleting={(trash) => {
+                if (dialog.kind === "delete-notebook")
+                  deletionHandlers.current.notebookDeleting(
+                    dialog.notebookId,
+                    trash,
+                  );
+              }}
+              onNotebookDeleted={(destinationId, trash) => {
+                if (dialog.kind === "delete-notebook")
+                  deletionHandlers.current.notebookDeleted(
+                    dialog.notebookId,
+                    dialog.name,
+                    destinationId,
+                    trash,
+                  );
               }}
             />
           </Suspense>
@@ -2206,11 +2429,29 @@ export function App({
       {menu && !menuStale && (
         <ActionMenu
           title={menu.target.title}
-          actions={menu.actions}
+          items={noteMenuItems(menu.actions)}
           anchor={menu.anchor}
           sheet={phone || menu.anchor === null}
           onPick={(action) => void runAction(action, menu.target, menu.source)}
           onClose={() => setMenu(null)}
+        />
+      )}
+      {notebookMenu && !notebookMenuStale && (
+        <ActionMenu
+          title={notebookMenu.target.name}
+          label={`Actions for notebook ${notebookMenu.target.name}`}
+          items={notebookMenu.actions.map((id) => ({
+            id,
+            label: notebookActionLabels[id],
+            icon: notebookIcons[id],
+            danger: id === "delete",
+          }))}
+          anchor={notebookMenu.anchor}
+          sheet={phone || notebookMenu.anchor === null}
+          onPick={(action) =>
+            void runNotebookAction(action, notebookMenu.target.id)
+          }
+          onClose={() => setNotebookMenu(null)}
         />
       )}
       <ToastHost toasts={toasts} dismiss={dismissToast} />

@@ -24,7 +24,14 @@ import { deviceName, passkeyOffer, passkeysSupported } from "./passkeys";
 import { PasswordInput } from "./SignIn";
 
 type Panel =
-  "agents" | "account" | "security" | "share" | "notebook" | "move" | "info";
+  | "agents"
+  | "account"
+  | "security"
+  | "share"
+  | "notebook"
+  | "move"
+  | "info"
+  | "delete-notebook";
 type Role = "read" | "edit";
 
 function useAction() {
@@ -479,6 +486,22 @@ function PublicLink({ noteId }: { noteId: Id<"notes"> }) {
   );
 }
 
+/** Who would lose access, as the server's move preview says. */
+function AccessLoss({
+  people,
+  what,
+}: {
+  people: { name: string }[] | undefined | null;
+  what: string;
+}) {
+  if (!people?.length) return null;
+  return (
+    <p className="error">
+      {people.map((p) => p.name).join(", ")} will lose access to {what}.
+    </p>
+  );
+}
+
 function MoveNote({
   noteId,
   initialNotebookId,
@@ -536,12 +559,7 @@ function MoveNote({
             ))}
           </select>
         </label>
-        {preview && preview.length > 0 && (
-          <p className="error">
-            {preview.map((p) => p.name).join(", ")} will lose access to this
-            note.
-          </p>
-        )}
+        <AccessLoss people={preview} what="this note" />
         <button disabled={busy || !target}>Move</button>
         {error && (
           <p role="alert" className="error">
@@ -638,13 +656,18 @@ function NoteInfo({
 
 function NotebookPanel({
   notebookId,
+  focus,
   onClose,
   onCreated,
 }: {
   notebookId: Id<"notebooks"> | null;
+  /** What the notebook menu opened it for. */
+  focus?: "name" | "members" | undefined;
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
+  const nameInput = useRef<HTMLInputElement>(null);
+  const memberSection = useRef<HTMLDivElement>(null);
   const create = useMutation(api.notebooks.create);
   const update = useMutation(api.notebooks.update);
   const setMember = useMutation(api.sharing.setNotebookMember);
@@ -664,6 +687,22 @@ function NotebookPanel({
       setDescription(notebook.description);
     }
   }, [notebook?.id]);
+  // Once loaded, start where the menu pointed: the name or the members.
+  const loaded = !!notebook && members !== undefined;
+  useEffect(() => {
+    if (!loaded) return;
+    if (focus === "name") {
+      nameInput.current?.focus();
+      nameInput.current?.select();
+    }
+    if (focus === "members") {
+      memberSection.current?.scrollIntoView({ block: "nearest" });
+      // Owners start at adding someone; members only read the list.
+      memberSection.current
+        ?.querySelector<HTMLElement>(".add-member select, .add-member input")
+        ?.focus();
+    }
+  }, [loaded]);
   if (!notebookId)
     return (
       <Modal label="New notebook" onClose={onClose}>
@@ -719,6 +758,7 @@ function NotebookPanel({
           <label>
             Name
             <input
+              ref={nameInput}
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
@@ -737,55 +777,262 @@ function NotebookPanel({
           <button disabled={busy}>Save</button>
         </form>
       )}
-      <section className="member-list">
-        <h3>People and agents with access</h3>
-        <ul>
-          {(members ?? []).map((member) => (
-            <li key={member.principalId}>
-              <span>{memberLabel(member)}</span>
-              {member.role === "owner" || !isOwner ? (
-                <span className="member-role">
-                  {member.role === "owner"
-                    ? "Owner"
-                    : member.role === "edit"
-                      ? "Can edit"
-                      : "Can read"}
-                </span>
-              ) : (
-                <RoleSelect
-                  label={`Access for ${member.name}`}
-                  value={member.role}
-                  disabled={busy}
-                  onChange={(value) =>
-                    void run(() =>
-                      setMember({
-                        notebookId,
-                        principalId: member.principalId,
-                        role: value === "remove" ? null : (value as Role),
-                      }),
-                    )
-                  }
-                />
-              )}
-            </li>
-          ))}
-        </ul>
-      </section>
-      {isOwner && (
-        <AddMember
-          existing={existing}
-          onAdd={(principalId, role) =>
-            run(() => setMember({ notebookId, principalId, role }))
-          }
-          onInvite={async (email, role) => {
-            let token: string | null = null;
-            await run(async () => {
-              const result = await invite({ email, notebookId, role });
-              token = result.kind === "invited" ? result.token : null;
+      <div ref={memberSection}>
+        <section className="member-list">
+          <h3>People and agents with access</h3>
+          <ul>
+            {(members ?? []).map((member) => (
+              <li key={member.principalId}>
+                <span>{memberLabel(member)}</span>
+                {member.role === "owner" || !isOwner ? (
+                  <span className="member-role">
+                    {member.role === "owner"
+                      ? "Owner"
+                      : member.role === "edit"
+                        ? "Can edit"
+                        : "Can read"}
+                  </span>
+                ) : (
+                  <RoleSelect
+                    label={`Access for ${member.name}`}
+                    value={member.role}
+                    disabled={busy}
+                    onChange={(value) =>
+                      void run(() =>
+                        setMember({
+                          notebookId,
+                          principalId: member.principalId,
+                          role: value === "remove" ? null : (value as Role),
+                        }),
+                      )
+                    }
+                  />
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+        {isOwner && (
+          <AddMember
+            existing={existing}
+            onAdd={(principalId, role) =>
+              run(() => setMember({ notebookId, principalId, role }))
+            }
+            onInvite={async (email, role) => {
+              let token: string | null = null;
+              await run(async () => {
+                const result = await invite({ email, notebookId, role });
+                token = result.kind === "invited" ? result.token : null;
+              });
+              return token;
+            }}
+          />
+        )}
+      </div>
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+    </Modal>
+  );
+}
+
+/**
+ * Delete a notebook (owner only, plan 08 A5). Its notes go to another of the
+ * owner's notebooks, kept or in Trash, through `notebooks.remove`, which is
+ * called until it reports done. The default notebook asks for another
+ * default first. The move preview warns who would lose access.
+ */
+function DeleteNotebook({
+  notebookId,
+  notes,
+  trashed,
+  onClose,
+  onStart,
+  onDeleted,
+}: {
+  notebookId: Id<"notebooks">;
+  /** Notes in it on this device, and those of them in Trash. */
+  notes: number;
+  trashed: number;
+  onClose: () => void;
+  onStart: (trash: boolean) => void;
+  onDeleted: (destinationId: string, trash: boolean) => void;
+}) {
+  const me = useQuery(api.account.me, {});
+  const all = useQuery(api.library.notebooks, {});
+  const setDefault = useMutation(api.notebooks.setDefault);
+  const remove = useMutation(api.notebooks.remove);
+  const [trash, setTrash] = useState(false);
+  const [chosen, setChosen] = useState("");
+  const [progress, setProgress] = useState<number | null>(null);
+  const { error, busy, run } = useAction();
+  const notebook = all?.find((n) => n.id === notebookId);
+  const others = (all ?? []).filter(
+    (n) => n.role === "owner" && n.id !== notebookId,
+  );
+  const isDefault = !!me && me.defaultNotebookId === notebookId;
+  const fallback =
+    others.find((n) => n.id === me?.defaultNotebookId) ?? others[0];
+  const destination = others.find((n) => n.id === chosen) ?? fallback;
+  const ready = notebook?.role === "owner" && !isDefault && !!destination;
+  const preview = useQuery(
+    api.notebooks.deletePreview,
+    ready && destination
+      ? { notebookId, destinationId: destination.id, trash }
+      : "skip",
+  );
+  const name = notebook?.name ?? "this notebook";
+  const close = () => {
+    if (!busy) onClose();
+  };
+  return (
+    <Modal label={`Delete “${name}”`} onClose={close}>
+      {(me === undefined || all === undefined) && <p>Loading…</p>}
+      {all && !notebook && !busy && (
+        <p>This notebook is no longer available.</p>
+      )}
+      {notebook && notebook.role !== "owner" && (
+        <p>Only the notebook's owner can delete it.</p>
+      )}
+      {notebook?.role === "owner" && isDefault && (
+        <div className="stacked-form">
+          <p>
+            “{name}” is your default notebook: new notes from All Notes go
+            there. Choose another default before deleting it.
+          </p>
+          {others.length > 0 ? (
+            <label>
+              Default notebook
+              <select
+                aria-label="Default notebook"
+                value=""
+                disabled={busy}
+                onChange={(event) =>
+                  void run(() =>
+                    setDefault({
+                      notebookId: event.target.value as Id<"notebooks">,
+                    }),
+                  )
+                }
+              >
+                <option value="" disabled>
+                  Choose a notebook…
+                </option>
+                {others.map((n) => (
+                  <option key={n.id} value={n.id}>
+                    {n.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <p className="muted">Create another notebook first.</p>
+          )}
+        </div>
+      )}
+      {notebook?.role === "owner" && !isDefault && !destination && (
+        <p>Create another notebook first: its notes need somewhere to go.</p>
+      )}
+      {ready && destination && (
+        <form
+          className="stacked-form notebook-delete"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void run(async () => {
+              onStart(trash);
+              let moved = 0;
+              setProgress(0);
+              try {
+                for (;;) {
+                  const result = await remove({
+                    notebookId,
+                    destinationId: destination.id,
+                    trash,
+                  });
+                  moved += result.notes;
+                  setProgress(moved);
+                  if (result.done) break;
+                }
+              } finally {
+                setProgress(null);
+              }
+              onDeleted(destination.id, trash);
             });
-            return token;
           }}
-        />
+        >
+          <p>
+            {notes === 0
+              ? "It has no notes on this device."
+              : `Its ${notes === 1 ? "note" : `${notes} notes`}${
+                  trashed ? `, ${trashed} of them in Trash,` : ""
+                } will leave with it.`}
+          </p>
+          <fieldset className="share-scope" disabled={busy}>
+            <legend>Its notes</legend>
+            <label>
+              <input
+                type="radio"
+                name="fate"
+                checked={!trash}
+                onChange={() => setTrash(false)}
+              />
+              Move them to another notebook
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="fate"
+                checked={trash}
+                onChange={() => setTrash(true)}
+              />
+              Move them to Trash
+            </label>
+          </fieldset>
+          <label>
+            {trash ? "Restoring a note puts it in" : "Move them to"}
+            <select
+              aria-label={
+                trash ? "Restoring a note puts it in" : "Move them to"
+              }
+              value={destination.id}
+              disabled={busy}
+              onChange={(event) => setChosen(event.target.value)}
+            >
+              {others.map((n) => (
+                <option key={n.id} value={n.id}>
+                  {n.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <AccessLoss
+            people={preview?.lost}
+            what={`the notes they open through “${name}”`}
+          />
+          {preview?.destinationShared && (trash || trashed > 0) && (
+            <p className="muted">
+              {trash ? "Its notes become" : "Its notes already in Trash become"}{" "}
+              private in “{destination.name}”, so that notebook's members do not
+              gain access to them.
+            </p>
+          )}
+          <p className="muted">
+            Its members and open invitations are removed. The notebook itself
+            cannot be restored.
+          </p>
+          <button className="danger" disabled={busy}>
+            Delete notebook
+          </button>
+          {progress !== null && (
+            <p role="status">
+              {progress === 0
+                ? "Deleting…"
+                : `Deleting… ${progress} ${progress === 1 ? "note" : "notes"} moved`}
+            </p>
+          )}
+        </form>
       )}
       {error && (
         <p role="alert" className="error">
@@ -1512,8 +1759,12 @@ export default function Panels({
   noteId,
   notebookId,
   text,
+  focus,
+  counts,
   onClose,
   onNotebookCreated,
+  onNotebookDeleting,
+  onNotebookDeleted,
 }: {
   live: LiveController;
   panel: Panel;
@@ -1521,8 +1772,13 @@ export default function Panels({
   noteId?: string | undefined;
   notebookId?: string | undefined;
   text?: string | undefined;
+  focus?: "name" | "members" | undefined;
+  /** A notebook's notes on this device, for the deletion dialog. */
+  counts?: { notes: number; trashed: number } | undefined;
   onClose?: () => void;
   onNotebookCreated?: (id: string) => void;
+  onNotebookDeleting?: (trash: boolean) => void;
+  onNotebookDeleted?: (destinationId: string, trash: boolean) => void;
 }) {
   const close = onClose ?? (() => {});
   return (
@@ -1546,8 +1802,19 @@ export default function Panels({
       {panel === "notebook" && (
         <NotebookPanel
           notebookId={(notebookId ?? null) as Id<"notebooks"> | null}
+          focus={focus}
           onClose={close}
           onCreated={onNotebookCreated ?? (() => {})}
+        />
+      )}
+      {panel === "delete-notebook" && notebookId && (
+        <DeleteNotebook
+          notebookId={notebookId as Id<"notebooks">}
+          notes={counts?.notes ?? 0}
+          trashed={counts?.trashed ?? 0}
+          onClose={close}
+          onStart={onNotebookDeleting ?? (() => {})}
+          onDeleted={onNotebookDeleted ?? (() => {})}
         />
       )}
     </ConvexProvider>

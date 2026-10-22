@@ -3,24 +3,46 @@ import { Icon } from "./Icons";
 import { actionLabels, type ActionId } from "./note-actions";
 import { actionIcons } from "./SwipeRow";
 
+type IconName = Parameters<typeof Icon>[0]["name"];
+export interface MenuItem<Id extends string> {
+  id: Id;
+  label: string;
+  icon: IconName;
+  danger?: boolean;
+}
+
+/** A note's actions as menu entries. */
+export function noteMenuItems(actions: ActionId[]): MenuItem<ActionId>[] {
+  return actions.map((id) => ({
+    id,
+    label: actionLabels[id],
+    icon: actionIcons[id],
+    danger: id === "trash" || id === "delete",
+  }));
+}
+
 /**
- * A note's actions: a bottom sheet on phones, a small menu at the pointer or
- * button on wider screens. Escape, the backdrop and Cancel close it.
+ * A note's or notebook's actions: a bottom sheet on phones, a small menu at
+ * the pointer or button on wider screens. Escape, the backdrop and Cancel
+ * close it.
  */
-export function ActionMenu({
+export function ActionMenu<Id extends string>({
   title,
-  actions,
+  label,
+  items,
   anchor,
   sheet,
   onPick,
   onClose,
 }: {
   title: string;
-  actions: ActionId[];
+  /** The dialog's accessible name; "Actions for <title>" by default. */
+  label?: string;
+  items: MenuItem<Id>[];
   /** Where a desktop menu opens; ignored for the phone sheet. */
   anchor: { x: number; y: number } | null;
   sheet: boolean;
-  onPick: (action: ActionId) => void;
+  onPick: (action: Id) => void;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -42,14 +64,14 @@ export function ActionMenu({
     !sheet && anchor
       ? {
           left: Math.min(anchor.x, innerWidth - 240),
-          top: Math.min(anchor.y, innerHeight - (actions.length * 40 + 60)),
+          top: Math.min(anchor.y, innerHeight - (items.length * 40 + 60)),
         }
       : undefined;
   return (
     <dialog
       ref={ref}
       className={sheet ? "action-sheet" : "action-menu"}
-      aria-label={`Actions for ${title}`}
+      aria-label={label ?? `Actions for ${title}`}
       style={style}
       onCancel={(event) => {
         event.preventDefault();
@@ -67,20 +89,20 @@ export function ActionMenu({
     >
       {sheet && <p className="action-title">{title}</p>}
       <div role="menu">
-        {actions.map((id) => (
+        {items.map((item) => (
           <button
-            key={id}
+            key={item.id}
             type="button"
             role="menuitem"
-            className={id === "trash" || id === "delete" ? "danger-text" : ""}
+            className={item.danger ? "danger-text" : ""}
             onClick={(event) => {
               if (event.detail !== 0 && !pressed.current) return;
               onClose();
-              onPick(id);
+              onPick(item.id);
             }}
           >
-            <Icon name={actionIcons[id]} size={18} />
-            {actionLabels[id]}
+            <Icon name={item.icon} size={18} />
+            {item.label}
           </button>
         ))}
       </div>

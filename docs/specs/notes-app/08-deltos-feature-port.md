@@ -282,6 +282,8 @@ Deltos reference: `components/HistoryPanel.tsx`, for the UI only. Deltos kept pe
 
 ### A5. Notebooks (S, one backend item)
 
+Implemented 2026-10-22, in review (`docs/reviews/notes-notebooks-implementation.md`).
+
 Deltos reference: `views/NavContent.tsx`, `components/NotebookMenuBody.tsx`, `ContextMenuSheet.tsx`, `NotebookMenuPopover.tsx`.
 
 - **Notebook menu.** Opened from a hover "…" on desktop, or from long press and the notebook header's "…" on phones. Items:
