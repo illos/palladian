@@ -15,6 +15,7 @@ import type * as config from "../config.js";
 import type * as connections from "../connections.js";
 import type * as crons from "../crons.js";
 import type * as deltos from "../deltos.js";
+import type * as devices from "../devices.js";
 import type * as documents from "../documents.js";
 import type * as email from "../email.js";
 import type * as history from "../history.js";
@@ -45,6 +46,7 @@ declare const fullApi: ApiFromModules<{
   connections: typeof connections;
   crons: typeof crons;
   deltos: typeof deltos;
+  devices: typeof devices;
   documents: typeof documents;
   email: typeof email;
   history: typeof history;

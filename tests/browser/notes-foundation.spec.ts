@@ -95,8 +95,10 @@ test("same-account retry preserves the draft and subsequent save feedback", asyn
       ).__notesHarness.session.retry(),
     );
   } else {
-    await page.locator(".connection-footer summary").click();
+    // The status under the note list opens Settings → Account.
+    await page.locator(".connection-status").click();
     await page.getByRole("button", { name: "Retry connection" }).click();
+    await page.getByRole("button", { name: "Notes", exact: true }).click();
   }
   await expect(editor).toContainText("Keep this draft");
   await editor.press("End");

@@ -18,10 +18,9 @@ import type { AuthClient } from "./auth-service";
 import type { LiveController } from "./live";
 import { transportError } from "./live";
 import { deviceName, passkeyOffer, passkeysSupported } from "./passkeys";
-import type { SessionController } from "./session";
 import { PasswordInput } from "./SignIn";
 
-type Panel = "agents" | "account" | "share" | "notebook" | "move";
+type Panel = "agents" | "account" | "security" | "share" | "notebook" | "move";
 type Role = "read" | "edit";
 
 function useAction() {
@@ -712,6 +711,10 @@ function AgentsPanel({ notebooks }: { notebooks: CachedNotebook[] }) {
   const updateAgent = useMutation(api.connections.updateAgent);
   const setMember = useMutation(api.sharing.setNotebookMember);
   const { error, busy, run } = useAction();
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(
+    null,
+  );
+  const [disconnecting, setDisconnecting] = useState<string | null>(null);
   const owned = notebooks.filter((n) => n.role === "owner");
   return (
     <div className="agents-panel">
@@ -736,15 +739,80 @@ function AgentsPanel({ notebooks }: { notebooks: CachedNotebook[] }) {
         return (
           <section key={agent.agentId} className="agent-card">
             <header>
-              <h3>{agent.name}</h3>
+              {renaming?.id === agent.agentId ? (
+                <form
+                  className="inline-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void run(() =>
+                      updateAgent({
+                        agentId: agent.agentId,
+                        name: renaming.name,
+                      }),
+                    ).then((done) => done && setRenaming(null));
+                  }}
+                >
+                  <input
+                    aria-label="Agent name"
+                    value={renaming.name}
+                    maxLength={60}
+                    autoFocus
+                    onChange={(event) =>
+                      setRenaming({
+                        id: agent.agentId,
+                        name: event.target.value,
+                      })
+                    }
+                  />
+                  <button disabled={busy}>Save</button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => setRenaming(null)}
+                  >
+                    Cancel
+                  </button>
+                </form>
+              ) : (
+                <>
+                  <h3>{agent.name}</h3>
+                  <button
+                    type="button"
+                    className="link-button"
+                    aria-label={`Rename ${agent.name}`}
+                    onClick={() =>
+                      setRenaming({ id: agent.agentId, name: agent.name })
+                    }
+                  >
+                    Rename
+                  </button>
+                </>
+              )}
               <span className="muted">
                 {agent.disabled
-                  ? "Disabled"
+                  ? "Paused"
                   : active.length
                     ? `${active.length} active connection${active.length > 1 ? "s" : ""}`
                     : "Not connected"}
               </span>
             </header>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={agent.disabled}
+                disabled={busy}
+                onChange={(event) =>
+                  void run(() =>
+                    updateAgent({
+                      agentId: agent.agentId,
+                      disabled: event.target.checked,
+                    }),
+                  )
+                }
+              />
+              Pause this agent: it cannot read or change anything until you turn
+              this off
+            </label>
             <h4>Notebooks</h4>
             <ul className="member-list">
               {owned.map((notebook) => (
@@ -822,15 +890,38 @@ function AgentsPanel({ notebooks }: { notebooks: CachedNotebook[] }) {
                     {new Date(connection.createdAt).toLocaleDateString()}
                   </span>
                   {connection.revokedAt === null ? (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() =>
-                        void run(() => revoke({ connectionId: connection.id }))
-                      }
-                    >
-                      Disconnect
-                    </button>
+                    disconnecting === connection.id ? (
+                      <span className="button-row">
+                        <button
+                          type="button"
+                          className="danger"
+                          disabled={busy}
+                          onClick={() =>
+                            void run(() =>
+                              revoke({ connectionId: connection.id }),
+                            ).then(() => setDisconnecting(null))
+                          }
+                        >
+                          Disconnect
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => setDisconnecting(null)}
+                        >
+                          Keep
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={busy}
+                        onClick={() => setDisconnecting(connection.id)}
+                      >
+                        Disconnect…
+                      </button>
+                    )
                   ) : (
                     <span className="muted">Disconnected</span>
                   )}
@@ -1036,15 +1127,136 @@ function SecuritySection({ auth, email }: { auth: AuthClient; email: string }) {
   );
 }
 
-function AccountPanel({
-  session,
-  auth,
-}: {
-  session: SessionController;
-  auth: AuthClient;
-}) {
+function shortDate(timestamp: number) {
+  return new Date(timestamp).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+/** Devices signed in to this account, listed by ID; tokens stay on the server. */
+function DevicesSection() {
+  const devices = useQuery(api.devices.list, {});
+  const revoke = useMutation(api.devices.revoke);
+  const revokeOthers = useMutation(api.devices.revokeOthers);
+  const { error, busy, run } = useAction();
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const others = devices?.filter((device) => !device.current) ?? [];
+  return (
+    <section className="member-list security-section devices-section">
+      <h3>Signed-in devices</h3>
+      <p className="muted">
+        Signing a device out ends its session at once. It keeps the notes it
+        already downloaded and asks to sign in again before it can sync.
+      </p>
+      {devices === undefined && <p>Loading…</p>}
+      <ul>
+        {devices?.map((device) => (
+          <li key={device.id}>
+            <span>
+              <strong>
+                {device.label}
+                {device.current ? " · This device" : ""}
+              </strong>
+              <small className="muted">
+                Signed in {shortDate(device.signedInAt)} · active{" "}
+                {shortDate(device.lastActiveAt)}
+              </small>
+            </span>
+            {!device.current &&
+              (confirming === device.id ? (
+                <span className="button-row">
+                  <button
+                    type="button"
+                    className="danger"
+                    disabled={busy}
+                    onClick={() =>
+                      void run(() => revoke({ id: device.id })).then(() =>
+                        setConfirming(null),
+                      )
+                    }
+                  >
+                    Sign out
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => setConfirming(null)}
+                  >
+                    Keep
+                  </button>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={busy}
+                  aria-label={`Sign out ${device.label}`}
+                  onClick={() => setConfirming(device.id)}
+                >
+                  Sign out…
+                </button>
+              ))}
+          </li>
+        ))}
+      </ul>
+      {others.length > 1 &&
+        (confirming === "others" ? (
+          <span className="button-row">
+            <button
+              type="button"
+              className="danger"
+              disabled={busy}
+              onClick={() =>
+                void run(() => revokeOthers({})).then(() => setConfirming(null))
+              }
+            >
+              Sign out {others.length} devices
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setConfirming(null)}
+            >
+              Keep
+            </button>
+          </span>
+        ) : (
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy}
+            onClick={() => setConfirming("others")}
+          >
+            Sign out all other devices…
+          </button>
+        ))}
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function SecurityPanel({ auth }: { auth: AuthClient }) {
+  const me = useQuery(api.account.me, {});
+  if (me === undefined) return <p>Loading…</p>;
+  return (
+    <div className="account-panel">
+      {me?.email && <SecuritySection auth={auth} email={me.email} />}
+      <DevicesSection />
+    </div>
+  );
+}
+
+function AccountPanel({ notebooks }: { notebooks: CachedNotebook[] }) {
   const me = useQuery(api.account.me, {});
   const rename = useMutation(api.account.rename);
+  const setDefault = useMutation(api.notebooks.setDefault);
+  const owned = notebooks.filter((notebook) => notebook.role === "owner");
   const pending = useQuery(api.invitations.pending, {});
   const revokeInvite = useMutation(api.invitations.revoke);
   const setRetention = useMutation(api.lifecycle.setTrashRetention);
@@ -1075,6 +1287,33 @@ function AccountPanel({
           <button disabled={busy}>Save</button>
         </form>
       )}
+      {me && owned.length > 0 && (
+        <label className="stacked-form">
+          New notes from All Notes go to
+          <select
+            value={me.defaultNotebookId ?? ""}
+            disabled={busy}
+            onChange={(event) =>
+              void run(() =>
+                setDefault({
+                  notebookId: event.target.value as Id<"notebooks">,
+                }),
+              )
+            }
+          >
+            {me.defaultNotebookId === null && (
+              <option value="" disabled>
+                Choose a notebook
+              </option>
+            )}
+            {owned.map((notebook) => (
+              <option key={notebook.id} value={notebook.id}>
+                {notebook.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       {me && (
         <label className="stacked-form">
           Keep notes in Trash for
@@ -1093,7 +1332,6 @@ function AccountPanel({
           </select>
         </label>
       )}
-      {me?.email && <SecuritySection auth={auth} email={me.email} />}
       <section className="member-list">
         <h3>Pending invitations</h3>
         {pending?.length === 0 && <p className="muted">None.</p>}
@@ -1117,9 +1355,6 @@ function AccountPanel({
           ))}
         </ul>
       </section>
-      <button type="button" onClick={() => void session.logout()}>
-        Sign out
-      </button>
       {error && (
         <p role="alert" className="error">
           {error}
@@ -1132,7 +1367,6 @@ function AccountPanel({
 export default function Panels({
   live,
   panel,
-  session,
   notebooks,
   noteId,
   notebookId,
@@ -1141,7 +1375,6 @@ export default function Panels({
 }: {
   live: LiveController;
   panel: Panel;
-  session: SessionController;
   notebooks: CachedNotebook[];
   noteId?: string | undefined;
   notebookId?: string | undefined;
@@ -1152,9 +1385,8 @@ export default function Panels({
   return (
     <ConvexProvider client={live.client}>
       {panel === "agents" && <AgentsPanel notebooks={notebooks} />}
-      {panel === "account" && (
-        <AccountPanel session={session} auth={live.auth} />
-      )}
+      {panel === "account" && <AccountPanel notebooks={notebooks} />}
+      {panel === "security" && <SecurityPanel auth={live.auth} />}
       {panel === "share" && noteId && (
         <ShareNote noteId={noteId as Id<"notes">} onClose={close} />
       )}

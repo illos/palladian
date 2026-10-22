@@ -368,6 +368,38 @@ const taskView: NodeViewConstructor = (node, view, getPos) => {
   };
 };
 
+/** Markdown shortcuts typed at the start of a block or around a word. */
+export const markdownShortcuts = inputRules({
+  rules: [
+    textblockTypeInputRule(/^(#{1,3})\s$/, heading!, (match) => ({
+      level: match[1]!.length,
+    })),
+    wrappingInputRule(/^\s*([-+*])\s$/, bullet_list!),
+    wrappingInputRule(
+      /^(\d+)\.\s$/,
+      ordered_list!,
+      (match) => ({ order: Number(match[1]) }),
+      (match, node) =>
+        node.childCount + Number(node.attrs.order) === Number(match[1]),
+    ),
+    wrappingInputRule(/^\[( |x)?\]\s$/, task_list!),
+    wrappingInputRule(/^\s*>\s$/, blockquote!),
+    markRule(/\*\*([^*]+)\*\*$/, marks.strong!),
+    // The lookbehind keeps the preceding character out of the match, so
+    // only the delimiters are replaced.
+    markRule(/(?<!\*)\*([^*]+)\*$/, marks.em!),
+    markRule(/~~([^~]+)~~$/, marks.strike!),
+    markRule(/`([^`]+)`$/, marks.code!),
+  ],
+});
+
+/** Enter: a code fence, then a new checklist item (always unchecked) or list item. */
+export const enterKey: Command = chainCommands(
+  fenceToCode,
+  splitListItem(task_item!, { checked: false }),
+  splitListItem(list_item!),
+);
+
 function plugins(binding: EditorBinding | undefined): Plugin[] {
   const list = [
     ...(binding
@@ -375,27 +407,7 @@ function plugins(binding: EditorBinding | undefined): Plugin[] {
       : []),
     blockIdPlugin((tr) => tr.getMeta("rebased") !== undefined),
     history(),
-    inputRules({
-      rules: [
-        textblockTypeInputRule(/^(#{1,3})\s$/, heading!, (match) => ({
-          level: match[1]!.length,
-        })),
-        wrappingInputRule(/^\s*([-+*])\s$/, bullet_list!),
-        wrappingInputRule(
-          /^(\d+)\.\s$/,
-          ordered_list!,
-          (match) => ({ order: Number(match[1]) }),
-          (match, node) =>
-            node.childCount + Number(node.attrs.order) === Number(match[1]),
-        ),
-        wrappingInputRule(/^\[( |x)?\]\s$/, task_list!),
-        wrappingInputRule(/^\s*>\s$/, blockquote!),
-        markRule(/\*\*([^*]+)\*\*$/, marks.strong!),
-        markRule(/(?:^|[^*])\*([^*]+)\*$/, marks.em!),
-        markRule(/~~([^~]+)~~$/, marks.strike!),
-        markRule(/`([^`]+)`$/, marks.code!),
-      ],
-    }),
+    markdownShortcuts,
     keymap({
       "Mod-z": undo,
       "Mod-Shift-z": redo,
@@ -404,11 +416,7 @@ function plugins(binding: EditorBinding | undefined): Plugin[] {
       "Mod-i": toggleMark(marks.em!),
       "Mod-Shift-x": toggleMark(marks.strike!),
       "Mod-e": toggleMark(marks.code!),
-      Enter: chainCommands(
-        fenceToCode,
-        splitListItem(task_item!),
-        splitListItem(list_item!),
-      ),
+      Enter: enterKey,
       Tab: chainCommands(
         hashHeading,
         sinkListItem(list_item!),
@@ -506,6 +514,37 @@ export function NoteEditor({
     view.current?.setProps({ editable: () => editable });
     if (view.current) setToolbarState(view.current.state);
   }, [editable]);
+  useEffect(() => {
+    // The iOS keyboard covers the bottom of the layout viewport, where the
+    // phone formatting bar is fixed; publish how much it covers so the bar
+    // can sit on top of it.
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const root = window.document.documentElement;
+    let frame = 0;
+    const place = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const covered =
+          viewport.scale > 1.01
+            ? 0
+            : window.innerHeight - viewport.height - viewport.offsetTop;
+        root.style.setProperty(
+          "--keyboard-inset",
+          `${Math.max(0, Math.round(covered))}px`,
+        );
+      });
+    };
+    place();
+    viewport.addEventListener("resize", place);
+    viewport.addEventListener("scroll", place);
+    return () => {
+      cancelAnimationFrame(frame);
+      viewport.removeEventListener("resize", place);
+      viewport.removeEventListener("scroll", place);
+      root.style.removeProperty("--keyboard-inset");
+    };
+  }, []);
   const runTool = (tool: Tool) => {
     const editor = view.current;
     if (!editable || !editor || !tool.command(editor.state)) return;

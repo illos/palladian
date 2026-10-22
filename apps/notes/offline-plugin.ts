@@ -58,12 +58,14 @@ export function offlineShell(): Plugin {
       const source = `const NAME = ${JSON.stringify("palladian-notes-shell-" + version)};
 const ASSETS = ${JSON.stringify(assets)};
 self.addEventListener('install', event => event.waitUntil(caches.open(NAME).then(cache => cache.addAll(ASSETS))));
+// A new build waits until Settings → About → Update now asks it to take over.
+self.addEventListener('message', event => { if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting(); });
 self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('palladian-notes-shell-') && key !== NAME).map(key => caches.delete(key)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.search || event.request.headers.has('authorization') || url.origin !== self.location.origin) return;
-  // Note deep links open the cached shell; the app reads the note from the local cache.
-  if (event.request.mode === 'navigate' && /^\\/notes\\/[A-Za-z0-9_-]+$/.test(url.pathname)) {
+  // Note and Settings deep links open the cached shell; the app reads the note from the local cache.
+  if (event.request.mode === 'navigate' && (/^\\/notes\\/[A-Za-z0-9_-]+$/.test(url.pathname) || /^\\/settings(\\/[a-z]+)?$/.test(url.pathname))) {
     event.respondWith(caches.open(NAME).then(cache => cache.match('/')).then(hit => hit || fetch(event.request)));
     return;
   }

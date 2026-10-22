@@ -11,9 +11,17 @@ async function appearance(page: Page, mobile: boolean) {
       .getByRole("button", { name: "Open navigation", exact: true })
       .click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
+  // Phones open the Settings list; wide screens open the Account tab.
+  await page.getByRole("button", { name: "Appearance", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Appearance", exact: true }),
   ).toBeVisible();
+}
+/** Back to the notes: phones step back through the Settings list. */
+async function leaveSettings(page: Page, mobile: boolean) {
+  if (mobile)
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Notes", exact: true }).click();
 }
 test("Deltos Graphite/Sans tokens and loaded font metrics match the reference", async ({
   page,
@@ -93,7 +101,7 @@ test("appearance changes and settings round trip retain current draft and select
   await expect(page.locator("html")).toHaveAttribute("data-palette", "ember");
   await expect(page.locator("html")).toHaveAttribute("data-voice", "serif");
   await expect(page.locator("html")).toHaveAttribute("data-mode", "dark");
-  await page.getByRole("button", { name: "Notes", exact: true }).click();
+  await leaveSettings(page, info.project.name.includes("mobile"));
   await expect(editor).toContainText("Still here");
   expect(
     await page.evaluate(

@@ -19,6 +19,15 @@ import { emptyDocument, validateCachedDocument } from "./document";
 import { EditorSurface } from "./EditorSurface";
 import { Icon } from "./Icons";
 import { Appearance } from "./Appearance";
+import {
+  About,
+  SessionControls,
+  SettingsList,
+  settingsLabel,
+  settingsRoute,
+  settingsTabs,
+  type SettingsTab,
+} from "./Settings";
 import type { ChannelStatus, NoteChannel } from "./channel";
 import { liveStateSource, type LiveBox } from "./liveBox";
 import type { SearchHit } from "./live";
@@ -43,7 +52,24 @@ type Dialog =
   | { kind: "move"; noteId: string }
   | { kind: "notebook"; notebookId: string | null }
   | null;
-type SettingsTab = "appearance" | "agents" | "account";
+/** Settings entries this tab pushed on top of the notes view. */
+function settingsDepth(): number {
+  const depth = (history.state as { settingsDepth?: unknown } | null)
+    ?.settingsDepth;
+  return typeof depth === "number" ? depth : 0;
+}
+
+const phoneQuery = "(max-width: 760px)";
+function usePhone() {
+  const [phone, setPhone] = useState(() => matchMedia(phoneQuery).matches);
+  useEffect(() => {
+    const query = matchMedia(phoneQuery);
+    const changed = () => setPhone(query.matches);
+    query.addEventListener("change", changed);
+    return () => query.removeEventListener("change", changed);
+  }, []);
+  return phone;
+}
 
 const statusLabels = {
   connecting: "Connecting — cached notes remain available",
@@ -93,8 +119,15 @@ export function App({
   const live = useSyncExternalStore(liveBox.subscribe, liveBox.get);
   const source = useMemo(() => liveStateSource(live), [live]);
   const liveState = useSyncExternalStore(source.subscribe, source.get);
-  const [view, setView] = useState<"notes" | "settings">("notes");
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("appearance");
+  const [view, setView] = useState<"notes" | "settings">(() =>
+    settingsRoute(location.pathname) ? "settings" : "notes",
+  );
+  // Null is the phone's Settings list; wide screens show Account instead.
+  const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(
+    () => settingsRoute(location.pathname)?.tab ?? null,
+  );
+  const phone = usePhone();
+  const shownTab = settingsTab ?? (phone ? null : "account");
   const [section, setSection] = useState<Section>({ kind: "all" });
   const [dialog, setDialog] = useState<Dialog>(null);
   const navSheet = useRef<HTMLDialogElement>(null);
@@ -143,6 +176,18 @@ export function App({
     session.start();
     return () => session.stop();
   }, [session]);
+
+  // Back and Forward move between the notes and Settings without closing the
+  // open note.
+  useEffect(() => {
+    const moved = () => {
+      const route = settingsRoute(location.pathname);
+      setView(route ? "settings" : "notes");
+      if (route) setSettingsTab(route.tab);
+    };
+    addEventListener("popstate", moved);
+    return () => removeEventListener("popstate", moved);
+  }, []);
 
   // Library rows and notebooks come from the local cache; the live layer fills it.
   useEffect(() => {
@@ -331,7 +376,8 @@ export function App({
     open?.channel?.close();
     setOpen(null);
     setChannelStatus(null);
-    if (location.pathname !== "/") history.replaceState(null, "", "/");
+    if (location.pathname !== "/" && !settingsRoute(location.pathname))
+      history.replaceState(null, "", "/");
   }
 
   function show(note: OpenNote) {
@@ -672,20 +718,60 @@ export function App({
           : currentOpen.trashed
             ? "In Trash — restore to edit"
             : channelLabel(channelStatus, !!currentOpen.channel?.ready);
+  const sessionStatus =
+    statusLabels[snapshot.status] +
+    (snapshot.status === "ready" && live && !liveState.connected
+      ? " — server unreachable"
+      : "");
   const serverNote =
     !!currentOpen &&
     currentOpen.kind !== "draft" &&
     !currentOpen.id.startsWith("local-");
 
-  function navigate(next: "notes" | "settings", tab?: SettingsTab) {
-    setView(next);
-    if (tab) setSettingsTab(tab);
+  /** Settings opens as a history entry, so Back returns to the notes. */
+  function openSettings(tab: SettingsTab | null) {
+    const depth = view === "settings" ? settingsDepth() + 1 : 1;
+    history.pushState(
+      { settingsDepth: depth },
+      "",
+      tab ? "/settings/" + tab : "/settings",
+    );
+    setView("settings");
+    setSettingsTab(tab);
     navSheet.current?.close();
+  }
+  /** Wide screens switch tabs in place; the phone list pushes each tab. */
+  function selectTab(tab: SettingsTab) {
+    if (phone) return openSettings(tab);
+    history.replaceState(history.state, "", "/settings/" + tab);
+    setSettingsTab(tab);
+  }
+  /** The phone's "‹ Settings": back to the list it came from. */
+  function settingsHome() {
+    if (settingsDepth() >= 2) return history.back();
+    history.replaceState({ settingsDepth: settingsDepth() }, "", "/settings");
+    setSettingsTab(null);
+  }
+  function leaveSettings() {
+    navSheet.current?.close();
+    if (view !== "settings") return;
+    const depth = settingsDepth();
+    if (depth > 0) return history.go(-depth);
+    // Opened from a Settings link: replace it with the notes address.
+    const note = openRef.current;
+    history.replaceState(
+      null,
+      "",
+      note && !note.id.startsWith("local-") && note.kind !== "draft"
+        ? "/notes/" + note.id
+        : "/",
+    );
+    setView("notes");
   }
   function choose(next: Section) {
     setSection(next);
     setRowLimit(60);
-    navigate("notes");
+    leaveSettings();
   }
 
   const navigation = (
@@ -758,7 +844,11 @@ export function App({
       <div className="nav-footer">
         <button
           className={view === "settings" ? "nav-item active" : "nav-item"}
-          onClick={() => navigate("settings")}
+          onClick={() =>
+            view === "settings"
+              ? navSheet.current?.close()
+              : openSettings(phone ? null : "account")
+          }
         >
           <Icon name="settings" size={17} />
           <span>Settings</span>
@@ -919,73 +1009,38 @@ export function App({
             )}
           </div>
           <footer className="connection-footer">
-            <p role="status" data-testid="session-status">
-              {statusLabels[snapshot.status]}
-              {snapshot.status === "ready" && live && !liveState.connected
-                ? " — server unreachable"
-                : ""}
-            </p>
+            <button
+              type="button"
+              className="connection-status"
+              title="Account and connection settings"
+              onClick={() => openSettings("account")}
+            >
+              <span role="status" data-testid="session-status">
+                {sessionStatus}
+              </span>
+            </button>
             {snapshot.error && <p>{snapshot.error}</p>}
-            <details>
-              <summary>Connection</summary>
-              <button onClick={() => session.retry()}>Retry connection</button>
-              <button
-                onClick={() => {
-                  void session
-                    .logout()
-                    .catch(() =>
-                      setError(
-                        "Sign out could not finish. Your notes remain protected from switching accounts.",
-                      ),
-                    );
-                }}
-                disabled={!permitted}
-              >
-                Sign out
-              </button>
-            </details>
           </footer>
         </div>
         <div className="settings-rail" hidden={view !== "settings"}>
-          <button className="settings-back" onClick={() => navigate("notes")}>
+          <button className="settings-back" onClick={leaveSettings}>
             <Icon name="back" size={15} />
             Notes
           </button>
           <h1>Settings</h1>
-          <button
-            className={
-              settingsTab === "appearance"
-                ? "settings-tab active"
-                : "settings-tab"
-            }
-            aria-current={settingsTab === "appearance" ? "page" : undefined}
-            onClick={() => setSettingsTab("appearance")}
-          >
-            <Icon name="sun" size={20} />
-            Appearance
-          </button>
-          <button
-            className={
-              settingsTab === "agents" ? "settings-tab active" : "settings-tab"
-            }
-            aria-current={settingsTab === "agents" ? "page" : undefined}
-            onClick={() => setSettingsTab("agents")}
-            disabled={!liveReady}
-          >
-            <Icon name="agent" size={20} />
-            Connected agents
-          </button>
-          <button
-            className={
-              settingsTab === "account" ? "settings-tab active" : "settings-tab"
-            }
-            aria-current={settingsTab === "account" ? "page" : undefined}
-            onClick={() => setSettingsTab("account")}
-            disabled={!liveReady}
-          >
-            <Icon name="user" size={20} />
-            Account
-          </button>
+          {settingsTabs.map((tab) => (
+            <button
+              key={tab.id}
+              className={
+                shownTab === tab.id ? "settings-tab active" : "settings-tab"
+              }
+              aria-current={shownTab === tab.id ? "page" : undefined}
+              onClick={() => selectTab(tab.id)}
+            >
+              <Icon name={tab.icon} size={20} />
+              {tab.label}
+            </button>
+          ))}
         </div>
         <div className="mobile-home-bar" hidden={view !== "notes"}>
           <button
@@ -1129,34 +1184,55 @@ export function App({
             </div>
           )}
         </section>
-        <section className="appearance-region" hidden={view !== "settings"}>
+        <section className="settings-region" hidden={view !== "settings"}>
           <header className="settings-pane-header">
-            <button className="back-button" onClick={() => navigate("notes")}>
-              <Icon name="back" size={18} />
-              Notes
-            </button>
-            <h2>
-              {settingsTab === "appearance"
-                ? "Appearance"
-                : settingsTab === "agents"
-                  ? "Connected agents"
-                  : "Account"}
-            </h2>
+            {shownTab === null ? (
+              <button className="back-button" onClick={leaveSettings}>
+                <Icon name="back" size={18} />
+                Notes
+              </button>
+            ) : (
+              <button className="back-button" onClick={settingsHome}>
+                <Icon name="back" size={18} />
+                Settings
+              </button>
+            )}
+            <h2>{shownTab ? settingsLabel(shownTab) : "Settings"}</h2>
           </header>
           <div className="settings-pane-body">
-            {settingsTab === "appearance" ? (
+            {shownTab === null ? (
+              <SettingsList onOpen={(tab) => openSettings(tab)} />
+            ) : shownTab === "appearance" ? (
               <Appearance />
-            ) : live && liveReady ? (
-              <Suspense fallback={<p>Loading…</p>}>
-                <Panels
-                  live={live}
-                  panel={settingsTab}
-                  session={session}
-                  notebooks={notebooks}
-                />
-              </Suspense>
+            ) : shownTab === "about" ? (
+              <About />
             ) : (
-              <p>Connect to the server to manage this.</p>
+              <>
+                {live && liveReady ? (
+                  <Suspense fallback={<p>Loading…</p>}>
+                    <Panels
+                      live={live}
+                      panel={shownTab}
+                      notebooks={notebooks}
+                    />
+                  </Suspense>
+                ) : (
+                  <p className="muted">
+                    {shownTab === "account"
+                      ? "Connect to the server to change your name, default notebook and Trash settings."
+                      : "Connect to the server to manage this."}
+                  </p>
+                )}
+                {shownTab === "account" && (
+                  <SessionControls
+                    status={sessionStatus}
+                    detail={snapshot.error ?? null}
+                    canSignOut={permitted}
+                    onRetry={() => session.retry()}
+                    onSignOut={() => session.logout()}
+                  />
+                )}
+              </>
             )}
           </div>
         </section>
@@ -1166,7 +1242,6 @@ export function App({
           <Panels
             live={live}
             panel={dialog.kind}
-            session={session}
             notebooks={notebooks}
             noteId={
               dialog.kind === "share" || dialog.kind === "move"

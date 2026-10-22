@@ -270,11 +270,17 @@ textarea:focus-visible {
   cursor: pointer;
   color: var(--secondary);
 }
-.connection-footer button {
+.connection-footer .connection-status {
+  display: block;
+  width: 100%;
   min-height: 32px;
-  padding: 4px 8px 4px 0;
-  font-size: 11px;
-  color: var(--accent);
+  padding: 4px 0;
+  text-align: left;
+  font: inherit;
+  color: var(--secondary);
+}
+.connection-footer .connection-status:hover {
+  color: var(--ink);
 }
 .note-surface {
   min-width: 0;
@@ -533,15 +539,25 @@ textarea:focus-visible {
   align-items: center;
   gap: 11px;
   padding: 11px 12px;
-  border-left: 2px solid var(--accent);
-  background: var(--sel);
-  color: var(--ink);
+  border-left: 2px solid transparent;
+  color: var(--body);
   width: 100%;
   border-radius: 8px;
   font-size: 0.95rem;
   text-align: left;
 }
+.settings-tab:hover {
+  background: var(--sel);
+}
 .settings-tab svg {
+  color: var(--secondary);
+}
+.settings-tab.active {
+  border-left-color: var(--accent);
+  background: var(--sel);
+  color: var(--ink);
+}
+.settings-tab.active svg {
   color: var(--accent);
 }
 .settings-pane-header {
@@ -663,11 +679,15 @@ textarea:focus-visible {
     display: flex;
     flex-direction: column;
     position: fixed;
-    bottom: 0;
+    /* Sits on top of the iOS keyboard while it is open (editor.tsx). */
+    bottom: var(--keyboard-inset, 0px);
     left: 0;
     right: 0;
     background: var(--nav);
-    padding-bottom: env(safe-area-inset-bottom);
+    padding-bottom: max(
+      0px,
+      calc(env(safe-area-inset-bottom) - var(--keyboard-inset, 0px))
+    );
     border-top: 1px solid var(--border);
     z-index: 5;
   }
@@ -1396,4 +1416,149 @@ ul.member-list {
   border-radius: 8px;
   padding: 7px 14px;
   font-weight: 500;
+}
+
+/* ---- Settings: phone list, sections and About ---- */
+.settings-list {
+  display: grid;
+  gap: 22px;
+}
+.settings-group {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--paper);
+  overflow: hidden;
+}
+.settings-group li + li {
+  border-top: 1px solid var(--border);
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 50px;
+  padding: 12px 14px;
+  text-align: left;
+  font-size: 16px;
+  color: var(--ink);
+}
+.settings-row svg:first-child {
+  color: var(--accent);
+}
+.settings-row span {
+  flex: 1;
+}
+.settings-row svg:last-child {
+  color: var(--secondary);
+}
+.settings-row:active {
+  background: var(--sel);
+}
+.settings-section {
+  margin-top: 26px;
+  max-width: 640px;
+}
+.settings-section h3,
+.about-panel h3 {
+  font-size: 13px;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--secondary);
+  margin: 0 0 6px;
+}
+.settings-section p {
+  margin: 0 0 10px;
+}
+.settings-section button,
+.agents-panel button.danger,
+.security-section button.danger {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-weight: 500;
+  min-height: 36px;
+}
+.settings-section button.secondary,
+.agents-panel button.secondary {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--border);
+}
+.settings-section button.danger,
+.agents-panel button.danger,
+.security-section button.danger {
+  background: #c4321f;
+  color: #fff;
+}
+.settings-section [role="status"] {
+  font-size: 14px;
+  color: var(--ink);
+}
+.agents-panel .link-button {
+  background: transparent;
+  color: var(--accent);
+  padding: 0;
+  font-weight: 400;
+}
+.agent-card header {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.agent-card header > .muted {
+  margin-left: auto;
+}
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1;
+}
+.inline-form input {
+  font: inherit;
+  color: var(--ink);
+  background: var(--list);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 9px;
+  min-width: 0;
+  flex: 1;
+}
+.devices-section li > span:first-child {
+  display: grid;
+  gap: 2px;
+}
+.devices-section strong {
+  font-weight: 500;
+  color: var(--ink);
+}
+.about-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0 0 14px;
+  font-size: 14px;
+}
+.about-facts dt {
+  color: var(--secondary);
+}
+.about-facts dd {
+  margin: 0;
+  font-family: var(--mono);
+  color: var(--ink);
+}
+@media (max-width: 760px) {
+  .settings-section button,
+  .agents-panel button,
+  .security-section button {
+    min-height: 44px;
+  }
+  .member-list li {
+    flex-wrap: wrap;
+  }
 }

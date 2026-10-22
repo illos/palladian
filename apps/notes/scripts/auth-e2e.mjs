@@ -128,14 +128,11 @@ function cachedCopies(page) {
   );
 }
 
+/** Settings → Account → Sign out, confirmed (a wide window). */
 async function signOut(page) {
-  const details = page.locator("details", {
-    has: page.getByText("Connection", { exact: true }),
-  });
-  await details.evaluate((element) => {
-    element.open = true;
-  });
-  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await page.locator(".connection-status").click();
+  await page.getByRole("button", { name: "Sign out…" }).click();
+  await page.getByRole("button", { name: "Sign out of this device" }).click();
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible({
     timeout: 20_000,
   });
@@ -191,7 +188,11 @@ try {
   step("signed out, then signed back in with the passkey");
 
   await page.getByRole("button", { name: "Settings" }).first().click();
-  await page.getByRole("button", { name: "Account" }).click();
+  await expect(page.getByText("New notes from All Notes go to")).toBeVisible({
+    timeout: 20_000,
+  });
+  await shot(page, "account-settings");
+  await page.getByRole("button", { name: "Security & devices" }).click();
   await expect(
     page.getByRole("heading", { name: "Sign-in & security" }),
   ).toBeVisible({
@@ -200,9 +201,14 @@ try {
   await expect(
     page.getByText(/^(Mac|Windows|This device|Android|iPhone|iPad) · added/),
   ).toBeVisible();
+  // The virtual authenticator can complete the autofill request as well as
+  // the button's, so a passkey sign-in may leave two sessions here.
+  await expect(
+    page.locator(".devices-section li").filter({ hasText: "This device" }),
+  ).toHaveCount(1);
   await shot(page, "security-settings");
   await page.locator(".settings-back").click();
-  step("settings list the passkey");
+  step("settings list the passkey and this device");
 
   await page
     .getByRole("button", { name: "New note", exact: true })
@@ -286,6 +292,46 @@ try {
   await page.getByRole("button", { name: "Set new password" }).click();
   await expect(page.getByText(/expired or was already used/)).toBeVisible();
   step("a used reset link is refused");
+
+  // Signing another device out from Settings.
+  await page.goto(app + "/");
+  await connected(page);
+  const laptopContext = await browser.newContext();
+  const laptop = await laptopContext.newPage();
+  await laptop.goto(app + "/");
+  await laptop.getByLabel("Email", { exact: true }).fill(email);
+  await laptop.getByLabel("Password", { exact: true }).fill(fresh);
+  await laptop.getByRole("button", { name: "Sign in", exact: true }).click();
+  await connected(laptop);
+  await laptop.getByRole("button", { name: /Private note/ }).click();
+  await expect(
+    laptop.getByRole("textbox", { name: "Note content" }),
+  ).toContainText("Only for my devices", { timeout: 15_000 });
+  await page.getByRole("button", { name: "Settings" }).first().click();
+  await page.getByRole("button", { name: "Security & devices" }).click();
+  const rows = page.locator(".devices-section li");
+  // The reset ended every session: this page and the laptop remain.
+  await expect(rows).toHaveCount(2, { timeout: 20_000 });
+  await page.getByRole("button", { name: /^Sign out .+ · / }).click();
+  await page
+    .locator(".devices-section")
+    .getByRole("button", { name: "Sign out", exact: true })
+    .click();
+  await expect(rows).toHaveCount(1, { timeout: 20_000 });
+  await expect(rows).toContainText("This device");
+  await laptop.reload();
+  await expect(
+    laptop.getByRole("heading", { name: "Sign in to sync" }),
+  ).toBeVisible({ timeout: 30_000 });
+  assert.ok(
+    (await cachedCopies(laptop)) > 0,
+    "the signed-out device keeps its copies",
+  );
+  await page.locator(".settings-back").click();
+  await connected(page);
+  step(
+    "signing a device out from Settings ends its session; it keeps its copies",
+  );
 
   const mobile = await browser.newContext({ ...devices["iPhone 15 Plus"] });
   const small = await mobile.newPage();
