@@ -1,6 +1,6 @@
 # 08 — Deltos feature port
 
-Status: **proposed 2026-10-22**, not adopted. On 2026-10-22 the owner asked for a plan to bring over the Deltos UI features Palladian never received: file notes, swipe actions, interactions, a Settings pane that works, and account management inside Settings rather than a small menu. The working core is not to be re-engineered. This document orders that work. Items that conflict with an earlier owner decision stay out until the owner chooses; they are listed under [Decisions needed](#decisions-needed).
+Status: **proposed 2026-10-22**; its three open questions were settled the same day by owner decisions D102–D104. On 2026-10-22 the owner asked for a plan to bring over the Deltos UI features Palladian never received: file notes, swipe actions, interactions, a Settings pane that works, and account management inside Settings rather than a small menu. The working core is not to be re-engineered. This document orders that work. The owner's answers to its open questions are under [Owner decisions](#owner-decisions).
 
 Survey basis:
 
@@ -21,7 +21,7 @@ Deltos paths below are relative to that client `src/`.
 
   New UI calls existing Convex functions from lazy panels, or through thin `LiveController` wrappers in the style of `live.trash`.
 
-- **Track A changes no cached-summary fields.** The cache does not keep `createdAt`, `trashedAt` or `creatorId`. Screens that need them read them live (`notes.get`, a Trash-view query), so no feed-cursor reset is needed.
+- **Track A changes almost no cached data.** The cache does not keep `createdAt`, `trashedAt` or `creatorId`. Screens that need them read them live (`notes.get`, a Trash-view query). The two exceptions are both in A6 and both reviewed: cached summaries keep `createdAt` for the Date created sort, and one account-scoped store holds pins and orders.
 - **Port behaviour, not code.** Deltos code sits on its own sync engine, spine model, Dexie store and Deck. Reuse its algorithms, gesture constants and copy; rewrite the bindings. Port Deltos's fixes, not its known defects, which are listed per item.
 - **Protected areas need review.** Authentication and session lifecycle, authorization, collaborative persistence, agent scopes and file access get independent review before acceptance, as in [07](07-delivery-plan.md).
 - **iPhone evidence.** Gesture, keyboard and file-picker items are accepted only after a check on the owner's iPhone. Chromium mobile emulation is not evidence of touch feel or iOS keyboard behaviour.
@@ -111,7 +111,7 @@ Deltos reference: `components/SwipeRow.tsx`, `lib/useDragAxis.ts`, `components/N
 
 **One action registry.** Four surfaces use it: swipe, the desktop row menu (right-click and a hover "…"), a touch long-press sheet, and the open note's "…" menu.
 
-- Actions: Duplicate, Move…, Share…, History, Info, Export, Move to Trash. In Trash: Restore and Delete forever. Add Pin only if decision 1 allows it.
+- Actions: Pin/Unpin (A6), Duplicate, Move…, Share…, History, Info, Export, Move to Trash. In Trash: Restore and Delete forever.
 - Each action declares the role it needs (owner or delegated, edit, or any) and whether it needs the server. Unavailable actions are hidden.
 - Deltos had no desktop path to pin or duplicate, and no long-press menu. This closes both gaps.
 
@@ -127,11 +127,11 @@ Constants from Deltos:
 
 Layout:
 
-| View            | Right swipe                                                    | Left swipe                                                        |
-| --------------- | -------------------------------------------------------------- | ----------------------------------------------------------------- |
-| Ordinary rows   | Rests on Duplicate. Full swipe pins, only if decision 1 allows | Rests on Move and Share. Full swipe moves to Trash, with Undo     |
-| Trash           | Rests on Restore                                               | Rests on Delete forever, which confirms (owner or delegated only) |
-| Read-only notes | Duplicate only                                                 | No actions                                                        |
+| View            | Right swipe                                        | Left swipe                                                        |
+| --------------- | -------------------------------------------------- | ----------------------------------------------------------------- |
+| Ordinary rows   | Rests on Duplicate. Full swipe pins or unpins (A6) | Rests on Move and Share. Full swipe moves to Trash, with Undo     |
+| Trash           | Rests on Restore                                   | Rests on Delete forever, which confirms (owner or delegated only) |
+| Read-only notes | Rests on Duplicate. Full swipe pins or unpins      | No actions                                                        |
 
 Deltos defects not to repeat:
 
@@ -283,6 +283,56 @@ Deltos reference: `views/NavContent.tsx`, `components/NotebookMenuBody.tsx`, `Co
   - This is an authorization change, so it is reviewed.
 - **Not ported:** Deltos sorted notebooks by name with no reordering; Palladian already matches.
 
+### A6. Pinning and sort orders (M, small backend)
+
+Owner decision D102 brings both back. Deltos reference: `lib/noteSort.ts`, `db/mutate.ts` (pin), `components/NotebookMenuBody.tsx` (Sort), `lib/dnd/customReorderImpl.tsx`, `lib/customOrderReorder.ts`; ROAD-0019; GOTCHA-0035 to GOTCHA-0038.
+
+**Pins**
+
+- Pin and Unpin are in the action registry (A2). A full right swipe toggles the pin and shows "Pinned" or "Unpinned".
+- Pinned notes list first, newest pin on top, followed by the list's chosen order. Pinned rows show a pin glyph.
+- Trash ignores pins. A restored note keeps its pin.
+- Proposed: pins are personal. Pinning a shared note does not pin it for other members, and read-only members can pin.
+
+**Sort orders**
+
+- Each list has its own order: All Notes and every notebook. The choices are:
+  - Last edited, the default (D45);
+  - Alphabetical, by display title, case-insensitive, with ties broken by last edited;
+  - Date created, newest first;
+  - Custom, by dragging.
+- The order is chosen from a "…" in the list header (and the notebook menu, A5), with a ✓ on the current one. Deltos could not save a sort for All Notes; Palladian can.
+- Trash keeps its current order.
+- Proposed: orders are personal too, so a member can arrange a shared notebook without changing anyone else's view.
+
+**Custom order**
+
+- On touch, a long press that moves starts a drag (250 ms hold, 5 px tolerance). A long press released in place opens the action sheet (A2). Mouse dragging uses Deltos's delay and distance constants.
+- Horizontal swipes still work, because a swipe locks to the horizontal axis first.
+- A cancelled drag never writes. A drop in a gap uses the projected index (GOTCHA-0038).
+- Each drop writes one fractional position.
+- Notes without a position, whether new or moved in from another notebook, appear at the top. Deltos put them last and never cleared a moved note's old position.
+
+**Storage**
+
+- New per-user Convex tables:
+  - pins: user, note, pinned time;
+  - list orders: user, list, order;
+  - custom positions: user, notebook, note, position.
+- Writes require read access to the note or notebook. A query that returns these rows returns only notes the user can still read.
+- The app caches the user's rows in one new account-scoped store. Adding it to the account clear in `cache.ts` (`deleteAccountData`) is the only change there; it is reviewed.
+- Date created needs `createdAt` in cached summaries. The library feed already sends it, and `toRemote` in `live.ts` drops it. Summaries cached before the change sort by last edited until the feed resends them.
+- Agents: MCP `list_notes` keeps last-edited order. Pins and personal orders are not exposed to agents in this pass.
+
+**Deltos data.** Imported notes lost their Deltos pins and custom positions. With the owner's go-ahead, the B5 operator job can re-apply them from the Deltos database.
+
+**Acceptance**
+
+- Pins and orders survive reload and reach the owner's other devices.
+- A collaborator's list is unaffected by the owner's pins and orders.
+- On the iPhone, custom drag does not fight scrolling, swiping or long press.
+- Sorting 2,000 cached notes does not slow the list's first display.
+
 ## Track B — Files
 
 Files need backend work first, and the backend part is a protected area.
@@ -357,9 +407,9 @@ The owner's 27 imported file notes and 32 attachment placeholders are waiting on
 
 ### B4. File notes and the PDF reader (M)
 
-The model needs owner approval: decision 2.
+Owner decision D103 adopts this model.
 
-**Proposed model**
+**Model**
 
 - No new note kind. Uploading from the note list creates an ordinary note: the first line is the filename and the next block is the file. Upload entry points are a phone "Upload" in the bottom bar and a desktop drop on the list.
 - When a note is just that title line, one file block and optional text, the note view shows the file large:
@@ -424,20 +474,20 @@ Start after Track A.
 | Agent approval sheet and alert banner                                                                              | Built on a Deltos alert feed with no Palladian counterpart |
 | Activity / audit feed                                                                                              | No backend. A separate decision if wanted                  |
 | Legacy bottom nav, drawer nav, probe routes                                                                        | Dead or experimental in Deltos                             |
-| Board view, Deck keypad, voice dictation, own spellcheck, formulas, link cards, underline, highlight, headings 4–6 | Not inherited automatically (spec 02); decision 3          |
+| Board view, Deck keypad, voice dictation, own spellcheck, formulas, link cards, underline, highlight, headings 4–6 | Skipped for now (D104)                                     |
 
-## Decisions needed
+## Owner decisions
 
-The owner prefers questions in batches of three. These three change what gets built.
+Recorded 2026-10-22 in [document 06](06-decisions-and-acceptance.md):
 
-1. **Pinning and sort orders.** D47 excluded pinning from v1, and D45 deferred sort orders other than most recently edited. Deltos had pinning (full right swipe, pinned first) and per-notebook sorts (alphabetical, created, and custom drag order). Should they come over? Pinning adds a note field and a backend change, and fixes the full-right swipe action.
-2. **File notes.** Should a file note be an ordinary note whose body is the filename line plus the file, shown large (proposed in B4)? The alternative is a separate file-note kind like Deltos's. Under the alternative, the note would have no editable body and its title would be the filename.
-3. **Which Deltos power features return after this plan?** Candidates: the Deck keypad, voice dictation, Deltos's own spellcheck, formulas, link cards, the Board view, and the underline and highlight marks. Each needs its own plan. Underline and highlight change the shared schema and Markdown that agents read.
+- **D102:** pinning and alternate sort orders return as in Deltos, superseding D47 and D45's deferral. See A6.
+- **D103:** a file note is an ordinary note: its first line is the filename and its next block is the file, shown large. See B4.
+- **D104:** the Deck keypad, voice dictation, Deltos's own spellcheck, formulas, link cards, the Board view and the underline and highlight marks are skipped for now.
 
 ## Order and parallelism
 
 1. **A1 with bugs 1, 5 and 6.** This addresses the owner's Settings complaint and the unreachable phone tabs.
-2. **A2, then A3 and A4.** A3 (`editor.tsx`) and A4 (a history panel) can run in separate worktrees.
+2. **A2 with A6, then A3 and A4.** A6's full right swipe and long press share A2's gesture code. A3 (`editor.tsx`) and A4 (a history panel) can run in separate worktrees.
 3. **B1–B2 alongside A2,** in their own worktree; they touch the backend, Worker and notes-core. B3–B5 follow B1's review.
 4. **A5, then C.**
 
@@ -445,7 +495,7 @@ Each item gets:
 
 - its own branch and worktree;
 - an implementation report under `docs/reviews/`;
-- independent review where protected (A1 devices, A5 deletion, B1, B2);
+- independent review where protected (A1 devices, A5 deletion, A6 storage and cache changes, B1, B2);
 - deployment under D94;
 - the owner's iPhone check for gesture and keyboard items.
 

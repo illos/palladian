@@ -23,9 +23,9 @@ Online editing is the primary working path. Rich viewers, agent tools, indexing,
 
 Confirmed v1 formatting: headings, bold, italic, strikethrough, links, ordered/unordered lists, checklists, quotes, code, images, and file attachments. Ordinary writing is one continuous surface with natural cross-paragraph mobile selection. Stable internal block IDs must not create isolated paragraph text boxes. Optional specialized embeds fit inside that surface; their advanced scope remains Q05.
 
-Typing `#HEADER` followed by Tab converts the paragraph to H1 containing `HEADER`. Space-triggered mobile companions are proposed. The first line supplies the title; an empty first line displays **Untitled** without inserting text. There is no independent title field. Note lists sort by most recently edited; other sorts come later.
+Typing `#HEADER` followed by Tab converts the paragraph to H1 containing `HEADER`. Space-triggered mobile companions are proposed. The first line supplies the title; an empty first line displays **Untitled** without inserting text. There is no independent title field. Note lists sort by most recently edited by default; pinning and alphabetical, creation-date and custom orders return from Deltos (D102).
 
-**Deferred:** reminders target v2. Offline editing, sidebar agent chat, magic-link login, two-factor authentication, editable tables, folders, and explicit offline attachment downloads come later without an assigned release. Native iOS/React Native is a possible long-term direction. V1 has no tags, pinning, or separate archive feature; an ordinary notebook can serve as an archive. No future tag feature is committed.
+**Deferred:** reminders target v2. Offline editing, sidebar agent chat, magic-link login, two-factor authentication, editable tables, folders, and explicit offline attachment downloads come later without an assigned release. Native iOS/React Native is a possible long-term direction. V1 has no tags or separate archive feature (pinning returns under D102); an ordinary notebook can serve as an archive. No future tag feature is committed.
 
 Q02 consolidates a delivery plan around these requirements; it does not downgrade confirmed features. Deltos import is a separately assigned manual agent job using ordinary MCP operations, without a required in-app migration wizard.
 
