@@ -190,6 +190,27 @@ test("the link form: Mod-K on a selection, the toolbar button, validation", asyn
   await expect(editor).toHaveText("Read the docs and ");
 });
 
+test("inline code switched on at the caret keeps the link form closed", async ({
+  page,
+}, info) => {
+  const editor = await newNote(page);
+  const mod = await modKey(page);
+  await editor.pressSequentially("abc");
+  await editor.press(`${mod}+e`);
+  if (isMobile(info.project.name))
+    await page
+      .getByRole("button", { name: "Format tools", exact: true })
+      .click();
+  await expect(
+    page.getByRole("button", { name: "Link", exact: true }),
+  ).toBeDisabled();
+  await editor.press(`${mod}+k`);
+  await expect(page.getByRole("textbox", { name: "Link text" })).toHaveCount(0);
+  await editor.pressSequentially("x");
+  await expect(editor.locator("code")).toHaveText("x");
+  await expect(editor.locator("a")).toHaveCount(0);
+});
+
 test("tapping a link offers Open, Edit and Remove", async ({ page }, info) => {
   const editor = await newNote(page);
   await editor.pressSequentially("Visit example.com ");

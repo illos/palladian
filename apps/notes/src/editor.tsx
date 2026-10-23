@@ -923,10 +923,7 @@ export function NoteEditor({
       });
       return;
     }
-    if (
-      editor.editable &&
-      !linkable(editor.state.doc, target.from, target.to)
-    ) {
+    if (editor.editable && !linkable(editor.state, target.from, target.to)) {
       // A collaborator moved the text into code or across lines: leave it.
       setLinkForm(null);
       closeLinkUi(editor);

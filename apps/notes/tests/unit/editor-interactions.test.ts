@@ -1597,7 +1597,7 @@ describe("review round 4", () => {
     expect(applyForm(state, "Greeting", true)).toBeNull();
     expect(applyForm(state, "bcde", false)).toBeNull();
     const target = linkUiKey.getState(state)!;
-    expect(linkable(state.doc, target.from, target.to)).toBe(false);
+    expect(linkable(state, target.from, target.to)).toBe(false);
   });
 
   test("R4-1: a target split across paragraphs is refused, also after a reload", () => {
@@ -1609,7 +1609,7 @@ describe("review round 4", () => {
     expect(applyForm(reloaded, "Greeting", true)).toBeNull();
     expect(applyForm(reloaded, "bc", false)).toBeNull();
     const target = linkUiKey.getState(reloaded)!;
-    expect(linkable(reloaded.doc, target.from, target.to)).toBe(false);
+    expect(linkable(reloaded, target.from, target.to)).toBe(false);
     expect(reloaded.doc.childCount).toBe(2);
   });
 
@@ -1632,6 +1632,35 @@ describe("review round 4", () => {
     );
     expect(linkDraftFor(plain.state)).not.toBeNull();
     const doc = plain.state.doc;
-    expect(linkable(doc, at(doc, "plain"), at(doc, "words", 5))).toBe(true);
+    expect(linkable(plain.state, at(doc, "plain"), at(doc, "words", 5))).toBe(
+      true,
+    );
+  });
+});
+
+describe("review round 5", () => {
+  test("R5-1: inline code switched on at the caret keeps a link out", () => {
+    const h = new Harness(paragraphs("abc"));
+    // What the Inline code button does with an empty selection.
+    h.dispatch(h.state.tr.addStoredMark(marks.code!.create()));
+    const { from } = h.state.selection;
+    expect(
+      applyLink(h.state, from, from, "Site", "https://example.com"),
+    ).toBeNull();
+    expect(linkDraftFor(h.state)).toBeNull();
+    expect(keys["Mod-k"]!(h.state)).toBe(false);
+    expect(linkable(h.state, from, from)).toBe(false);
+  });
+
+  test("R5-1: without pending inline code the same caret takes a link", () => {
+    const h = new Harness(paragraphs("abc"));
+    h.dispatch(h.state.tr.addStoredMark(marks.code!.create()));
+    h.dispatch(h.state.tr.removeStoredMark(marks.code!));
+    const { from } = h.state.selection;
+    expect(linkDraftFor(h.state)).not.toBeNull();
+    h.dispatch(applyLink(h.state, from, from, "Site", "https://example.com")!);
+    const site = h.state.doc.firstChild!.lastChild!;
+    expect(site.text).toBe("Site");
+    expect(site.marks.map((mark) => mark.type.name)).toEqual(["link"]);
   });
 });

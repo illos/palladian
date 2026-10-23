@@ -232,18 +232,29 @@ export type LinkDraft = {
 
 /**
  * Whether a link can go on [from, to]: within one block that takes links,
- * not a code block, and no inline code. The link form checks this when it
- * opens, before every Apply and after a reload.
+ * not a code block, and no inline code, neither in the range nor in the
+ * marks inserted text would get. The link form checks this when it opens,
+ * before every Apply and after a reload.
  */
-export function linkable(doc: ProseMirrorNode, from: number, to: number) {
+export function linkable(
+  state: Pick<EditorState, "doc" | "storedMarks">,
+  from: number,
+  to: number,
+) {
+  const { doc } = state;
   if (from < 0 || from > to || to > doc.content.size) return false;
   const $from = doc.resolve(from);
+  const $to = doc.resolve(to);
   const block = $from.parent;
-  if (!$from.sameParent(doc.resolve(to)) || !block.inlineContent) return false;
+  if (!$from.sameParent($to) || !block.inlineContent) return false;
   if (block.type.spec.code || !block.type.allowsMarkType(link)) return false;
-  return from === to
-    ? !$from.marks().some((mark) => mark.type.spec.code)
-    : !hasCode(doc, from, to);
+  // The marks text inserted here would get, including pending formatting
+  // such as Inline code switched on at the caret.
+  const inserted =
+    state.storedMarks ??
+    (from === to ? $from.marks() : ($from.marksAcross($to) ?? []));
+  if (inserted.some((mark) => mark.type.spec.code)) return false;
+  return from === to || !hasCode(doc, from, to);
 }
 
 /**
@@ -253,12 +264,12 @@ export function linkable(doc: ProseMirrorNode, from: number, to: number) {
  */
 export function linkDraftFor(state: EditorState): LinkDraft | null {
   const { from, to, empty } = state.selection;
-  if (!linkable(state.doc, from, to)) return null;
+  if (!linkable(state, from, to)) return null;
   const existing = linkRangeAt(state.doc, from);
   if (
     existing &&
     (empty || (from >= existing.from && to <= existing.to)) &&
-    linkable(state.doc, existing.from, existing.to)
+    linkable(state, existing.from, existing.to)
   )
     return {
       ...existing,
@@ -292,7 +303,7 @@ export function applyLink(
     original?: Fragment | undefined;
   } = {},
 ): Transaction | null {
-  if (!linkable(state.doc, from, to)) return null;
+  if (!linkable(state, from, to)) return null;
   const textEdited = options.textEdited ?? true;
   // The primary guard compares content; `touched` also catches a change
   // that leaves the same content behind.
