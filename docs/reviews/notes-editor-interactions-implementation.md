@@ -95,6 +95,16 @@ Round 5 reviewed `5211e06..60abf7c` (before the second rebase). The unit tests a
 | R5-1 — should fix: pending inline-code formatting bypassed link eligibility | Fixed. `linkable` now takes the editor state and also rejects a target when the marks inserted text would get include inline code: the stored marks (formatting switched on at the caret), else the marks at the caret or across the range. As the one eligibility check, it applies when the form opens (the Link button and Mod-K are disabled there), before every Apply, after a reload, and inside `applyLink`. | "R5-1: inline code switched on at the caret keeps a link out" (the Inline code button's stored mark, then Apply, the form's opening check and Mod-K) fails on `60abf7c` (Apply returned a transaction) and passes now; "R5-1: without pending inline code the same caret takes a link" guards the ordinary case and passes on both. The browser test "inline code switched on at the caret keeps the link form closed" replays the reported Chromium steps (type `abc`, Mod-E, then the Link button and Mod-K) on both Chromium projects; with `60abf7c`'s `editor.tsx` and `editor-links.ts` it was the only failing test (both projects), and it passes now. |
 | R5-2 — note: rebase and A2 integration checks passed                        | No change needed. The second rebase keeps the stylesheet in the same shape: `main`'s CSS followed by the A3 rules, no nested rules (see Rebase onto main).                                                                                                                                                                                                                                                           | Brace-depth check of every commit; the browser suite, including A2's and A6's tests, passes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
+## Review round 6: accepted
+
+Report: `notes-editor-interactions-round6-astra-review.md`. The verdict is ACCEPTED, with three notes and no fixes required:
+
+- R5-1 is fixed without blocking valid links.
+- The rebuilt rebase and the A2/A6 integration are clean.
+- The branch is ready to merge. Device acceptance (the iPhone checklist under Evidence) is still pending.
+
+Before merging, the branch was rebased onto `main` `9976b59`, a test-only commit after `b095f8c`, without conflicts.
+
 ## Rebase onto main
 
 The branch was rebased twice on 2026-10-23: onto `5211e06` (`main` with A2), then onto `b095f8c` (`main` with A6). Both times only additions at the end of `playwright.config.ts` and `styles.css` overlapped, and both sides were kept; `EditorSurface.tsx`, `editor.tsx` and `App.tsx` needed no merging (this branch does not change `App.tsx`).
