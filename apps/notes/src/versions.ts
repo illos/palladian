@@ -1,4 +1,9 @@
 import type { FunctionReturnType } from "convex/server";
+import {
+  addsFileFeatures,
+  fileFeatures,
+} from "@palladian/notes-core/attachments";
+import type { Node as ProseMirrorNode } from "prosemirror-model";
 import type { api } from "@palladian/notes-backend/api";
 
 /**
@@ -74,4 +79,29 @@ export function pageChain(
     before = result.nextBefore;
   }
   return { cursors, versions, end: "more" };
+}
+
+/**
+ * Whether the server would refuse this version as a new note while file
+ * writes are off (B1+B2): a copy may keep only the file blocks, attached
+ * images and image sizes that the note it copies has now, and an old version
+ * may hold others. No such content exists while files are off; this keeps the
+ * message clear if it ever does.
+ */
+export function copyNeedsFiles(
+  version: ProseMirrorNode,
+  current: ProseMirrorNode | null,
+  filesOn: boolean,
+): boolean {
+  return !filesOn && addsFileFeatures(version, fileFeatures(current));
+}
+
+export const COPY_NEEDS_FILES_MESSAGE =
+  "This version has files or image sizes that the note no longer has. It can’t be restored as a new note until files are turned on.";
+
+/** The server's refusal of file content while files are off (B1). */
+export function isFilesOffRefusal(error: { code: string; message: string }) {
+  return (
+    error.code === "invalid" && /not enabled on this server/.test(error.message)
+  );
 }

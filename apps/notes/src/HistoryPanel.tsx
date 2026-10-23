@@ -12,11 +12,15 @@ import { plainText } from "@palladian/notes-core/projection";
 import { notesSchema } from "@palladian/notes-core/schema";
 import { DOMSerializer, type Node as ProseMirrorNode } from "prosemirror-model";
 import { Icon } from "./Icons";
+import { fileWritesEnabled } from "./file-capability";
 import { timeRange } from "./dates";
 import type { LiveController } from "./live";
 import { transportError } from "./live";
 import { changed, diffText, type TextDiff } from "./text-diff";
 import {
+  copyNeedsFiles,
+  COPY_NEEDS_FILES_MESSAGE,
+  isFilesOffRefusal,
   kindLabels,
   pageChain,
   pageKey,
@@ -310,6 +314,19 @@ function VersionView({
       return currentText === null ? null : diffText(shownText, currentText);
     return null;
   }, [compare, previousAt, shownText, previousText, currentText]);
+  // While files are off, a copy may keep only the file content the note has
+  // now; say so before sending rather than after the server refuses.
+  const filesOn = fileWritesEnabled();
+  const needsFiles = useMemo(
+    () =>
+      !!shownDoc &&
+      copyNeedsFiles(
+        shownDoc,
+        current ? parseStoredDoc(current.doc) : null,
+        filesOn,
+      ),
+    [shownDoc, current?.doc, filesOn],
+  );
 
   return (
     <>
@@ -373,6 +390,7 @@ function VersionView({
       <NewNoteControls
         doc={shown?.doc ?? null}
         connected={connected}
+        needsFiles={needsFiles}
         onRestoreAsNew={onRestoreAsNew}
       />
     </>
@@ -428,11 +446,14 @@ function DiffView({ diff }: { diff: TextDiff }) {
 function NewNoteControls({
   doc,
   connected,
+  needsFiles,
   onRestoreAsNew,
 }: {
   /** The version's stored document, once read. */
   doc: string | null;
   connected: boolean;
+  /** The version has file content the server cannot copy yet. */
+  needsFiles: boolean;
   onRestoreAsNew: RestoreAsNew;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -445,7 +466,10 @@ function NewNoteControls({
     try {
       await onRestoreAsNew(doc);
     } catch (failure) {
-      setNotice(transportError(failure).message);
+      const error = transportError(failure);
+      setNotice(
+        isFilesOffRefusal(error) ? COPY_NEEDS_FILES_MESSAGE : error.message,
+      );
       setBusy(false);
     }
   }
@@ -461,6 +485,11 @@ function NewNoteControls({
           Not connected. Restore when the connection is back.
         </p>
       )}
+      {needsFiles && (
+        <p role="status" className="history-legend">
+          {COPY_NEEDS_FILES_MESSAGE}
+        </p>
+      )}
       {confirming ? (
         <div className="history-confirm">
           <p>
@@ -470,7 +499,7 @@ function NewNoteControls({
           <div className="button-row">
             <button
               type="button"
-              disabled={busy || !connected || !doc}
+              disabled={busy || !connected || !doc || needsFiles}
               onClick={() => void run()}
             >
               {busy ? "Creating…" : "Create note"}
@@ -489,7 +518,7 @@ function NewNoteControls({
         <button
           type="button"
           className="history-restore"
-          disabled={!connected || !doc}
+          disabled={!connected || !doc || needsFiles}
           onClick={() => {
             setNotice(null);
             setConfirming(true);

@@ -1,5 +1,8 @@
 import { describe, expect, test } from "vitest";
+import { notesSchema } from "@palladian/notes-core/schema";
 import {
+  copyNeedsFiles,
+  isFilesOffRefusal,
   kindLabels,
   pageChain,
   pageKey,
@@ -144,5 +147,48 @@ describe("version pages (review round 1, F4)", () => {
       versions: [],
       end: "loading",
     });
+  });
+});
+
+describe("restoring a version as a new note while files are off (B1+B2)", () => {
+  const text = (value: string) =>
+    notesSchema.node("paragraph", null, notesSchema.text(value));
+  const file = (objectId: string) =>
+    notesSchema.node("file", { objectId, name: "a.pdf" });
+  const image = (width: number | null) =>
+    notesSchema.node("image", { src: "https://example.test/a.png", width });
+  const doc = (...blocks: ReturnType<typeof text>[]) =>
+    notesSchema.node("doc", null, [text("Title"), ...blocks]);
+
+  test("plain versions copy whether files are on or off", () => {
+    expect(copyNeedsFiles(doc(text("old")), doc(), false)).toBe(false);
+    expect(copyNeedsFiles(doc(text("old")), null, false)).toBe(false);
+  });
+
+  test("file content the note no longer has waits for files", () => {
+    expect(copyNeedsFiles(doc(file("o1")), doc(), false)).toBe(true);
+    expect(copyNeedsFiles(doc(image(300)), doc(image(null)), false)).toBe(true);
+    // Once files are on, the server accepts it.
+    expect(copyNeedsFiles(doc(file("o1")), doc(), true)).toBe(false);
+  });
+
+  test("file content the note still has copies now", () => {
+    expect(copyNeedsFiles(doc(file("o1")), doc(file("o1")), false)).toBe(false);
+    expect(copyNeedsFiles(doc(image(300)), doc(image(300)), false)).toBe(false);
+  });
+
+  test("the server's refusal is recognised, other refusals are not", () => {
+    expect(
+      isFilesOffRefusal({
+        code: "invalid",
+        message: "Files and image sizes are not enabled on this server yet.",
+      }),
+    ).toBe(true);
+    expect(
+      isFilesOffRefusal({ code: "invalid", message: "Invalid client key." }),
+    ).toBe(false);
+    expect(
+      isFilesOffRefusal({ code: "not_found", message: "Note not found." }),
+    ).toBe(false);
   });
 });

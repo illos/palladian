@@ -1368,7 +1368,9 @@ export function App({
         ? book.id
         : (liveState.profile?.defaultNotebookId ?? undefined);
     const { duplicateNote } = await import("./note-tools");
-    const id = await duplicateNote(live.client, doc, notebookId);
+    // Naming the note it comes from proves access to any attachments in the
+    // version: an editor may copy what the note's history holds (B1).
+    const id = await duplicateNote(live.client, doc, notebookId, noteId);
     setDialog(null);
     toast("Restored as a new note", {
       label: "Open",
