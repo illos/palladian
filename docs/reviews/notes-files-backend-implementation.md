@@ -246,6 +246,20 @@ Report: `notes-files-backend-round6-astra-review.md`. The verdict is ACCEPTED: r
 - The documented residual limitations remain: the collaborator and gate-change race that blocks a channel, and large-history reads. Both need separately reviewed fundamentals work.
 - Still pending: the iPhone edit-menu Cut and Paste.
 
+## Release (gate off)
+
+Released 2026-10-23 from `main` `f38a7f3`, following the steps below. Files stay off: `FILES_WRITES_ENABLED` is unset in production.
+
+1. **Bucket.** Created the private R2 bucket `palladian-notes-files` (WNAM, Standard, r2.dev public access off) through the Cloudflare API.
+2. **Convex production (`adamant-hound-861`).** Deployed; tables and indexes were added and none deleted. `FILES_WRITES_ENABLED` was unset before and after.
+3. **Worker `palladian`.** Deployed right after, as version `8cd2d3a6`, at 100% from 18:56 UTC. Bindings: `FILES` (R2 `palladian-notes-files`), `OAUTH_DB`, `ASSETS`. After the known "No access" message on the routes call, the Cloudflare API confirmed the custom domain and the cron.
+4. **Production scan.** `noteContent` 180 rows, `noteCheckpoints` 202 rows and `noteSteps` 2,622 rows scanned: no legacy attachment sources.
+5. **Checks.**
+   - `live-e2e.mjs` and `apps/notes-edge/scripts/browser-e2e.mjs` pass against production.
+   - An unauthenticated request to `/files/…` is refused with 401.
+
+**Next step (owner):** turn files on with `npx convex env set FILES_WRITES_ENABLED true --prod`, once every device, including collaborators' devices, shows this build in Settings → About and each app window has been closed once. Inline attachments, file notes and the PDF reader (B3–B5) are the client work that uses it.
+
 ## Deploying (not done; for whoever deploys after review)
 
 Follow [Files gate and rollout](#files-gate-and-rollout-reviews-r3-3-to-r5). In detail:

@@ -356,7 +356,7 @@ The owner's 27 imported file notes and 32 attachment placeholders are waiting on
 
 ### B1. Storage and access (L, protected)
 
-Implemented 2026-10-22 and accepted 2026-10-23 after six independent review rounds; ships with the files gate off (`docs/reviews/notes-files-backend-implementation.md`). Reads name the note (`/files/notes/<noteId>/<objectId>`) and authenticate with the app's own Convex token in a header; byte deletion runs through a queue the Worker drains daily; the MCP tool takes base64 up to 2 MB.
+Implemented 2026-10-22; accepted after six independent review rounds and released to production on 2026-10-23 with the files gate off (`docs/reviews/notes-files-backend-implementation.md`). Reads name the note (`/files/notes/<noteId>/<objectId>`) and authenticate with the app's own Convex token in a header; byte deletion runs through a queue the Worker drains daily; the MCP tool takes base64 up to 2 MB.
 
 **Objects**
 
@@ -390,7 +390,7 @@ Implemented 2026-10-22 and accepted 2026-10-23 after six independent review roun
 
 ### B2. Schema (S, reviewed with notes-core)
 
-Implemented 2026-10-22 and accepted 2026-10-23 after six independent review rounds; ships with the files gate off (`docs/reviews/notes-files-backend-implementation.md`). Width, media type and size survive Markdown as Pandoc-style attributes: `![…](attachment:<id>){width=480}` and `[name](attachment:<id>){type=… size=…}`.
+Implemented 2026-10-22; accepted after six independent review rounds and released to production on 2026-10-23 with the files gate off (`docs/reviews/notes-files-backend-implementation.md`). Width, media type and size survive Markdown as Pandoc-style attributes: `![…](attachment:<id>){width=480}` and `[name](attachment:<id>){type=… size=…}`.
 
 - **Images** use the existing `image` node with `attachment:<objectId>`, plus an optional `width` attribute for resizing.
 - **Other files** use a new `file` block node: object ID, name, MIME type and size. In Markdown it is a link with an `attachment:` URL and its filename as the label, so MCP reads stay meaningful.
