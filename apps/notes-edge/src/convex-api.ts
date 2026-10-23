@@ -140,7 +140,7 @@ export const fns = {
       ObjectMeta | null
     >("files:authorizePublicRead"),
     deletionBatch: makeFunctionReference<
-      "query",
+      "mutation",
       { limit: number },
       { id: Id<"objectDeletions">; key: string }[]
     >("files:deletionBatch"),

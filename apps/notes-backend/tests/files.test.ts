@@ -225,7 +225,7 @@ describe("the file service", () => {
         caller.mutation(api.files.finalize, finalize),
       ).rejects.toThrow(/file service/);
       await expect(
-        caller.query(api.files.deletionBatch, { limit: 10 }),
+        caller.mutation(api.files.deletionBatch, { limit: 10 }),
       ).rejects.toThrow(/file service/);
       await expect(
         caller.mutation(api.files.confirmDeletions, { ids: [] }),
@@ -347,7 +347,7 @@ describe("the file service", () => {
     const noteId = await createNote(ada.as, "Note");
     const a = await ticket(ada.as, { noteId }, "a");
     await ada.as.mutation(api.files.cancelUpload, { objectId: a.objectId });
-    const batch = await service(t).query(api.files.deletionBatch, {
+    const batch = await service(t).mutation(api.files.deletionBatch, {
       limit: 50,
     });
     expect(batch.map((row) => row.key)).toEqual([`objects/${a.objectId}`]);

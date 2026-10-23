@@ -422,7 +422,7 @@ export async function sweepDeletedFiles(
   for (let round = 0; round < DELETION_ROUNDS; round++) {
     const batch = await (
       await service()
-    ).query(fns.files.deletionBatch, { limit: DELETION_BATCH });
+    ).mutation(fns.files.deletionBatch, { limit: DELETION_BATCH });
     if (!batch.length) break;
     const keys = batch
       .map((row) => row.key)

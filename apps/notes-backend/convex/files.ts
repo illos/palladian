@@ -556,8 +556,12 @@ export const noteObjects = query({
   },
 });
 
-/** File service: R2 keys to delete now (no admitted write can still land). */
-export const deletionBatch = query({
+/**
+ * File service: R2 keys to delete now (no admitted write can still land).
+ * A mutation, not a query: which deletions are due depends on the time, and
+ * a cached query result would keep answering for an earlier time.
+ */
+export const deletionBatch = mutation({
   args: { limit: v.number() },
   returns: v.array(v.object({ id: v.id("objectDeletions"), key: v.string() })),
   handler: async (ctx, args) => {

@@ -373,7 +373,8 @@ describe("F3: no write can land after its deletion was swept", () => {
       objectId: granted.objectId,
     });
     const leaseUntil = (admission as { leaseUntil: number }).leaseUntil;
-    const due = () => service(t).query(api.files.deletionBatch, { limit: 100 });
+    const due = () =>
+      service(t).mutation(api.files.deletionBatch, { limit: 100 });
     // Not handed to the sweep while a late write could still land.
     expect(await due()).toEqual([]);
     vi.setSystemTime(leaseUntil + WRITE_SETTLE_MS - 1);
@@ -412,11 +413,11 @@ describe("F3: no write can land after its deletion was swept", () => {
     expect(await object(t, granted.objectId)).toBeNull();
     const leaseUntil = (admission as { leaseUntil: number }).leaseUntil;
     expect(
-      await service(t).query(api.files.deletionBatch, { limit: 100 }),
+      await service(t).mutation(api.files.deletionBatch, { limit: 100 }),
     ).toEqual([]);
     vi.setSystemTime(leaseUntil + WRITE_SETTLE_MS);
     expect(
-      (await service(t).query(api.files.deletionBatch, { limit: 100 })).map(
+      (await service(t).mutation(api.files.deletionBatch, { limit: 100 })).map(
         (row) => row.key,
       ),
     ).toEqual([`objects/${granted.objectId}`]);

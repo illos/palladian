@@ -335,6 +335,57 @@ async function main() {
     "refused: Ben (no access) → 404, signed out and invalid token → 401, Ben's own note naming the object → 404",
   );
 
+  // Ada shares her notebook with Ben to read; Ben copies the image into his
+  // own note, naming where it came from (review F1/F4).
+  const benId = (await ben.client.query(api.account.me, {})).id;
+  const adaBook = (await ada.client.query(api.library.notebooks, {})).find(
+    (n) => n.isDefault,
+  );
+  await ada.client.mutation(api.sharing.setNotebookMember, {
+    notebookId: adaBook.id,
+    principalId: benId,
+    role: "read",
+  });
+  assert(
+    (await read(path, ben.jwt)).status === 200,
+    "Ben reads it once shared",
+  );
+  const copy = await ben.client.mutation(api.notes.create, {
+    clientKey: randomUUID(),
+    doc: JSON.stringify({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          attrs: { id: "copytitle1" },
+          content: [{ type: "text", text: "Ben's copy" }],
+        },
+        {
+          type: "image",
+          attrs: { id: "copyimage1", src: `attachment:${granted.objectId}` },
+        },
+      ],
+    }),
+    sourceNoteId: noteId,
+  });
+  await ada.client.mutation(api.sharing.setNotebookMember, {
+    notebookId: adaBook.id,
+    principalId: benId,
+    role: null,
+  });
+  assert(
+    (await read(path, ben.jwt)).status === 404,
+    "unshared again: not through Ada's note",
+  );
+  assert(
+    (await read(`/files/notes/${copy.noteId}/${granted.objectId}`, ben.jwt))
+      .status === 200,
+    "Ben's copy, made while he could read it, keeps working",
+  );
+  log(
+    "Ben, given read access, copied the image into his own note naming its source; after unsharing he reads it only through his copy",
+  );
+
   for (const [name, mimeType, bytes] of [
     ["report.pdf", "application/pdf", PDF],
     ["page.html", "text/html", HTML],
@@ -433,6 +484,21 @@ async function main() {
   );
 
   if (TRUSTED) {
+    const sweep = async () => {
+      const response = await fetch(
+        `${WORKER}/cdn-cgi/handler/scheduled?cron=23+4+*+*+*`,
+      );
+      assert(response.ok, `scheduled handler ran (${response.status})`);
+    };
+    const queued = async () =>
+      (
+        await convexRun("files:deletionBatch", { limit: 100 }, [
+          "--identity",
+          SERVICE_IDENTITY,
+        ])
+      ).map((row) => row.key);
+    // An upload the Worker admitted and wrote: cancelling it queues the bytes,
+    // but not before its write lease and settle time have passed (review F3).
     const spare = await ada.client.mutation(api.files.createUpload, {
       noteId,
       name: "spare.png",
@@ -441,30 +507,66 @@ async function main() {
       sha256: sha256(PIXEL),
     });
     await upload(spare, PIXEL);
-    assert(await r2Object(spare.objectId), "spare bytes stored");
     await ada.client.mutation(api.files.cancelUpload, {
       objectId: spare.objectId,
     });
-    const sweep = await fetch(
-      `${WORKER}/cdn-cgi/handler/scheduled?cron=23+4+*+*+*`,
+    await sweep();
+    assert(
+      !(await queued()).includes(`objects/${spare.objectId}`),
+      "a deletion waiting out a write lease is not handed to the sweep",
     );
-    assert(sweep.ok, `scheduled handler ran (${sweep.status})`);
+    assert(await r2Object(spare.objectId), "so its bytes are still there");
+    // An upload never admitted is due at once. Bytes placed for it (as a
+    // stray write would be) are deleted by the next sweep.
+    const idle = await ada.client.mutation(api.files.createUpload, {
+      noteId,
+      name: "idle.png",
+      mimeType: "image/png",
+      size: PIXEL.length,
+      sha256: sha256(PIXEL),
+    });
+    const dir = await mkdtemp(join(tmpdir(), "files-e2e-"));
+    try {
+      await writeFile(join(dir, "bytes"), PIXEL);
+      await run(
+        "npx",
+        [
+          "wrangler",
+          "r2",
+          "object",
+          "put",
+          `palladian-notes-files/objects/${idle.objectId}`,
+          "--file",
+          join(dir, "bytes"),
+          "--local",
+          "--persist-to",
+          R2_PERSIST,
+        ],
+        { cwd: EDGE_DIR },
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    await ada.client.mutation(api.files.cancelUpload, {
+      objectId: idle.objectId,
+    });
+    assert(
+      (await queued()).includes(`objects/${idle.objectId}`),
+      "a deletion with no lease is due at once",
+    );
+    await sweep();
     let gone = false;
     for (let i = 0; i < 20 && !gone; i++) {
-      gone = (await r2Object(spare.objectId)) === null;
+      gone = (await r2Object(idle.objectId)) === null;
       if (!gone) await new Promise((r) => setTimeout(r, 500));
     }
-    assert(gone, "the sweep deleted the cancelled object's bytes from R2");
-    const queue = await convexRun("files:deletionBatch", { limit: 100 }, [
-      "--identity",
-      SERVICE_IDENTITY,
-    ]);
+    assert(gone, "the sweep deleted the due object's bytes from R2");
     assert(
-      !queue.some((row) => row.key === `objects/${spare.objectId}`),
-      "the deletion was confirmed",
+      !(await queued()).includes(`objects/${idle.objectId}`),
+      "and confirmed the deletion",
     );
     log(
-      "a cancelled upload's bytes were deleted from R2 by the scheduled sweep and confirmed in Convex",
+      "deletions: a cancelled, written upload waits out its lease (not swept yet, bytes kept); one never admitted was swept from R2 and confirmed",
     );
   }
   log("PASS");
