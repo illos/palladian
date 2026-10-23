@@ -191,6 +191,7 @@ try {
     "Duplicate",
     "Move…",
     "Share…",
+    "History",
     "Info",
     "Export as Markdown",
     "Print or save as PDF",

@@ -22,8 +22,14 @@ import {
   restoreHold,
   restoreOutcomeText,
   type RestoreOutcome,
+  type RestoreRequest,
   type Version,
 } from "./versions";
+import {
+  PENDING_RESTORES_KEY,
+  RestoreKeeper,
+  type PendingRestore,
+} from "./restore-keeper";
 import { EditorSurface } from "./EditorSurface";
 import { Icon } from "./Icons";
 import { Appearance } from "./Appearance";
@@ -159,6 +165,15 @@ const statusLabels = {
   "signed-out": "Signed out",
 };
 
+/** This browser's localStorage, if the page may use it. */
+function browserStorage(): Storage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
 function randomId() {
   return crypto.randomUUID().replace(/-/g, "");
 }
@@ -229,14 +244,26 @@ export function App({
   const dialogRef = useRef(dialog);
   dialogRef.current = dialog;
   /**
-   * Restores sent from this window and not yet answered. Each one's note
-   * stays read-only here until it settles, or until the note is opened again,
-   * so no typing can start that the whole-note replacement would drop.
+   * Restores this browser has sent and not seen answered (review round 3,
+   * R3-1). While one is unresolved its note is read-only in this window, in
+   * every opening, so no typing can start that the whole-note replacement
+   * would drop. The records survive reloads and are shared with this
+   * browser's other windows; see `RestoreKeeper`.
    */
-  const [restorings, setRestorings] = useState<
-    { token: number; noteId: string; opening: number; since: number }[]
-  >([]);
-  const restoreTokens = useRef(0);
+  const liveForRestores = useRef(live);
+  liveForRestores.current = live;
+  const [keeper] = useState(
+    () =>
+      new RestoreKeeper(browserStorage(), async (record) => {
+        const current = liveForRestores.current;
+        if (!current) return { kind: "unanswered" };
+        const { sendRestore } = await import("./restore-send");
+        return sendRestore(current.client, record);
+      }),
+  );
+  const restores = useSyncExternalStore(keeper.subscribe, keeper.getState);
+  /** Restores this window has sent or re-checked on the current connection. */
+  const restoresChecked = useRef(new Set<string>());
   const [menu, setMenu] = useState<Menu | null>(null);
   /** The note row resting open after a swipe; one at a time. */
   const [openSwipe, setOpenSwipe] = useState<string | null>(null);
@@ -1311,18 +1338,19 @@ export function App({
       : section.kind === "notebook"
         ? (notebooks.find((n) => n.id === section.id)?.name ?? "Notebook")
         : "All notes";
-  // A restore of the open note is in flight from this window, sent while
-  // this opening of the note was shown.
-  const restoreLocked =
-    !!currentOpen &&
-    restorings.some(
-      (restore) =>
-        restore.noteId === currentOpen.id &&
-        currentOpen.opening <= restore.opening,
-    );
+  // An unresolved restore of the open note, from any window of this browser.
+  const openRestore =
+    currentOpen && accountId
+      ? restores.pending.find(
+          (record) =>
+            record.accountId === accountId && record.noteId === currentOpen.id,
+        )
+      : undefined;
+  const openRestoreSending =
+    !!openRestore && restores.inFlight.has(openRestore.requestId);
   const editable =
     !!currentOpen &&
-    !restoreLocked &&
+    !openRestore &&
     (currentOpen.kind === "draft" ||
       (currentOpen.kind === "live" &&
         !currentOpen.trashed &&
@@ -1340,8 +1368,12 @@ export function App({
             : "Cached copy — read only"
           : currentOpen.trashed
             ? "In Trash — restore to edit"
-            : restoreLocked
-              ? "Restoring a version — editing resumes when it is done"
+            : openRestore
+              ? openRestoreSending
+                ? "Restoring a version — editing resumes when it is done"
+                : liveConnected
+                  ? "Restoring a version — not confirmed yet"
+                  : "Restoring a version — checked again when connected"
               : channelLabel(channelStatus, !!currentOpen.channel?.ready);
   const sessionStatus =
     statusLabels[snapshot.status] +
@@ -1382,35 +1414,64 @@ export function App({
   useEffect(() => {
     if (menuStale) setMenu(null);
   }, [menuStale]);
-  /** A restore is being sent: hold its note read-only in this window. */
-  function restoreStarted(noteId: string) {
-    const token = ++restoreTokens.current;
-    setRestorings((list) => [
-      ...list,
-      { token, noteId, opening: openings.current, since: Date.now() },
-    ]);
-    return token;
-  }
-  /**
-   * The server answered a restore (or the request failed): editing resumes.
-   * The History panel reports the outcome while it shows this note; if it
-   * was closed in the meantime, a toast does.
-   */
-  function restoreSettled(
-    token: number,
-    noteId: string,
-    outcome: RestoreOutcome,
-    version: Version,
-  ) {
-    setRestorings((list) => list.filter((restore) => restore.token !== token));
+  /** Says what became of a restore, unless History is showing that note. */
+  function reportRestore(record: PendingRestore, outcome: RestoreOutcome) {
     const showing =
       dialogRef.current?.kind === "history" &&
-      dialogRef.current.noteId === noteId;
+      dialogRef.current.noteId === record.noteId;
     if (outcome.kind === "restored") {
       if (showing) setDialog(null);
-      toast(`Restored the version from ${dayAndTime(version.endedAt)}`);
+      toast(`Restored the version from ${dayAndTime(record.versionEndedAt)}`);
     } else if (!showing) toast(restoreOutcomeText(outcome));
   }
+  /** Records a restore, then sends it; its note is held until the outcome. */
+  async function startRestore(
+    noteId: string,
+    request: RestoreRequest,
+    version: Version,
+  ): Promise<RestoreOutcome> {
+    if (!accountId) return { kind: "unanswered" };
+    const record: PendingRestore = {
+      accountId,
+      noteId,
+      ...request,
+      versionEndedAt: version.endedAt,
+      since: Date.now(),
+    };
+    restoresChecked.current.add(record.requestId);
+    const outcome = await keeper.restore(record);
+    reportRestore(record, outcome);
+    return outcome;
+  }
+  /** Sends an unresolved restore again, unchanged, to learn its outcome. */
+  async function checkRestore(record: PendingRestore) {
+    restoresChecked.current.add(record.requestId);
+    reportRestore(record, await keeper.check(record));
+  }
+  // Restores left unresolved (by a reload, another window, or an answer that
+  // never came) are checked once each time this account connects.
+  useEffect(() => {
+    if (!liveConnected || !accountId) {
+      restoresChecked.current.clear();
+      return;
+    }
+    for (const record of restores.pending)
+      if (
+        record.accountId === accountId &&
+        !restores.inFlight.has(record.requestId) &&
+        !restoresChecked.current.has(record.requestId)
+      )
+        void checkRestore(record);
+  }, [liveConnected, accountId, restores]);
+  // Another window of this browser recorded or resolved a restore.
+  useEffect(() => {
+    const changed = (event: StorageEvent) => {
+      if (event.key === PENDING_RESTORES_KEY || event.key === null)
+        keeper.reload();
+    };
+    addEventListener("storage", changed);
+    return () => removeEventListener("storage", changed);
+  }, [keeper]);
 
   // History closes once the note no longer offers it to this person: a lost
   // edit role, Trash, or the note gone. The note as it is now comes from its
@@ -1428,11 +1489,20 @@ export function App({
       historyNow.accountId !== accountId ||
       !noteActions(historyNow, true).includes("history"));
   // Restoring replaces the whole note, so it waits for this window's own
-  // typing in it to reach the server, and for the connection.
+  // typing in it to reach the server, for the connection, and for any
+  // earlier restore of it from this browser to be resolved.
+  const historyRestore =
+    dialog?.kind === "history" && accountId
+      ? restores.pending.find(
+          (record) =>
+            record.accountId === accountId && record.noteId === dialog.noteId,
+        )
+      : undefined;
   const historyHold =
     dialog?.kind === "history"
       ? restoreHold({
           connected: liveConnected,
+          pending: !!historyRestore,
           open:
             currentOpen?.id === dialog.noteId
               ? { kind: currentOpen.kind, status: channelStatus?.kind ?? null }
@@ -2012,6 +2082,15 @@ export function App({
                   <Icon name="menu" size={20} />
                 </button>
                 <span className="save-status">{statusText}</span>
+                {openRestore && !openRestoreSending && liveConnected && (
+                  <button
+                    type="button"
+                    className="link-button check-restore"
+                    onClick={() => void checkRestore(openRestore)}
+                  >
+                    Check again
+                  </button>
+                )}
                 {openActions.length > 0 && (
                   <span className="note-actions">
                     {openActions
@@ -2155,15 +2234,19 @@ export function App({
               noteId={dialog.noteId}
               title={dialog.title}
               restoreHold={historyHold}
+              connected={liveConnected}
               restoring={
-                restorings.find((restore) => restore.noteId === dialog.noteId)
-                  ?.since ?? null
+                historyRestore
+                  ? (restores.inFlight.get(historyRestore.requestId) ?? null)
+                  : null
               }
               onClose={() => setDialog(null)}
-              onRestoreStart={() => restoreStarted(dialog.noteId)}
-              onRestoreSettled={(token, outcome, version) =>
-                restoreSettled(token, dialog.noteId, outcome, version)
+              onRestore={(request, version) =>
+                startRestore(dialog.noteId, request, version)
               }
+              onCheck={() => {
+                if (historyRestore) void checkRestore(historyRestore);
+              }}
             />
           </Suspense>
         </PanelBoundary>

@@ -11,6 +11,14 @@ export interface DevTarget {
   cloud: string;
 }
 
+/** The listed development deployments: the only ones the scripts may touch. */
+export const DEV_DEPLOYMENTS: readonly string[];
+/** Known production deployments: always refused. */
+export const PRODUCTION_DEPLOYMENTS: readonly string[];
+/** Why a deployment name may not be used, or null if it may. */
+export function refusedDeployment(name: string): string | null;
+/** Refuses unless the CLI resolved exactly the target. */
+export function checkCliDeployment(cli: string | null, target: DevTarget): void;
 /** Variables that would point the Convex CLI at another deployment or host. */
 export const OVERRIDES: readonly string[];
 /** A dotenv file's variables. */

@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ConvexProvider,
-  useMutation,
   useQueries,
   useQuery,
   type RequestForQueries,
@@ -15,7 +14,6 @@ import { DOMSerializer, type Node as ProseMirrorNode } from "prosemirror-model";
 import { Icon } from "./Icons";
 import { timeRange } from "./dates";
 import type { LiveController } from "./live";
-import { transportError } from "./live";
 import { changed, diffText, type TextDiff } from "./text-diff";
 import {
   canRestore,
@@ -23,10 +21,10 @@ import {
   pageChain,
   pageKey,
   previousRevision,
-  RestoreRequests,
   versionKey,
   type RestoreHold,
   type RestoreOutcome,
+  type RestoreRequest,
   type Version,
   type VersionPageResult,
 } from "./versions";
@@ -49,7 +47,10 @@ const compareLabels: Record<Compare, string> = {
   current: "vs Current",
 };
 
-const holdNotices: Record<NonNullable<RestoreHold>, string> = {
+const holdNotices: Record<
+  Exclude<NonNullable<RestoreHold>, "pending">,
+  string
+> = {
   unsaved: "Waiting for your changes in this window to save…",
   offline: "Not connected. Restore when the connection is back.",
 };
@@ -61,13 +62,16 @@ const holdNotices: Record<NonNullable<RestoreHold>, string> = {
 export const RESTORE_PATIENCE_MS = 20_000;
 
 interface RestoreCallbacks {
-  /** A restore is being sent; returns its token. */
-  onRestoreStart: () => number;
-  onRestoreSettled: (
-    token: number,
-    outcome: RestoreOutcome,
+  /**
+   * Records and sends a restore (App's `RestoreKeeper`); resolves with its
+   * outcome. The note stays read-only until the outcome is known.
+   */
+  onRestore: (
+    request: RestoreRequest,
     version: Version,
-  ) => void;
+  ) => Promise<RestoreOutcome>;
+  /** Sends an unresolved restore of this note again to learn its outcome. */
+  onCheck: () => void;
 }
 
 type Current = { doc: string; revision: number } | null | undefined;
@@ -77,17 +81,19 @@ export default function HistoryPanel({
   noteId,
   title,
   restoreHold,
+  connected,
   restoring,
   onClose,
-  onRestoreStart,
-  onRestoreSettled,
+  onRestore,
+  onCheck,
 }: {
   live: LiveController;
   noteId: string;
   title: string;
   /** Why this window may not restore now (see `restoreHold`), or null. */
   restoreHold: RestoreHold;
-  /** When a restore of this note from this window was sent, while unanswered. */
+  connected: boolean;
+  /** When this window sent the restore of this note it is waiting on. */
   restoring: number | null;
   onClose: () => void;
 } & RestoreCallbacks) {
@@ -97,10 +103,11 @@ export default function HistoryPanel({
         noteId={noteId as Id<"notes">}
         title={title}
         hold={restoreHold}
+        connected={connected}
         restoring={restoring}
         onClose={onClose}
-        onRestoreStart={onRestoreStart}
-        onRestoreSettled={onRestoreSettled}
+        onRestore={onRestore}
+        onCheck={onCheck}
       />
     </ConvexProvider>
   );
@@ -110,14 +117,16 @@ function History({
   noteId,
   title,
   hold,
+  connected,
   restoring,
   onClose,
-  onRestoreStart,
-  onRestoreSettled,
+  onRestore,
+  onCheck,
 }: {
   noteId: Id<"notes">;
   title: string;
   hold: RestoreHold;
+  connected: boolean;
   restoring: number | null;
   onClose: () => void;
 } & RestoreCallbacks) {
@@ -183,8 +192,24 @@ function History({
       {restoring !== null && !pinned && (
         <p role="status" className="history-stalled">
           Still restoring. You can close History; the restore may still apply,
-          and this note stays read-only in this window until it does.
+          and this note stays read-only in this window until it is confirmed.
         </p>
+      )}
+      {restoring === null && hold === "pending" && (
+        <div role="status" className="history-stalled">
+          <p>
+            A restore of this note from this browser is not confirmed yet. The
+            note stays read-only until it is.
+          </p>
+          <button
+            type="button"
+            className="link-button"
+            disabled={!connected}
+            onClick={onCheck}
+          >
+            Check again
+          </button>
+        </div>
       )}
       <div className="history-body">
         <section className="history-versions" aria-label="Versions">
@@ -207,8 +232,8 @@ function History({
               hold={hold}
               restoring={restoring !== null}
               onBack={() => setSelected(null)}
-              onRestoreStart={onRestoreStart}
-              onRestoreSettled={onRestoreSettled}
+              onRestore={onRestore}
+              onCheck={onCheck}
             />
           ) : (
             <p className="history-empty">
@@ -329,8 +354,8 @@ function VersionView({
   hold,
   restoring,
   onBack,
-  onRestoreStart,
-  onRestoreSettled,
+  onRestore,
+  onCheck,
 }: {
   noteId: Id<"notes">;
   version: Version;
@@ -451,8 +476,8 @@ function VersionView({
         current={current}
         hold={hold}
         busy={restoring}
-        onRestoreStart={onRestoreStart}
-        onRestoreSettled={onRestoreSettled}
+        onRestore={onRestore}
+        onCheck={onCheck}
       />
     </>
   );
@@ -501,13 +526,11 @@ function DiffView({ diff }: { diff: TextDiff }) {
 }
 
 function RestoreControls({
-  noteId,
   version,
   current,
   hold,
   busy,
-  onRestoreStart,
-  onRestoreSettled,
+  onRestore,
 }: {
   noteId: Id<"notes">;
   version: Version;
@@ -516,10 +539,6 @@ function RestoreControls({
   /** A restore of this note is in flight from this window. */
   busy: boolean;
 } & RestoreCallbacks) {
-  const restore = useMutation(api.history.restore);
-  const [requests] = useState(
-    () => new RestoreRequests(() => crypto.randomUUID()),
-  );
   const [confirming, setConfirming] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   // The latest hold and state, for the check just before sending.
@@ -533,38 +552,30 @@ function RestoreControls({
     // check again at the last moment.
     if (!current || holdNow.current || busyNow.current) return;
     busyNow.current = true;
-    // The revision the person is replacing; if someone edits first, the
-    // server refuses rather than discarding their edit unseen.
-    const request = requests.next(version.revision, current.revision);
-    // From here until the answer, App keeps the note read-only in this window,
-    // even if History closes or another version is chosen.
-    const token = onRestoreStart();
     setNotice(null);
-    let outcome: RestoreOutcome;
-    try {
-      await restore({ noteId, ...request });
-      requests.settled(request);
-      outcome = { kind: "restored" };
-    } catch (failure) {
-      const error = transportError(failure);
-      // Unanswered: Restore again repeats this request exactly.
-      if (error.code !== "transient") requests.settled(request);
-      outcome =
-        error.code === "conflict"
-          ? { kind: "conflict" }
-          : error.code === "transient"
-            ? { kind: "unanswered" }
-            : { kind: "refused", message: error.message };
-    }
-    onRestoreSettled(token, outcome, version);
+    // The revision the person is replacing; if someone edits first, the
+    // server refuses rather than discarding their edit unseen. App records
+    // the request before sending it and keeps the note read-only until the
+    // outcome is known, even if History closes or the page reloads.
+    const outcome = await onRestore(
+      {
+        revision: version.revision,
+        expectedRevision: current.revision,
+        requestId: crypto.randomUUID(),
+      },
+      version,
+    );
     if (outcome.kind === "conflict") {
       setConfirming(false);
       setNotice(
         "The note changed before the restore reached it, so nothing was restored. History now shows the latest changes; restore again if you still want this version.",
       );
-    } else if (outcome.kind === "unanswered")
-      setNotice("The restore did not reach the server. Try again.");
-    else if (outcome.kind === "refused") setNotice(outcome.message);
+    } else if (outcome.kind === "unanswered") {
+      setConfirming(false);
+      setNotice(
+        "The restore did not reach the server, so it is not confirmed yet. The note stays read-only here until it is.",
+      );
+    } else if (outcome.kind === "refused") setNotice(outcome.message);
   }
 
   if (!current) return null;
@@ -581,7 +592,7 @@ function RestoreControls({
           {notice}
         </p>
       )}
-      {hold && (
+      {hold && hold !== "pending" && (
         <p role="status" className="history-legend">
           {holdNotices[hold]}
         </p>

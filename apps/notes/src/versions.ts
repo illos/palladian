@@ -46,37 +46,15 @@ export function canRestore(
   return currentRevision !== undefined && version.revision < currentRevision;
 }
 
+/**
+ * One restore request. A retry sends exactly the same request: the server
+ * answers a repeated request ID from its receipt instead of applying it twice
+ * (see `RestoreKeeper`, which keeps unresolved requests until answered).
+ */
 export interface RestoreRequest {
   revision: number;
   expectedRevision: number;
   requestId: string;
-}
-
-/**
- * Restore requests, so a retry is never applied twice. A retry after an
- * unanswered or failed request repeats it exactly, with the same request ID;
- * the server returns the first result if that one was applied. Once the server
- * answers (restored, conflict or refusal), the next restore is a new request.
- */
-export class RestoreRequests {
-  private pending: RestoreRequest | null = null;
-  constructor(private readonly newId: () => string) {}
-
-  /** The request to send for restoring `revision` onto `currentRevision`. */
-  next(revision: number, currentRevision: number): RestoreRequest {
-    if (this.pending?.revision !== revision)
-      this.pending = {
-        revision,
-        expectedRevision: currentRevision,
-        requestId: this.newId(),
-      };
-    return this.pending;
-  }
-
-  /** The server answered `request`; retries start over. */
-  settled(request: RestoreRequest) {
-    if (this.pending === request) this.pending = null;
-  }
 }
 
 /**
@@ -92,10 +70,15 @@ export class RestoreRequests {
  * cache notifications, and other devices are out of reach: their unsent
  * typing is still replaced (a known gap in collaboration, outside History).
  */
-export type RestoreHold = "offline" | "unsaved" | null;
+export type RestoreHold = "pending" | "offline" | "unsaved" | null;
 
 export function restoreHold(state: {
   connected: boolean;
+  /**
+   * A restore of the note from this browser is unresolved (`RestoreKeeper`):
+   * no other restore starts until its outcome is known.
+   */
+  pending?: boolean;
   /** The note as open in this window, if it is, with its editor's save status. */
   open: {
     kind: "cached" | "draft" | "live" | "reader";
@@ -104,6 +87,7 @@ export function restoreHold(state: {
   /** Unsent edits to the note are journaled on this device. */
   journaled: boolean;
 }): RestoreHold {
+  if (state.pending) return "pending";
   if (!state.connected) return "offline";
   if (state.journaled) return "unsaved";
   // A local draft view of the note, or an editor not yet known to be saved.
@@ -130,7 +114,7 @@ export function restoreOutcomeText(
     case "conflict":
       return "The restore did not apply: the note changed first.";
     case "unanswered":
-      return "The restore did not reach the server. Open History to try again.";
+      return "The restore is not confirmed yet. The note stays read-only here until it is; use Check again.";
     case "refused":
       return `The restore did not apply: ${outcome.message}`;
   }

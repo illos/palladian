@@ -6,7 +6,6 @@ import {
   pageKey,
   previousRevision,
   restoreHold,
-  RestoreRequests,
   versionKey,
   type Version,
   type VersionPageResult,
@@ -42,51 +41,6 @@ describe("versions", () => {
     expect(canRestore({ revision: 3 }, 8)).toBe(true);
     expect(canRestore({ revision: 8 }, 8)).toBe(false);
     expect(canRestore({ revision: 3 }, undefined)).toBe(false);
-  });
-});
-
-describe("restore requests", () => {
-  const ids = () => {
-    let n = 0;
-    return () => `request-${++n}`;
-  };
-
-  test("a retry repeats the unanswered request exactly", () => {
-    const requests = new RestoreRequests(ids());
-    const first = requests.next(3, 10);
-    expect(first).toEqual({
-      revision: 3,
-      expectedRevision: 10,
-      requestId: "request-1",
-    });
-    // No answer (the connection dropped); the note has moved on since.
-    expect(requests.next(3, 12)).toEqual(first);
-  });
-
-  test("after an answer, the next restore is a new request", () => {
-    const requests = new RestoreRequests(ids());
-    const first = requests.next(3, 10);
-    // A conflict: the note changed. Trying again expects the new revision.
-    requests.settled(first);
-    expect(requests.next(3, 12)).toEqual({
-      revision: 3,
-      expectedRevision: 12,
-      requestId: "request-2",
-    });
-  });
-
-  test("another version is another request", () => {
-    const requests = new RestoreRequests(ids());
-    requests.next(3, 10);
-    expect(requests.next(5, 10).requestId).toBe("request-2");
-    // A late answer for a replaced request does not drop the current one.
-    const current = requests.next(5, 10);
-    requests.settled({
-      revision: 3,
-      expectedRevision: 10,
-      requestId: "request-1",
-    });
-    expect(requests.next(5, 11)).toBe(current);
   });
 });
 
@@ -130,6 +84,13 @@ describe("restore hold (review round 1, F1 and F2)", () => {
         open: { kind: "live", status: "saved" },
       }),
     ).toBe("unsaved");
+  });
+
+  test("waits for an earlier restore from this browser first (round 3)", () => {
+    expect(restoreHold({ ...ready, pending: true })).toBe("pending");
+    expect(restoreHold({ ...ready, connected: false, pending: true })).toBe(
+      "pending",
+    );
   });
 
   test("waits for the connection first", () => {

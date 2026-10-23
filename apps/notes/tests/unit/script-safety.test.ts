@@ -5,7 +5,14 @@ import {
   redact,
   secret,
 } from "../../scripts/redact.mjs";
-import { devTarget, parseEnvFile } from "../../scripts/dev-target.mjs";
+import {
+  checkCliDeployment,
+  DEV_DEPLOYMENTS,
+  devTarget,
+  parseEnvFile,
+  PRODUCTION_DEPLOYMENTS,
+  refusedDeployment,
+} from "../../scripts/dev-target.mjs";
 
 // Review round 2 (R2-2, R2-3): what real-service scripts may print, and the
 // one development deployment they may touch. Canary values stand in for real
@@ -87,6 +94,35 @@ describe("redact", () => {
     expect(text).toContain("[secret]");
   });
 
+  test("a whole cookie header is hidden, every cookie in it (round 3)", () => {
+    for (const line of [
+      `cookie=a1b2c3; second=${INVITE}; Path=/`,
+      `Cookie: session=${PASSWORD}; other=${INVITE}`,
+      `Better-Auth-Cookie: a=1; __Secure-token=${INVITE}`,
+      `set-cookie: x=1; y=${INVITE}; HttpOnly`,
+      `{"cookie":"a=1; b=${INVITE}"}`,
+    ]) {
+      const text = redact(line);
+      expect(text).not.toContain(INVITE);
+      expect(text).not.toContain(PASSWORD);
+    }
+  });
+
+  test("relative paths lose opaque segments, queries and fragments (round 3)", () => {
+    expect(redact(`navigated: /notes/${INVITE}`)).toBe(
+      "navigated: /notes/[id]",
+    );
+    expect(redact(`request failed: /invite#${INVITE}`)).toBe(
+      "request failed: /invite[…]",
+    );
+    expect(redact(`at /reset?token=${INVITE}.`)).toBe("at /reset[…].");
+    expect(redact(`"/p/${INVITE}"`)).toBe(`"/p/[id]"`);
+    // Ordinary text with slashes is left alone.
+    expect(redact("Expected: 2 (1/2) and /notes")).toBe(
+      "Expected: 2 (1/2) and /notes",
+    );
+  });
+
   test("a stray fragment without its URL is hidden", () => {
     expect(redact(`expected #${INVITE} to be visible`)).not.toContain(INVITE);
   });
@@ -101,6 +137,15 @@ describe("redact", () => {
     expect(text).not.toContain(INVITE);
     expect(text.split("\n").length).toBeLessThanOrEqual(8);
     expect(describeFailure(`raw ${JWT}`)).not.toContain(JWT);
+  });
+
+  test("the whole formatted failure is redacted, its name too (round 3)", () => {
+    const failure = new Error("navigation failed");
+    failure.name = `Error at /invite#${INVITE} with ${JWT}`;
+    const text = describeFailure(failure);
+    expect(text).not.toContain(INVITE);
+    expect(text).not.toContain(JWT);
+    expect(text).toContain("navigation failed");
   });
 });
 
@@ -129,6 +174,47 @@ describe("development target", () => {
         },
       }).name,
     ).toBe("decisive-reindeer-520");
+  });
+
+  test("the allowlist is the authority on deployment type (round 3)", () => {
+    expect(DEV_DEPLOYMENTS).toEqual(["decisive-reindeer-520"]);
+    expect(PRODUCTION_DEPLOYMENTS).toContain("adamant-hound-861");
+    expect(refusedDeployment("decisive-reindeer-520")).toBeNull();
+    expect(refusedDeployment("adamant-hound-861")).toMatch(/production/);
+    expect(refusedDeployment("happy-otter-123")).toMatch(
+      /not a listed development deployment/,
+    );
+    // Labelled dev:, but production or unknown: refused.
+    expect(() =>
+      devTarget({
+        CONVEX_DEPLOYMENT: "dev:adamant-hound-861",
+        CONVEX_SITE_URL: "https://adamant-hound-861.convex.site",
+        CONVEX_CLOUD_URL: "https://adamant-hound-861.convex.cloud",
+      }),
+    ).toThrow(/adamant-hound-861 is a production deployment/);
+    expect(() =>
+      devTarget({
+        CONVEX_DEPLOYMENT: "dev:happy-otter-123",
+        CONVEX_SITE_URL: "https://happy-otter-123.convex.site",
+        CONVEX_CLOUD_URL: "https://happy-otter-123.convex.cloud",
+      }),
+    ).toThrow(/not a listed development deployment/);
+  });
+
+  test("the CLI's resolved deployment must be the listed target (round 3)", () => {
+    const target = devTarget(good);
+    expect(() =>
+      checkCliDeployment("decisive-reindeer-520", target),
+    ).not.toThrow();
+    // A mocked CLI resolving to production, to an unknown deployment, to
+    // another name, or to nothing at all.
+    expect(() => checkCliDeployment("adamant-hound-861", target)).toThrow(
+      /production deployment/,
+    );
+    expect(() => checkCliDeployment("happy-otter-123", target)).toThrow(
+      /not a listed development deployment/,
+    );
+    expect(() => checkCliDeployment(null, target)).toThrow(/Could not confirm/);
   });
 
   test("refuses overrides in the environment, without printing them", () => {

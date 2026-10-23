@@ -20,6 +20,33 @@ export const OVERRIDES = [
   "CONVEX_PROD",
 ];
 
+/**
+ * The authority on which deployments these scripts may touch (review round
+ * 3, R3-2). Nothing the scripts can ask reliably reports a deployment's type:
+ * `dev:` in CONVEX_DEPLOYMENT is a label the person running a script sets,
+ * and the Convex CLI's dashboard URL has the same form for development and
+ * production deployments. So the development deployments are listed here by
+ * name, and every other name is refused.
+ *
+ * To add a development deployment, confirm in the Convex dashboard that it is
+ * a development deployment of this project, then add its name to
+ * DEV_DEPLOYMENTS in this file, in its own reviewed change. Never add a
+ * production deployment; production names also go in PRODUCTION_DEPLOYMENTS,
+ * which is refused even if someone adds the same name above by mistake.
+ */
+export const DEV_DEPLOYMENTS = ["decisive-reindeer-520"];
+/** Known production deployments: always refused, whatever they are called. */
+export const PRODUCTION_DEPLOYMENTS = ["adamant-hound-861"];
+
+/** Why a deployment name may not be used, or null if it may. */
+export function refusedDeployment(name) {
+  if (PRODUCTION_DEPLOYMENTS.includes(name))
+    return `${name} is a production deployment`;
+  if (!DEV_DEPLOYMENTS.includes(name))
+    return `${name} is not a listed development deployment (DEV_DEPLOYMENTS in apps/notes/scripts/dev-target.mjs)`;
+  return null;
+}
+
 /** The only Convex variables a script's environment may set. */
 const REQUIRED = ["CONVEX_DEPLOYMENT", "CONVEX_SITE_URL", "CONVEX_CLOUD_URL"];
 
@@ -51,6 +78,8 @@ export function devTarget(env, files = {}) {
   );
   if (!match) problems.push("CONVEX_DEPLOYMENT must be dev:<deployment name>");
   const name = match?.[1];
+  const refused = name ? refusedDeployment(name) : null;
+  if (refused) problems.push(refused);
   const site = name ? `https://${name}.convex.site` : null;
   const cloud = name ? `https://${name}.convex.cloud` : null;
   if (name && env.CONVEX_SITE_URL !== site)
@@ -145,15 +174,26 @@ export async function appEndpoints(browser, appUrl, target, timeout = 20_000) {
  * Every check, before anything is provisioned: the environment and env
  * files, the CLI's effective deployment, and the app's actual endpoints.
  */
+/**
+ * Refuses unless the Convex CLI resolved exactly the target, a listed
+ * development deployment. The name is checked against the allowlist, not
+ * against anything the CLI says about the deployment's type.
+ */
+export function checkCliDeployment(cli, target) {
+  if (!cli)
+    throw new Error(
+      "Could not confirm which deployment the Convex CLI would act on.",
+    );
+  const refused = refusedDeployment(cli);
+  if (refused)
+    throw new Error(`The Convex CLI would act on ${cli}: ${refused}.`);
+  if (cli !== target.name)
+    throw new Error(`The Convex CLI would act on ${cli}, not ${target.name}.`);
+}
+
 export async function assertDevTarget({ env, backendDir, browser, appUrl }) {
   const target = devTarget(env, readEnvFiles(backendDir));
-  const cli = cliDeployment(backendDir, env);
-  if (cli !== target.name)
-    throw new Error(
-      cli
-        ? `The Convex CLI would act on ${cli}, not ${target.name}.`
-        : "Could not confirm which deployment the Convex CLI would act on.",
-    );
+  checkCliDeployment(cliDeployment(backendDir, env), target);
   const hosts = await appEndpoints(browser, appUrl, target);
   const expected = [new URL(target.cloud).host, new URL(target.site).host];
   const strangers = hosts.filter((host) => !expected.includes(host));

@@ -48,6 +48,9 @@
   color: var(--ink);
   background: var(--sel);
 }
+.history-stalled p {
+  margin: 0 0 6px;
+}
 .history-body {
   flex: 1;
   min-height: 0;
