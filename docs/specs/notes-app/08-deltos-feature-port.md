@@ -282,7 +282,7 @@ Deltos reference: `components/HistoryPanel.tsx`, for the UI only. Deltos kept pe
 
 ### A5. Notebooks (S, one backend item)
 
-Implemented 2026-10-22 (`docs/reviews/notes-notebooks-implementation.md`). Reviewed over six rounds and accepted apart from R3-1/R3-3, the D86 gap for collaborators' offline drafts. It ships with **Delete off** (`NOTEBOOK_DELETE_ENABLED` unset): the menu has no Delete and `notebooks.remove` refuses. Turning it on widens that gap unless the parked fundamentals fix lands first; see "Shipping with Delete off" in the report.
+Implemented 2026-10-22 (`docs/reviews/notes-notebooks-implementation.md`). Accepted after seven review rounds, apart from R3-1/R3-3, the D86 gap for collaborators' offline drafts. Released to production on 2026-10-23 with **Delete off**; the iPhone check is pending (`NOTEBOOK_DELETE_ENABLED` unset): the menu has no Delete and `notebooks.remove` refuses. Turning it on widens that gap unless the parked fundamentals fix lands first; see "Shipping with Delete off" in the report.
 
 Deltos reference: `views/NavContent.tsx`, `components/NotebookMenuBody.tsx`, `ContextMenuSheet.tsx`, `NotebookMenuPopover.tsx`.
 

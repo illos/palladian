@@ -149,6 +149,28 @@ Report: `notes-notebooks-round6-astra-review.md`, a design review of the proposa
 
 The reviewer also asked for proof of marker, account and epoch changes during asynchronous adoption or revocation, with each per-draft commit atomically validating its captured fence, and for large-document replay batches.
 
+## Release
+
+Released 2026-10-23 from `main` `ecfcbe6` (code `e88e4a3`), after acceptance in review round 7, with **Delete off**:
+
+- **Convex production** `adamant-hound-861` was deployed. The push added four indexes: `deletedNotebooks.by_notebook`, `invitations.by_notebook_and_accepted_at_and_revoked_at`, `listOrders.by_list` and `notePositions.by_notebook`. It deleted none.
+  - `NOTEBOOK_DELETE_ENABLED` is not set in production, checked by variable name before deploying.
+  - Afterwards, `notebooks:capabilities` on production returns `{ "delete": false }`.
+- **Worker** `palladian` version `c05d3763` is at 100% from 22:06 UTC. The custom domain and the cron `23 4 * * *` were confirmed through the Cloudflare API, after the known "No access" message on the routes call.
+
+Checks:
+
+- **Before merging**, these passed against dev Convex on `e88e4a3`, the same code:
+  - `notebooks-e2e.mjs`, 11 steps, with Delete off and then on;
+  - `actions-e2e.mjs`;
+  - `live-e2e.mjs`;
+  - `history-e2e.mjs`;
+  - `arrange-e2e.mjs`.
+- **After deploying**, `live-e2e.mjs` and `apps/notes-edge/scripts/browser-e2e.mjs` passed against production.
+- **Still pending:** WebKit and the iPhone long-press check.
+
+To turn Delete on, see "Shipping with Delete off". Make the R7-1 fix first.
+
 ## Review round 7 responses
 
 Report: `notes-notebooks-round7-astra-review.md` (verbatim). **Accepted for release with Delete off.** This acceptance does not cover turning Delete on, and it does not resolve R3-1/R3-3.
