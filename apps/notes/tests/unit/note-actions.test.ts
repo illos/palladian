@@ -61,6 +61,18 @@ describe("note actions", () => {
     expect(noteActions(note({ local: true }), true)).not.toContain("history");
   });
 
+  test("History also needs the connection up now (review round 1, F2)", () => {
+    // Signed in, but the connection dropped: changes would wait in the
+    // client's queue, but History reads the server live.
+    expect(noteActions(note(), true, false)).not.toContain("history");
+    expect(noteActions(note(), true, false)).toContain("share");
+    expect(noteActions(note({ role: "edit" }), true, true)).toContain(
+      "history",
+    );
+    // Without the third argument, connected follows online.
+    expect(noteActions(note(), true)).toContain("history");
+  });
+
   test("History is never a swipe", () => {
     const layout = swipeLayout(note(), true);
     expect([...layout.leading, ...layout.trailing, layout.full]).not.toContain(

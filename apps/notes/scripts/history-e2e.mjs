@@ -2,15 +2,25 @@
 // deployment + the app + Chromium on a desktop and an emulated iPhone. Covers
 // the version list (who, what, when) after edits by two people, reading an old
 // version and comparing it with the previous and the current one, paging,
-// restoring while another signed-in person types in the note (both converge;
-// the restored text and their later typing survive), and that a read-only
-// collaborator, or an editor whose access drops to read, never reaches
-// History. Prints no secrets. Disposable @example.test accounts only.
+// restoring while another signed-in person is typing in the note (a refused
+// restore first, then both converge; what happens to their words is checked
+// word by word), and that a read-only collaborator, or an editor whose access
+// drops to read, never reaches History. Review round 1 adds: Restore waits for
+// this window's own unsent typing (F1) and for the connection (F2), and a
+// History panel opened from a row with a pending journal stays open (F3).
+// Prints no secrets. Disposable @example.test accounts only.
+//
+// Typing is held unsent, a restore is held in flight, and a connection is
+// dropped deterministically by routing each page's Convex WebSocket through
+// the script (`convexGate`), not by timing.
 //
 // CONVEX_DEPLOYMENT selects the development deployment (dev:…), NOTES_APP_URL
 // the app (served with that deployment's VITE_NOTES_* URLs), NOTES_BACKEND_DIR
 // the backend checkout, CONVEX_SITE_URL and CONVEX_CLOUD_URL the deployment's
 // URLs. SCREENSHOT_DIR, if set, receives pictures of the panel.
+// HISTORY_E2E_STEPS (comma-separated: list, compare, f3, f1, f2, restore,
+// paging, reader, downgrade, phone) runs only those steps after the setup.
+// HISTORY_E2E_DEBUG logs page errors, failed requests and reloads.
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -67,6 +77,72 @@ async function dismissPasskeyOffer(page) {
     .catch(() => undefined);
 }
 
+const only = (process.env.HISTORY_E2E_STEPS ?? "").split(",").filter(Boolean);
+const wanted = (name) => !only.length || only.includes(name);
+
+/** The Convex function a client-to-server message runs, if it is a mutation. */
+function mutationPath(message) {
+  if (typeof message !== "string") return null;
+  try {
+    const data = JSON.parse(message);
+    return data?.type === "Mutation" ? data.udfPath : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Routes a context's Convex WebSockets through the script, so a test can hold
+ * chosen mutations (an editor's `notes:push`, a `history:restore`) unsent and
+ * release them later in order, or drop the connection and refuse new ones.
+ */
+async function convexGate(context) {
+  const holding = new Set();
+  let held = [];
+  const links = new Set();
+  let refusing = false;
+  await context.routeWebSocket(/\/api\/[^/]+\/sync$/, (ws) => {
+    if (refusing) return void ws.close();
+    const server = ws.connectToServer();
+    const link = { ws, server };
+    links.add(link);
+    ws.onClose(() => {
+      links.delete(link);
+      server.close();
+    });
+    ws.onMessage((message) => {
+      const path = mutationPath(message);
+      if (path && holding.has(path))
+        held.push({ path, send: () => server.send(message) });
+      else server.send(message);
+    });
+  });
+  return {
+    hold(path) {
+      holding.add(path);
+    },
+    held(path) {
+      return held.filter((item) => item.path === path).length;
+    },
+    release(path) {
+      holding.delete(path);
+      for (const item of held) if (item.path === path) item.send();
+      held = held.filter((item) => item.path !== path);
+    },
+    disconnect() {
+      refusing = true;
+      for (const { ws, server } of links) {
+        ws.close();
+        server.close();
+      }
+      links.clear();
+    },
+    reconnect() {
+      refusing = false;
+    },
+  };
+}
+
 async function newContext(options = {}) {
   const context = await browser.newContext(options);
   await context.addInitScript(
@@ -75,6 +151,7 @@ async function newContext(options = {}) {
     },
     { site, cloud },
   );
+  context.gate = await convexGate(context);
   return context;
 }
 
@@ -149,17 +226,21 @@ function convex(page, kind, path, args) {
   );
 }
 
+/**
+ * Types at the end of the note as a person would: click into its last block,
+ * go to the very end, and let the editor take up that selection first. (Setting
+ * the DOM selection directly and typing at once raced the editor: once the
+ * words landed at the start of the note.)
+ */
 async function typeAtEnd(page, editor, text) {
-  await editor.focus();
-  // Place the caret at the end of the document, as a person tapping below the text would.
-  await editor.evaluate((element) => {
-    const range = document.createRange();
-    range.selectNodeContents(element.lastElementChild ?? element);
-    range.collapse(false);
-    const selection = window.getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
-  });
+  await editor.locator(":scope > *").last().click();
+  await page.keyboard.press("Control+End");
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => setTimeout(resolve, 0)),
+      ),
+  );
   await page.keyboard.type(text);
 }
 
@@ -221,323 +302,487 @@ try {
   await expect(editorC).toContainText("Ada's second line.", {
     timeout: 20_000,
   });
+  // Every edit went to the end: the note's first line is still its title.
+  assert.match(
+    (await editorA.innerText()).replace(/\n+/g, "\n").trim(),
+    /^Recipe\nFirst line\. Ada's first edit\. Cy was here\.\nAda's second line\.$/,
+  );
   step("edits by Ada, then Cy, then Ada again");
 
   const history = a.getByRole("dialog", { name: "History of Recipe" });
-  await a.getByRole("button", { name: "Note history" }).click();
-  // The panel loads on first use; a cold dev server compiles it first.
-  await expect(history).toBeVisible({ timeout: 20_000 });
   const rows = history.locator(".history-row");
-  await expect(rows).toHaveCount(4, { timeout: 20_000 });
-  const expected = [
-    ["Ada", "Edited"],
-    ["Cy", "Edited"],
-    ["Ada", "Edited"],
-    ["Ada", "Created"],
-  ];
-  for (const [index, [who, what]] of expected.entries()) {
-    const row = rows.nth(index);
-    await expect(row.locator("strong")).toHaveText(who);
-    await expect(row.locator(".history-row-what")).toHaveText(what);
-    await expect(row.locator("time")).toHaveText(/^Today \d/);
-    await expect(row.getByText("Agent")).toHaveCount(0);
-  }
-  await expect(rows.first()).toContainText("Current");
-  await expect(rows.nth(1)).not.toContainText("Current");
-  // The same versions, from the server.
-  const listed = await convex(a, "query", "history:list", { noteId });
-  assert.deepEqual(
-    listed.versions.map((v) => [v.actorName, v.kind, v.actorKind]),
-    [
-      ["Ada", "edit", "human"],
-      ["Cy", "edit", "human"],
-      ["Ada", "edit", "human"],
-      ["Ada", "create", "human"],
-    ],
-  );
-  for (const [index, version] of listed.versions.entries())
-    await expect(rows.nth(index).locator("time")).toHaveAttribute(
-      "datetime",
-      new Date(version.startedAt).toISOString(),
-    );
-  await shot(a, "desktop-history-list");
-  step("History lists who, what and when for each version, newest first");
-
-  // Cy's version, read-only, then compared.
-  await rows.nth(1).click();
   const versionText = history.getByRole("document", { name: "Version text" });
-  await expect(versionText).toContainText("Cy was here.", { timeout: 20_000 });
-  await expect(versionText).not.toContainText("Ada's second line.");
-  await expect(versionText.locator("[contenteditable]")).toHaveCount(0);
   const changes = history.getByRole("document", { name: "Changes" });
-  await history.getByRole("button", { name: "vs Previous" }).click();
-  await expect(changes.locator("ins")).toHaveText(["Cy was here."], {
-    timeout: 20_000,
+  const restoreButton = history.getByRole("button", {
+    name: "Restore this version…",
   });
-  await expect(changes.locator("del")).toHaveCount(0);
-  await expect(changes).toContainText("Ada's first edit.");
-  await shot(a, "desktop-history-vs-previous");
-  await history.getByRole("button", { name: "vs Current" }).click();
-  await expect(changes.locator("ins")).toContainText(["Ada's second line."], {
-    timeout: 20_000,
-  });
-  await expect(changes.locator("del")).toHaveCount(0);
-  // The first version, compared with nothing before it.
-  await rows.nth(3).click();
-  await history.getByRole("button", { name: "vs Previous" }).click();
-  await expect(history.getByText(/compared with an empty note/)).toBeVisible();
-  await expect(changes.locator("ins")).toContainText(["Recipe"]);
-  // The newest version is the note as it is now; it cannot be restored.
-  await rows.first().click();
-  await expect(
-    history.getByText("This is the note as it is now."),
-  ).toBeVisible();
-  await expect(
-    history.getByRole("button", { name: "Restore this version…" }),
-  ).toHaveCount(0);
-  step(
-    "an old version reads read-only, and compares with the previous and current",
+  const waiting = history.getByText("Waiting for your changes to save…");
+  const offline = history.getByText(
+    "Not connected. Restore when the connection is back.",
   );
+  const recipeRow = a.getByRole("button", { name: /^Recipe\b/ }).first();
+  const openHistory = async () => {
+    await a.getByRole("button", { name: "Note history" }).click();
+    // The panel loads on first use; a cold dev server compiles it first.
+    await expect(history).toBeVisible({ timeout: 20_000 });
+    await expect(rows.first()).toBeVisible({ timeout: 20_000 });
+  };
+  const closeHistory = async () => {
+    await history.getByRole("button", { name: "Done" }).click();
+    await expect(history).toBeHidden();
+  };
 
-  // Restore Ada's first edit while Cy keeps typing.
-  await rows.nth(2).click();
-  await expect(versionText).toContainText("Ada's first edit.");
-  await expect(versionText).not.toContainText("Cy was here.");
-  // Cy types a word at a time, as people do, until the restore has reached him.
-  let typing = true;
-  const ticker = (async () => {
-    let n = 0;
-    try {
-      while (typing) {
-        await typeAtEnd(c, editorC, ` word${++n}`);
-        await c.waitForTimeout(1_000);
-      }
-    } catch {
-      // The browser closed after another failure; that failure is reported.
+  if (wanted("list")) {
+    await openHistory();
+    await expect(rows).toHaveCount(4, { timeout: 20_000 });
+    const expected = [
+      ["Ada", "Edited"],
+      ["Cy", "Edited"],
+      ["Ada", "Edited"],
+      ["Ada", "Created"],
+    ];
+    for (const [index, [who, what]] of expected.entries()) {
+      const row = rows.nth(index);
+      await expect(row.locator("strong")).toHaveText(who);
+      await expect(row.locator(".history-row-what")).toHaveText(what);
+      await expect(row.locator("time")).toHaveText(/^Today \d/);
+      await expect(row.getByText("Agent")).toHaveCount(0);
     }
-    return n;
-  })();
-  await c.waitForTimeout(1_500);
-  const conflictNotice = history.getByText(
-    /The note changed before the restore/,
-  );
-  let conflicts = 0;
-  for (;;) {
-    await history
-      .getByRole("button", { name: "Restore this version…" })
+    await expect(rows.first()).toContainText("Current");
+    await expect(rows.nth(1)).not.toContainText("Current");
+    // The same versions, from the server.
+    const listed = await convex(a, "query", "history:list", { noteId });
+    assert.deepEqual(
+      listed.versions.map((v) => [v.actorName, v.kind, v.actorKind]),
+      [
+        ["Ada", "edit", "human"],
+        ["Cy", "edit", "human"],
+        ["Ada", "edit", "human"],
+        ["Ada", "create", "human"],
+      ],
+    );
+    for (const [index, version] of listed.versions.entries())
+      await expect(rows.nth(index).locator("time")).toHaveAttribute(
+        "datetime",
+        new Date(version.startedAt).toISOString(),
+      );
+    await shot(a, "desktop-history-list");
+    await closeHistory();
+    step("History lists who, what and when for each version, newest first");
+  }
+
+  if (wanted("compare")) {
+    await openHistory();
+    // Cy's version, read-only, then compared.
+    await rows.nth(1).click();
+    await expect(versionText).toContainText("Cy was here.", {
+      timeout: 20_000,
+    });
+    await expect(versionText).not.toContainText("Ada's second line.");
+    await expect(versionText.locator("[contenteditable]")).toHaveCount(0);
+    await history.getByRole("button", { name: "vs Previous" }).click();
+    await expect(changes.locator("ins")).toHaveText(["Cy was here."], {
+      timeout: 20_000,
+    });
+    await expect(changes.locator("del")).toHaveCount(0);
+    await expect(changes).toContainText("Ada's first edit.");
+    await shot(a, "desktop-history-vs-previous");
+    await history.getByRole("button", { name: "vs Current" }).click();
+    await expect(changes.locator("ins")).toContainText(["Ada's second line."], {
+      timeout: 20_000,
+    });
+    await expect(changes.locator("del")).toHaveCount(0);
+    // The first version, compared with nothing before it.
+    await rows.nth(3).click();
+    await history.getByRole("button", { name: "vs Previous" }).click();
+    await expect(
+      history.getByText(/compared with an empty note/),
+    ).toBeVisible();
+    await expect(changes.locator("ins")).toContainText(["Recipe"]);
+    // The newest version is the note as it is now; it cannot be restored.
+    await rows.first().click();
+    await expect(
+      history.getByText("This is the note as it is now."),
+    ).toBeVisible();
+    await expect(restoreButton).toHaveCount(0);
+    await closeHistory();
+    step(
+      "an old version reads read-only, and compares with the previous and current",
+    );
+  }
+
+  if (wanted("f3")) {
+    // Ada's typing is held unsent, so this device journals it and the note's
+    // row is a draft of a server note. History opened from that row stays.
+    deskA.gate.hold("notes:push");
+    await typeAtEnd(a, editorA, " Pending row.");
+    await expect(recipeRow).toContainText("Unsaved changes", {
+      timeout: 10_000,
+    });
+    await recipeRow.click({ button: "right" });
+    await a
+      .getByRole("dialog", { name: "Actions for Recipe" })
+      .getByRole("menuitem", { name: "History" })
       .click();
+    await expect(history).toBeVisible({ timeout: 20_000 });
+    await expect(rows.first()).toBeVisible({ timeout: 20_000 });
+    await a.waitForTimeout(2_000);
+    await expect(history).toBeVisible();
+    await expect(recipeRow).toContainText("Unsaved changes");
+    assert.ok(deskA.gate.held("notes:push") >= 1, "Ada's typing was held");
+    await closeHistory();
+    deskA.gate.release("notes:push");
+    await saved(a);
+    await expect(recipeRow).not.toContainText("Unsaved changes", {
+      timeout: 20_000,
+    });
+    step(
+      "review F3: History opened from a row with a pending journal stays open",
+    );
+  }
+
+  if (wanted("f1")) {
+    // Ada's own typing is held unsent: Restore waits for it.
+    deskA.gate.hold("notes:push");
+    await typeAtEnd(a, editorA, " Unsent here.");
+    await expect(a.locator(".save-status")).toHaveText("Saving…");
+    await openHistory();
+    await rows.nth(2).click();
+    await expect(waiting).toBeVisible({ timeout: 10_000 });
+    await expect(restoreButton).toBeDisabled();
+    await a.waitForTimeout(1_000);
+    await expect(restoreButton).toBeDisabled();
+    await shot(a, "desktop-restore-waiting");
+    assert.ok(deskA.gate.held("notes:push") >= 1, "Ada's typing was held");
+    deskA.gate.release("notes:push");
+    await expect(waiting).toBeHidden({ timeout: 20_000 });
+    await expect(restoreButton).toBeEnabled();
+    // What Ada typed reached the server before any restore could replace it.
+    const newest = (await convex(a, "query", "history:list", { noteId }))
+      .versions[0];
+    const now = await convex(a, "query", "history:read", {
+      noteId,
+      revision: newest.revision,
+    });
+    assert.ok(now.markdown.includes("Unsent here."), "Ada's typing was saved");
+    await closeHistory();
+    step("review F1: Restore waits until this window's own typing is saved");
+  }
+
+  if (wanted("f2")) {
+    await openHistory();
+    await rows.nth(2).click();
+    await expect(restoreButton).toBeEnabled({ timeout: 20_000 });
+    deskA.gate.disconnect();
+    await expect(a.getByTestId("session-status")).toContainText(
+      "server unreachable",
+      { timeout: 20_000 },
+    );
+    await expect(offline).toBeVisible();
+    await expect(restoreButton).toBeDisabled();
+    await closeHistory();
+    await expect(a.getByRole("button", { name: "Note history" })).toHaveCount(
+      0,
+    );
+    await a.getByRole("button", { name: "More actions" }).click();
+    const aMenu = a.getByRole("dialog", { name: "Actions for Recipe" });
+    await expect(aMenu).toBeVisible();
+    await expect(aMenu.getByRole("menuitem", { name: "History" })).toHaveCount(
+      0,
+    );
+    await a.keyboard.press("Escape");
+    deskA.gate.reconnect();
+    await expect(a.getByTestId("session-status")).not.toContainText(
+      "server unreachable",
+      { timeout: 40_000 },
+    );
+    await openHistory();
+    await rows.nth(2).click();
+    await expect(offline).toBeHidden();
+    await expect(restoreButton).toBeEnabled({ timeout: 20_000 });
+    await closeHistory();
+    step(
+      "review F2: losing the connection holds Restore and hides History; it returns with the connection",
+    );
+  }
+
+  if (wanted("restore")) {
+    // Restore Ada's first edit while Cy is typing. First, Cy's word lands
+    // while Ada's restore is in flight: the server refuses it.
+    await openHistory();
+    await rows.nth(2).click();
+    await expect(versionText).toContainText("Ada's first edit.", {
+      timeout: 20_000,
+    });
+    await expect(versionText).not.toContainText("Cy was here.");
+    deskA.gate.hold("history:restore");
+    await restoreButton.click();
     await history.getByRole("button", { name: "Restore", exact: true }).click();
-    let outcome = "pending";
+    await expect.poll(() => deskA.gate.held("history:restore")).toBe(1);
+    await typeAtEnd(c, editorC, " word1");
+    await saved(c);
+    deskA.gate.release("history:restore");
+    await expect(
+      history.getByText(/The note changed before the restore/),
+    ).toBeVisible({ timeout: 20_000 });
+    await expect(editorC).toContainText("Ada's second line.");
+    await expect(editorA).toContainText("word1", { timeout: 20_000 });
+    // Now Cy types a word his device has not sent when the restore arrives.
+    deskC.gate.hold("notes:push");
+    await typeAtEnd(c, editorC, " word2");
+    await expect(c.locator(".save-status")).toHaveText("Saving…");
+    await restoreButton.click();
+    await history.getByRole("button", { name: "Restore", exact: true }).click();
+    await expect(history).toBeHidden({ timeout: 20_000 });
+    await expect(a.locator(".toast")).toContainText(
+      "Restored the version from Today",
+    );
+    // Cy's editor receives the restore through collaboration.
+    await expect(editorC).not.toContainText("Ada's second line.", {
+      timeout: 20_000,
+    });
+    deskC.gate.release("notes:push");
+    await a.waitForTimeout(2_000);
+    await typeAtEnd(c, editorC, " After restore.");
+    await saved(c);
+    await expect(editorA).toContainText("After restore.", { timeout: 20_000 });
     await expect
       .poll(
-        async () => {
-          if (!(await history.isVisible())) outcome = "restored";
-          else if (await conflictNotice.isVisible()) outcome = "conflict";
-          return outcome;
-        },
+        async () => (await editorA.innerText()) === (await editorC.innerText()),
         { timeout: 20_000 },
       )
-      .not.toBe("pending");
-    if (outcome === "restored") break;
-    conflicts++;
-    assert.ok(conflicts < 30, "a restore got through between Cy's edits");
+      .toBe(true);
+    const finalText = await editorA.innerText();
+    for (const kept of [
+      "Recipe",
+      "First line. Ada's first edit.",
+      "After restore.",
+    ])
+      assert.ok(finalText.includes(kept), `kept: ${kept}`);
+    for (const gone of ["Cy was here.", "Ada's second line.", "word1"])
+      assert.ok(!finalText.includes(gone), `restored away: ${gone}`);
+    const after = await convex(a, "query", "history:list", { noteId });
+    const restoreAt = after.versions.findIndex((v) => v.kind === "restore");
+    assert.ok(
+      restoreAt > 0,
+      "Cy's later typing is a version after the restore",
+    );
+    const restored = after.versions[restoreAt];
+    assert.equal(restored.actorName, "Ada");
+    assert.equal(after.versions[0].actorName, "Cy");
+    // word1 reached the server before the restore: it is in History.
+    const before = await convex(a, "query", "history:read", {
+      noteId,
+      revision: restored.baseRevision,
+    });
+    assert.ok(before.markdown.includes("word1"), "word1 is in History");
+    // word2 had not left Cy's device. The restore replaced the whole note, and
+    // his editor's unsent steps were rebased onto it and dropped: the word is
+    // neither in the note nor in History. This is collaboration behaviour in
+    // the fundamentals, reported as found (review round 1, F1).
+    assert.ok(!before.markdown.includes("word2"), "word2 was never saved");
+    assert.ok(
+      !finalText.includes("word2"),
+      "word2 did not survive the restore",
+    );
+    const server = await convex(a, "query", "history:read", {
+      noteId,
+      revision: after.versions[0].revision,
+    });
+    assert.ok(server.markdown.includes("After restore."));
+    assert.ok(server.markdown.includes("First line. Ada's first edit."));
+    assert.ok(!server.markdown.includes("Ada's second line."));
+    assert.ok(!server.markdown.includes("word2"));
+    step(
+      "a refused restore, then a restore while Cy types: both converge and Cy's later typing stays",
+    );
+    step(
+      "documented, not changed: Cy's word typed but unsent when the restore arrived is lost; his saved word is in History",
+    );
   }
-  await expect(a.locator(".toast")).toContainText(
-    "Restored the version from Today",
-  );
-  // Cy's editor receives the restore through collaboration.
-  await expect(editorC).not.toContainText("Ada's second line.", {
-    timeout: 20_000,
-  });
-  await expect(editorC).not.toContainText("Cy was here.");
-  typing = false;
-  const ticks = await ticker;
-  await typeAtEnd(c, editorC, " After restore.");
-  await saved(c);
-  await expect(editorA).toContainText("After restore.", { timeout: 20_000 });
-  await expect
-    .poll(
-      async () => (await editorA.innerText()) === (await editorC.innerText()),
-      {
-        timeout: 20_000,
-      },
-    )
-    .toBe(true);
-  const finalText = await editorA.innerText();
-  for (const kept of [
-    "Recipe",
-    "First line. Ada's first edit.",
-    "After restore.",
-  ])
-    assert.ok(finalText.includes(kept), `kept: ${kept}`);
-  for (const gone of ["Cy was here.", "Ada's second line."])
-    assert.ok(!finalText.includes(gone), `restored away: ${gone}`);
-  const after = await convex(a, "query", "history:list", { noteId });
-  const restoreAt = after.versions.findIndex((v) => v.kind === "restore");
-  assert.ok(restoreAt > 0, "Cy's later typing is a version after the restore");
-  assert.equal(after.versions[restoreAt].actorName, "Ada");
-  assert.equal(after.versions[0].actorName, "Cy");
-  const server = await convex(a, "query", "history:read", {
-    noteId,
-    revision: after.versions[0].revision,
-  });
-  assert.ok(server.markdown.includes("After restore."));
-  assert.ok(server.markdown.includes("First line. Ada's first edit."));
-  assert.ok(!server.markdown.includes("Ada's second line."));
-  step(
-    `restored while Cy typed (${ticks} words; ${conflicts} conflict${conflicts === 1 ? "" : "s"}, each retried); both converge, Cy's later typing kept`,
-  );
 
-  // Paging: more versions than one page holds.
-  const paging = await convex(a, "mutation", "notes:createFromMarkdown", {
-    markdown: "Paging\n\nStart.",
-  });
-  let revision = (
-    await convex(a, "mutation", "notes:edit", {
-      noteId: paging.noteId,
-      edits: [{ type: "append", markdown: "An edit." }],
-    })
-  ).revision;
-  for (let i = 0; i < 31; i++)
-    revision = (
-      await convex(a, "mutation", "history:restore", {
+  if (wanted("paging")) {
+    // More versions than one page holds.
+    const paging = await convex(a, "mutation", "notes:createFromMarkdown", {
+      markdown: "Paging\n\nStart.",
+    });
+    let revision = (
+      await convex(a, "mutation", "notes:edit", {
         noteId: paging.noteId,
-        revision: 0,
-        expectedRevision: revision,
-        requestId: `paging-${i}-${randomBytes(6).toString("hex")}`,
+        edits: [{ type: "append", markdown: "An edit." }],
       })
     ).revision;
-  await openNote(a, "Paging");
-  await a.getByRole("button", { name: "Note history" }).click();
-  const pagingHistory = a.getByRole("dialog", { name: "History of Paging" });
-  const pagingRows = pagingHistory.locator(".history-row");
-  await expect(pagingRows).toHaveCount(30, { timeout: 20_000 });
-  await pagingHistory
-    .getByRole("button", { name: "Show older versions" })
-    .click();
-  await expect(pagingRows).toHaveCount(33, { timeout: 20_000 });
-  await expect(pagingRows.last().locator(".history-row-what")).toHaveText(
-    "Created",
-  );
-  await expect(
-    pagingHistory.getByRole("button", { name: "Show older versions" }),
-  ).toHaveCount(0);
-  await pagingHistory.getByRole("button", { name: "Done" }).click();
-  await expect(pagingHistory).toBeHidden();
-  step("33 versions page as 30, then Show older versions shows the rest");
+    for (let i = 0; i < 31; i++)
+      revision = (
+        await convex(a, "mutation", "history:restore", {
+          noteId: paging.noteId,
+          revision: 0,
+          expectedRevision: revision,
+          requestId: `paging-${i}-${randomBytes(6).toString("hex")}`,
+        })
+      ).revision;
+    await openNote(a, "Paging");
+    await a.getByRole("button", { name: "Note history" }).click();
+    const pagingHistory = a.getByRole("dialog", { name: "History of Paging" });
+    const pagingRows = pagingHistory.locator(".history-row");
+    await expect(pagingRows).toHaveCount(30, { timeout: 20_000 });
+    await pagingHistory
+      .getByRole("button", { name: "Show older versions" })
+      .click();
+    await expect(pagingRows).toHaveCount(33, { timeout: 20_000 });
+    await expect(pagingRows.last().locator(".history-row-what")).toHaveText(
+      "Created",
+    );
+    await expect(
+      pagingHistory.getByRole("button", { name: "Show older versions" }),
+    ).toHaveCount(0);
+    // A new version while both pages show: the list stays whole.
+    await convex(a, "mutation", "history:restore", {
+      noteId: paging.noteId,
+      revision: 0,
+      expectedRevision: revision,
+      requestId: `paging-new-${randomBytes(6).toString("hex")}`,
+    });
+    await expect(pagingRows).toHaveCount(34, { timeout: 20_000 });
+    await expect(pagingRows.last().locator(".history-row-what")).toHaveText(
+      "Created",
+    );
+    await pagingHistory.getByRole("button", { name: "Done" }).click();
+    await expect(pagingHistory).toBeHidden();
+    await openNote(a, "Recipe");
+    step(
+      "33 versions page as 30, then Show older versions shows the rest; a new one keeps the list whole",
+    );
+  }
 
-  // Bo can only read: no History anywhere, and the server refuses it.
-  const deskB = await newContext();
-  const b = await acceptLink(deskB, boLink, "Bo", secret());
-  await openNote(b, "Recipe", false);
-  await expect(b.getByRole("button", { name: "Note info" })).toBeVisible({
-    timeout: 20_000,
-  });
-  await expect(b.getByRole("button", { name: "Note history" })).toHaveCount(0);
-  await b.getByRole("button", { name: "More actions" }).click();
-  const bMenu = b.getByRole("dialog", { name: "Actions for Recipe" });
-  await expect(bMenu.getByRole("menuitem")).toHaveText([
-    "Duplicate",
-    "Export as Markdown",
-    "Print or save as PDF",
-  ]);
-  await b.keyboard.press("Escape");
-  await b
-    .getByRole("button", { name: /^Recipe\b/ })
-    .first()
-    .click({ button: "right" });
-  await expect(bMenu.getByRole("menuitem")).toHaveText([
-    "Duplicate",
-    "Share…",
-    "Info",
-    "Export as Markdown",
-    "Print or save as PDF",
-  ]);
-  await b.keyboard.press("Escape");
-  await assert.rejects(
-    convex(b, "query", "history:list", { noteId }),
-    /denied/,
-  );
-  step(
-    "Bo (can read) is offered no History, and the server refuses his request",
-  );
+  if (wanted("reader")) {
+    // Bo can only read: no History anywhere, and the server refuses it.
+    const deskB = await newContext();
+    const b = await acceptLink(deskB, boLink, "Bo", secret());
+    await openNote(b, "Recipe", false);
+    await expect(b.getByRole("button", { name: "Note info" })).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(b.getByRole("button", { name: "Note history" })).toHaveCount(
+      0,
+    );
+    await b.getByRole("button", { name: "More actions" }).click();
+    const bMenu = b.getByRole("dialog", { name: "Actions for Recipe" });
+    await expect(bMenu.getByRole("menuitem")).toHaveText([
+      "Duplicate",
+      "Export as Markdown",
+      "Print or save as PDF",
+    ]);
+    await b.keyboard.press("Escape");
+    await b
+      .getByRole("button", { name: /^Recipe\b/ })
+      .first()
+      .click({ button: "right" });
+    await expect(bMenu.getByRole("menuitem")).toHaveText([
+      "Duplicate",
+      "Share…",
+      "Info",
+      "Export as Markdown",
+      "Print or save as PDF",
+    ]);
+    await b.keyboard.press("Escape");
+    await assert.rejects(
+      convex(b, "query", "history:list", { noteId }),
+      /denied/,
+    );
+    step(
+      "Bo (can read) is offered no History, and the server refuses his request",
+    );
+  }
 
-  // Cy loses edit access while his History is open: it closes.
-  const cy = await convex(c, "query", "account:me", {});
-  await c.getByRole("button", { name: "Note history" }).click();
-  const cyHistory = c.getByRole("dialog", { name: "History of Recipe" });
-  await expect(cyHistory.locator(".history-row").first()).toBeVisible({
-    timeout: 20_000,
-  });
-  await convex(a, "mutation", "sharing:setNoteMember", {
-    noteId,
-    principalId: cy.id,
-    role: "read",
-  });
-  await expect(cyHistory).toBeHidden({ timeout: 20_000 });
-  await expect(c.getByRole("button", { name: "Note history" })).toHaveCount(0, {
-    timeout: 20_000,
-  });
-  await assert.rejects(
-    convex(c, "query", "history:list", { noteId }),
-    /denied/,
-  );
-  await shot(c, "desktop-after-downgrade");
-  step("Cy's open History closes when his access drops to read");
+  if (wanted("downgrade")) {
+    // Cy loses edit access while his History is open: it closes.
+    const cy = await convex(c, "query", "account:me", {});
+    await c.getByRole("button", { name: "Note history" }).click();
+    const cyHistory = c.getByRole("dialog", { name: "History of Recipe" });
+    await expect(cyHistory.locator(".history-row").first()).toBeVisible({
+      timeout: 20_000,
+    });
+    await convex(a, "mutation", "sharing:setNoteMember", {
+      noteId,
+      principalId: cy.id,
+      role: "read",
+    });
+    await expect(cyHistory).toBeHidden({ timeout: 20_000 });
+    await expect(c.getByRole("button", { name: "Note history" })).toHaveCount(
+      0,
+      { timeout: 20_000 },
+    );
+    await assert.rejects(
+      convex(c, "query", "history:list", { noteId }),
+      /denied/,
+    );
+    await shot(c, "desktop-after-downgrade");
+    step("Cy's open History closes when his access drops to read");
+  }
 
-  // Ada on a phone: History from the "…" sheet is a full-height sheet.
-  const phoneContext = await newContext({ ...devices["iPhone 15 Plus"] });
-  const phone = await phoneContext.newPage();
-  await phone.goto(app + "/");
-  await phone.getByLabel("Email", { exact: true }).fill(adaEmail);
-  await phone.getByLabel("Password", { exact: true }).fill(adaPassword);
-  await phone.getByRole("button", { name: "Sign in", exact: true }).click();
-  await connected(phone);
-  await dismissPasskeyOffer(phone);
-  await openNote(phone, "Recipe");
-  await phone.getByRole("button", { name: "More actions" }).click();
-  const sheet = phone.getByRole("dialog", { name: "Actions for Recipe" });
-  await expect(sheet.getByRole("menuitem")).toHaveText([
-    "Duplicate",
-    "Move…",
-    "Share…",
-    "History",
-    "Info",
-    "Export as Markdown",
-    "Print or save as PDF",
-    "Move to Trash",
-  ]);
-  await shot(phone, "phone-action-sheet");
-  await sheet.getByRole("menuitem", { name: "History" }).click();
-  const phoneHistory = phone.getByRole("dialog", { name: "History of Recipe" });
-  await expect(phoneHistory.locator(".history-row").first()).toBeVisible({
-    timeout: 20_000,
-  });
-  const viewport = phone.viewportSize();
-  const box = await phoneHistory.boundingBox();
-  assert.ok(
-    box.y <= 1 &&
-      box.height >= viewport.height - 1 &&
-      box.width >= viewport.width - 1,
-    "the phone panel fills the screen",
-  );
-  await shot(phone, "phone-history-list");
-  await phoneHistory.locator(".history-row").nth(1).click();
-  await expect(
-    phoneHistory.getByRole("document", { name: "Version text" }),
-  ).toBeVisible({ timeout: 20_000 });
-  await expect(
-    phoneHistory.getByRole("region", { name: "Versions" }),
-  ).toBeHidden();
-  await phoneHistory.getByRole("button", { name: "vs Previous" }).click();
-  await shot(phone, "phone-history-diff");
-  await phoneHistory.getByRole("button", { name: "Versions" }).click();
-  await expect(
-    phoneHistory.getByRole("region", { name: "Versions" }),
-  ).toBeVisible();
-  await phoneHistory.getByRole("button", { name: "Done" }).click();
-  await expect(phoneHistory).toBeHidden();
-  step("phone: History from the … sheet fills the screen, one step at a time");
+  if (wanted("phone")) {
+    // Ada on a phone: History from the "…" sheet is a full-height sheet.
+    const phoneContext = await newContext({ ...devices["iPhone 15 Plus"] });
+    const phone = await phoneContext.newPage();
+    await phone.goto(app + "/");
+    await phone.getByLabel("Email", { exact: true }).fill(adaEmail);
+    await phone.getByLabel("Password", { exact: true }).fill(adaPassword);
+    await phone.getByRole("button", { name: "Sign in", exact: true }).click();
+    await connected(phone);
+    await dismissPasskeyOffer(phone);
+    await openNote(phone, "Recipe");
+    await phone.getByRole("button", { name: "More actions" }).click();
+    const sheet = phone.getByRole("dialog", { name: "Actions for Recipe" });
+    await expect(sheet.getByRole("menuitem")).toHaveText([
+      "Duplicate",
+      "Move…",
+      "Share…",
+      "History",
+      "Info",
+      "Export as Markdown",
+      "Print or save as PDF",
+      "Move to Trash",
+    ]);
+    await shot(phone, "phone-action-sheet");
+    await sheet.getByRole("menuitem", { name: "History" }).click();
+    const phoneHistory = phone.getByRole("dialog", {
+      name: "History of Recipe",
+    });
+    await expect(phoneHistory.locator(".history-row").first()).toBeVisible({
+      timeout: 20_000,
+    });
+    const viewport = phone.viewportSize();
+    const box = await phoneHistory.boundingBox();
+    assert.ok(
+      box.y <= 1 &&
+        box.height >= viewport.height - 1 &&
+        box.width >= viewport.width - 1,
+      "the phone panel fills the screen",
+    );
+    await shot(phone, "phone-history-list");
+    await phoneHistory.locator(".history-row").nth(1).click();
+    await expect(
+      phoneHistory.getByRole("document", { name: "Version text" }),
+    ).toBeVisible({ timeout: 20_000 });
+    await expect(
+      phoneHistory.getByRole("region", { name: "Versions" }),
+    ).toBeHidden();
+    await phoneHistory.getByRole("button", { name: "vs Previous" }).click();
+    await expect(
+      phoneHistory.getByRole("document", { name: "Changes" }),
+    ).toBeVisible({ timeout: 20_000 });
+    await shot(phone, "phone-history-diff");
+    await phoneHistory.getByRole("button", { name: "Versions" }).click();
+    await expect(
+      phoneHistory.getByRole("region", { name: "Versions" }),
+    ).toBeVisible();
+    await phoneHistory.getByRole("button", { name: "Done" }).click();
+    await expect(phoneHistory).toBeHidden();
+    step(
+      "phone: History from the … sheet fills the screen, one step at a time",
+    );
+  }
   console.log("All history checks passed.");
 } catch (failure) {
   if (process.env.HISTORY_E2E_DEBUG)

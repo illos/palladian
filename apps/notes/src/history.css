@@ -299,7 +299,8 @@
   padding-top: 12px;
   border-top: 1px solid var(--border);
 }
-.history-actions .error {
+.history-actions .error,
+.history-actions .history-legend {
   margin: 0 0 10px;
 }
 .history-confirm p {

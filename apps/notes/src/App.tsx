@@ -18,6 +18,7 @@ import type {
 } from "./cache";
 import { emptyDocument, validateCachedDocument } from "./document";
 import { dayAndTime, smartDate } from "./dates";
+import { restoreHold } from "./versions";
 import { EditorSurface } from "./EditorSurface";
 import { Icon } from "./Icons";
 import { Appearance } from "./Appearance";
@@ -296,6 +297,8 @@ export function App({
     snapshot.status !== "signed-out";
   const liveReady =
     !!live && liveState.ready && liveState.accountId === accountId;
+  /** Signed in and connected to the server right now. */
+  const liveConnected = liveReady && liveState.connected;
   const currentOpen = permitted && open?.accountId === accountId ? open : null;
 
   useEffect(() => {
@@ -1012,7 +1015,7 @@ export function App({
     anchor: { x: number; y: number } | null,
     only?: (action: ActionId) => boolean,
   ) {
-    const actions = noteActions(target, liveReady).filter(
+    const actions = noteActions(target, liveReady, liveConnected).filter(
       (action) => !only || only(action),
     );
     if (actions.length) setMenu({ target, source, actions, anchor, only });
@@ -1083,7 +1086,7 @@ export function App({
     if (
       !now ||
       now.accountId !== accountId ||
-      !noteActions(now, liveReady).includes(action)
+      !noteActions(now, liveReady, liveConnected).includes(action)
     )
       return toast("That action is no longer available for this note.");
     target = now;
@@ -1336,50 +1339,52 @@ export function App({
         ...(currentOpen.kind === "draft" ? { local: true } : {}),
       }
     : null;
-  const openActions = openTarget ? noteActions(openTarget, liveReady) : [];
+  const openActions = openTarget
+    ? noteActions(openTarget, liveReady, liveConnected)
+    : [];
   // An open menu closes if the note's actions change under it (a role or
   // Trash change, the connection), rather than offering stale ones.
   const menuNow = menu ? currentTarget(menu.target.id, menu.source) : null;
   const menuStale =
     !!menu &&
     (!menuNow ||
-      noteActions(menuNow, liveReady)
+      noteActions(menuNow, liveReady, liveConnected)
         .filter((action) => !menu.only || menu.only(action))
         .join() !== menu.actions.join());
   useEffect(() => {
     if (menuStale) setMenu(null);
   }, [menuStale]);
-  // History closes once the note no longer offers it: a lost edit role, Trash,
-  // or the note gone. An open note keeps the role it opened with, so the role
-  // and Trash state of its list row, which follow the server, count too. (The
-  // row alone is not enough: while the open note's typing is journaled, its
-  // row is a local draft, which offers no actions.) Offline, History hides
-  // with the other dialogs and returns.
-  const historyTarget =
+  // History closes once the note no longer offers it to this person: a lost
+  // edit role, Trash, or the note gone. The note as it is now comes from its
+  // row (or the open note, which follows its row); a server note with unsent
+  // edits is still a server note. A lost connection does not close it (the
+  // panel holds Restore instead), and offline it hides with the other dialogs.
+  const historyNow =
     dialog?.kind === "history"
       ? currentTarget(dialog.noteId, dialog.source)
       : null;
-  const historyRow =
-    dialog?.kind === "history"
-      ? rows.find(
-          (row) => row.accountId === accountId && row.id === dialog.noteId,
-        )
-      : undefined;
   const historyStale =
     dialog?.kind === "history" &&
     liveReady &&
-    (!historyTarget ||
-      historyTarget.accountId !== accountId ||
-      !noteActions(
-        historyRow
-          ? {
-              ...historyTarget,
-              role: historyRow.role,
-              trashed: historyTarget.trashed || !!historyRow.trashed,
-            }
-          : historyTarget,
-        true,
-      ).includes("history"));
+    (!historyNow ||
+      historyNow.accountId !== accountId ||
+      !noteActions(historyNow, true).includes("history"));
+  // Restoring replaces the whole note, so it waits for this window's own
+  // typing in it to reach the server, and for the connection.
+  const historyHold =
+    dialog?.kind === "history"
+      ? restoreHold({
+          connected: liveConnected,
+          open:
+            currentOpen?.id === dialog.noteId
+              ? { kind: currentOpen.kind, status: channelStatus?.kind ?? null }
+              : null,
+          journaled:
+            rows.find(
+              (row) => row.accountId === accountId && row.id === dialog.noteId,
+            )?.kind === "draft",
+        })
+      : null;
   useEffect(() => {
     if (historyStale) setDialog(null);
   }, [historyStale]);
@@ -1666,7 +1671,7 @@ export function App({
           >
             {visibleRows.slice(0, rowLimit).map((row) => {
               const target = targetOf(row);
-              const actions = noteActions(target, liveReady);
+              const actions = noteActions(target, liveReady, liveConnected);
               const book =
                 section.kind === "all" && row.notebookId && !row.trashed
                   ? notebooks.find((n) => n.id === row.notebookId)
@@ -2091,6 +2096,7 @@ export function App({
               live={live}
               noteId={dialog.noteId}
               title={dialog.title}
+              restoreHold={historyHold}
               onClose={() => setDialog(null)}
               onRestored={(version) => {
                 setDialog(null);

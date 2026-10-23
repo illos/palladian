@@ -71,8 +71,22 @@ export function isLocalNoteId(id: string) {
   return id.startsWith("local-") || UUID.test(id);
 }
 
-/** The actions a note offers, in menu order. */
-export function noteActions(target: ActionTarget, online: boolean): ActionId[] {
+/**
+ * Actions that read the server live, not only send it changes, also need the
+ * connection to be up now. Changes wait in the Convex client's queue while it
+ * reconnects; History's versions and its restore check cannot.
+ */
+const needsConnection: Partial<Record<ActionId, true>> = { history: true };
+
+/**
+ * The actions a note offers, in menu order. `online`: signed in to the server
+ * for this account. `connected`: the connection to it is up right now.
+ */
+export function noteActions(
+  target: ActionTarget,
+  online: boolean,
+  connected = online,
+): ActionId[] {
   if (target.local) return [];
   const edit = target.role === "owner" || target.role === "edit";
   const owner = target.role === "owner";
@@ -96,7 +110,9 @@ export function noteActions(target: ActionTarget, online: boolean): ActionId[] {
         "print",
         ...(edit ? (["trash"] as const) : []),
       ];
-  return all.filter((id) => online || !needsServer[id]);
+  return all.filter(
+    (id) => (online || !needsServer[id]) && (connected || !needsConnection[id]),
+  );
 }
 
 export interface SwipeLayout {

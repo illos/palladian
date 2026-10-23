@@ -1,5 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ConvexProvider, useMutation, useQuery } from "convex/react";
+import {
+  ConvexProvider,
+  useMutation,
+  useQueries,
+  useQuery,
+  type RequestForQueries,
+} from "convex/react";
 import { api } from "@palladian/notes-backend/api";
 import type { Id } from "@palladian/notes-backend/dataModel";
 import { parseStoredDoc } from "@palladian/notes-core/document";
@@ -14,10 +20,14 @@ import { changed, diffText, type TextDiff } from "./text-diff";
 import {
   canRestore,
   kindLabels,
+  pageChain,
+  pageKey,
   previousRevision,
   RestoreRequests,
   versionKey,
+  type RestoreHold,
   type Version,
+  type VersionPageResult,
 } from "./versions";
 import "./history.css";
 
@@ -38,25 +48,26 @@ const compareLabels: Record<Compare, string> = {
   current: "vs Current",
 };
 
-type Current = { doc: string; revision: number } | null | undefined;
+const holdNotices: Record<NonNullable<RestoreHold>, string> = {
+  unsaved: "Waiting for your changes to save…",
+  offline: "Not connected. Restore when the connection is back.",
+};
 
-/** The last value a query returned, kept while new arguments load. */
-function useLatest<T>(value: T | undefined): T | undefined {
-  const last = useRef(value);
-  if (value !== undefined) last.current = value;
-  return last.current;
-}
+type Current = { doc: string; revision: number } | null | undefined;
 
 export default function HistoryPanel({
   live,
   noteId,
   title,
+  restoreHold,
   onClose,
   onRestored,
 }: {
   live: LiveController;
   noteId: string;
   title: string;
+  /** Why this device may not restore now (see `restoreHold`), or null. */
+  restoreHold: RestoreHold;
   onClose: () => void;
   onRestored: (version: Version) => void;
 }) {
@@ -65,6 +76,7 @@ export default function HistoryPanel({
       <History
         noteId={noteId as Id<"notes">}
         title={title}
+        hold={restoreHold}
         onClose={onClose}
         onRestored={onRestored}
       />
@@ -75,11 +87,13 @@ export default function HistoryPanel({
 function History({
   noteId,
   title,
+  hold,
   onClose,
   onRestored,
 }: {
   noteId: Id<"notes">;
   title: string;
+  hold: RestoreHold;
   onClose: () => void;
   onRestored: (version: Version) => void;
 }) {
@@ -90,7 +104,6 @@ function History({
   // The note now: what "vs Current" compares with, and the revision a restore
   // expects to replace.
   const current = useQuery(api.notes.content, { noteId });
-  const [pages, setPages] = useState(1);
   const [selected, setSelected] = useState<Version | null>(null);
   return (
     <dialog
@@ -116,17 +129,12 @@ function History({
       </header>
       <div className="history-body">
         <section className="history-versions" aria-label="Versions">
-          <ol className="history-list">
-            <VersionPage
-              noteId={noteId}
-              before={undefined}
-              pages={pages}
-              selected={selected}
-              currentRevision={current?.revision}
-              onSelect={setSelected}
-              onMore={() => setPages((count) => count + 1)}
-            />
-          </ol>
+          <VersionList
+            noteId={noteId}
+            selected={selected}
+            currentRevision={current?.revision}
+            onSelect={setSelected}
+          />
         </section>
         <section className="history-view" aria-label="Selected version">
           {selected ? (
@@ -135,6 +143,7 @@ function History({
               noteId={noteId}
               version={selected}
               current={current}
+              hold={hold}
               onBack={() => setSelected(null)}
               onRestored={onRestored}
             />
@@ -150,45 +159,58 @@ function History({
 }
 
 /**
- * One page of versions, then the next. Each page starts where the page above
- * it currently ends, so versions added at the top while older pages are shown
- * move down a page instead of being skipped.
+ * The versions, page by page. Each page is asked for from where the page
+ * above it ends now (`pageChain`); a page still loading for its current
+ * cursor shows as loading rather than as an older result, which could skip
+ * versions that new ones pushed down from the page above.
  */
-function VersionPage({
+function VersionList({
   noteId,
-  before,
-  pages,
   selected,
   currentRevision,
   onSelect,
-  onMore,
 }: {
   noteId: Id<"notes">;
-  before: number | undefined;
-  pages: number;
   selected: Version | null;
   currentRevision: number | undefined;
   onSelect: (version: Version) => void;
-  onMore: () => void;
 }) {
-  const page = useLatest(
-    useQuery(api.history.list, {
-      noteId,
-      limit: PAGE,
-      ...(before === undefined ? {} : { before }),
-    }),
+  const [pages, setPages] = useState(1);
+  const [cursors, setCursors] = useState<(number | undefined)[]>([undefined]);
+  const cursorKeys = cursors.map(pageKey).join();
+  const request = useMemo(
+    (): RequestForQueries =>
+      Object.fromEntries(
+        cursors.map((before) => [
+          pageKey(before),
+          {
+            query: api.history.list,
+            args: {
+              noteId,
+              limit: PAGE,
+              ...(before === undefined ? {} : { before }),
+            },
+          },
+        ]),
+      ),
+    [noteId, cursorKeys],
   );
-  if (!page) return <li className="history-loading">Loading…</li>;
-  if (!page.versions.length)
-    return (
-      <li className="history-empty">
-        {before === undefined ? "No versions yet." : "No older versions."}
-      </li>
-    );
+  const loaded = useQueries(request);
+  const results: Record<string, VersionPageResult | undefined> = {};
+  for (const [key, result] of Object.entries(loaded)) {
+    // As useQuery would: a refused or failed page reaches PanelBoundary.
+    if (result instanceof Error) throw result;
+    results[key] = result;
+  }
+  const chain = pageChain(pages, results);
+  const wanted = chain.cursors.map(pageKey).join();
+  useEffect(() => {
+    if (wanted !== cursorKeys) setCursors(chain.cursors);
+  }, [wanted]);
   const selectedKey = selected ? versionKey(selected) : null;
   return (
-    <>
-      {page.versions.map((version) => (
+    <ol className="history-list">
+      {chain.versions.map((version) => (
         <li key={versionKey(version)}>
           <button
             type="button"
@@ -215,25 +237,22 @@ function VersionPage({
           </button>
         </li>
       ))}
-      {page.nextBefore !== null &&
-        (pages > 1 ? (
-          <VersionPage
-            noteId={noteId}
-            before={page.nextBefore}
-            pages={pages - 1}
-            selected={selected}
-            currentRevision={currentRevision}
-            onSelect={onSelect}
-            onMore={onMore}
-          />
-        ) : (
-          <li>
-            <button type="button" className="history-older" onClick={onMore}>
-              Show older versions
-            </button>
-          </li>
-        ))}
-    </>
+      {chain.end === "loading" && <li className="history-loading">Loading…</li>}
+      {chain.end === "done" && !chain.versions.length && (
+        <li className="history-empty">No versions yet.</li>
+      )}
+      {chain.end === "more" && (
+        <li>
+          <button
+            type="button"
+            className="history-older"
+            onClick={() => setPages((count) => count + 1)}
+          >
+            Show older versions
+          </button>
+        </li>
+      )}
+    </ol>
   );
 }
 
@@ -241,12 +260,14 @@ function VersionView({
   noteId,
   version,
   current,
+  hold,
   onBack,
   onRestored,
 }: {
   noteId: Id<"notes">;
   version: Version;
   current: Current;
+  hold: RestoreHold;
   onBack: () => void;
   onRestored: (version: Version) => void;
 }) {
@@ -355,6 +376,7 @@ function VersionView({
         noteId={noteId}
         version={version}
         current={current}
+        hold={hold}
         onRestored={onRestored}
       />
     </>
@@ -407,36 +429,45 @@ function RestoreControls({
   noteId,
   version,
   current,
+  hold,
   onRestored,
 }: {
   noteId: Id<"notes">;
   version: Version;
   current: Current;
+  hold: RestoreHold;
   onRestored: (version: Version) => void;
 }) {
   const restore = useMutation(api.history.restore);
-  const requests = useRef(new RestoreRequests(() => crypto.randomUUID()));
+  const [requests] = useState(
+    () => new RestoreRequests(() => crypto.randomUUID()),
+  );
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // The latest hold, for the check just before sending.
+  const holdNow = useRef(hold);
+  holdNow.current = hold;
 
   async function run() {
-    if (!current) return;
+    // The panel is modal, so no typing starts here while it is open; still,
+    // check again at the last moment.
+    if (!current || holdNow.current) return;
     // The revision the person is replacing; if someone edits first, the
     // server refuses rather than discarding their edit unseen.
-    const request = requests.current.next(version.revision, current.revision);
+    const request = requests.next(version.revision, current.revision);
     setBusy(true);
     setNotice(null);
     try {
       await restore({ noteId, ...request });
-      requests.current.settled(request);
+      requests.settled(request);
       onRestored(version);
     } catch (failure) {
       const error = transportError(failure);
       // Unanswered: Restore again repeats this request exactly.
       if (error.code === "transient")
         return setNotice("The restore did not reach the server. Try again.");
-      requests.current.settled(request);
+      requests.settled(request);
       if (error.code === "conflict") {
         setConfirming(false);
         setNotice(
@@ -448,6 +479,13 @@ function RestoreControls({
     }
   }
 
+  if (!current) return null;
+  if (!canRestore(version, current.revision))
+    return (
+      <footer className="history-actions">
+        <p className="history-legend">This is the note as it is now.</p>
+      </footer>
+    );
   return (
     <footer className="history-actions">
       {notice && (
@@ -455,16 +493,23 @@ function RestoreControls({
           {notice}
         </p>
       )}
-      {!current ? null : !canRestore(version, current.revision) ? (
-        <p className="history-legend">This is the note as it is now.</p>
-      ) : confirming ? (
+      {hold && (
+        <p role="status" className="history-legend">
+          {holdNotices[hold]}
+        </p>
+      )}
+      {confirming ? (
         <div className="history-confirm">
           <p>
             Replace the note’s text with this version? Everyone with the note
             open sees the change. The text it replaces stays in History.
           </p>
           <div className="button-row">
-            <button type="button" disabled={busy} onClick={() => void run()}>
+            <button
+              type="button"
+              disabled={busy || !!hold}
+              onClick={() => void run()}
+            >
               {busy ? "Restoring…" : "Restore"}
             </button>
             <button
@@ -481,6 +526,7 @@ function RestoreControls({
         <button
           type="button"
           className="history-restore"
+          disabled={!!hold}
           onClick={() => {
             setNotice(null);
             setConfirming(true);

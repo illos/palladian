@@ -78,3 +78,73 @@ export class RestoreRequests {
     if (this.pending === request) this.pending = null;
   }
 }
+
+/**
+ * Why this device may not restore right now, if it may not. A restore
+ * replaces the whole note; typing this window has not yet sent would be
+ * rebased onto the replaced text and lost, so the restore waits until the
+ * note's open editor here reports everything saved (nothing unsent, nothing
+ * in flight, no failure) and no unsent edits are journaled for it. It also
+ * needs the connection, to read the current revision it expects to replace.
+ */
+export type RestoreHold = "offline" | "unsaved" | null;
+
+export function restoreHold(state: {
+  connected: boolean;
+  /** The note as open in this window, if it is, with its editor's save status. */
+  open: {
+    kind: "cached" | "draft" | "live" | "reader";
+    status: "offline" | "syncing" | "saving" | "saved" | "blocked" | null;
+  } | null;
+  /** Unsent edits to the note are journaled on this device. */
+  journaled: boolean;
+}): RestoreHold {
+  if (!state.connected) return "offline";
+  if (state.journaled) return "unsaved";
+  // A local draft view of the note, or an editor not yet known to be saved.
+  if (state.open?.kind === "draft") return "unsaved";
+  if (state.open?.kind === "live" && state.open.status !== "saved")
+    return "unsaved";
+  return null;
+}
+
+export interface VersionPageResult {
+  versions: Version[];
+  nextBefore: number | null;
+}
+
+/** The key for the page of versions before a revision (or the newest). */
+export function pageKey(before: number | undefined) {
+  return before === undefined ? "newest" : `before-${before}`;
+}
+
+/**
+ * The list of versions across pages. Each page starts where the page above
+ * it ends now. A page counts only once it has loaded for that cursor: a
+ * result for an older cursor is not shown, because new versions at the top
+ * push versions from one page into the next and the old result would skip
+ * them. That page, and everything below it, shows as loading instead.
+ */
+export function pageChain(
+  pages: number,
+  results: Readonly<Record<string, VersionPageResult | undefined>>,
+): {
+  /** The pages to ask for, by cursor. */
+  cursors: (number | undefined)[];
+  versions: Version[];
+  /** "loading": a page is on its way; "more": older versions exist. */
+  end: "loading" | "more" | "done";
+} {
+  const cursors: (number | undefined)[] = [];
+  const versions: Version[] = [];
+  let before: number | undefined;
+  for (let page = 0; page < pages; page++) {
+    cursors.push(before);
+    const result = results[pageKey(before)];
+    if (!result) return { cursors, versions, end: "loading" };
+    versions.push(...result.versions);
+    if (result.nextBefore === null) return { cursors, versions, end: "done" };
+    before = result.nextBefore;
+  }
+  return { cursors, versions, end: "more" };
+}
