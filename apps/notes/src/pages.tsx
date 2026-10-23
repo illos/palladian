@@ -4,6 +4,7 @@ import { api } from "@palladian/notes-backend/api";
 import type { createAuthService } from "./auth-service";
 import { transportError } from "./live";
 import { liveStateSource, type LiveBox } from "./liveBox";
+import { useAttachmentCache } from "./attachment-cache-lifecycle";
 import type { SessionController } from "./session";
 import { PasswordInput, SignIn } from "./SignIn";
 import { signInAfter, started } from "./sign-in-flow";
@@ -315,6 +316,8 @@ function ConsentForm({
 }
 
 export function ConnectPage({ session, connection, liveBox }: PageProps) {
+  // This page can sign out, see a revoked session or switch accounts too.
+  useAttachmentCache(session);
   const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot);
   const { live, state } = useLive(liveBox);
   const requestKey = new URLSearchParams(location.search).get("request") ?? "";
@@ -538,6 +541,7 @@ function InviteBody({
 }
 
 export function InvitePage(props: PageProps) {
+  useAttachmentCache(props.session);
   const { live } = useLive(props.liveBox);
   const token = location.hash.slice(1);
   useEffect(() => {
@@ -705,6 +709,7 @@ function ResetBody({
 }
 
 export function ResetPage(props: PageProps) {
+  useAttachmentCache(props.session);
   const { live } = useLive(props.liveBox);
   const token = location.hash.slice(1);
   useEffect(() => {

@@ -773,6 +773,7 @@ export function NoteEditor({
       cache: attachmentCache,
       notify: setNotice,
       openImage: setLightbox,
+      closeImage: () => setLightbox(null),
     });
     runtime.current = files;
     const editor: EditorView = new EditorView(host.current, {
@@ -900,7 +901,12 @@ export function NoteEditor({
   // The note reached the server, or the connection came or went.
   useEffect(() => {
     runtime.current?.refresh();
-  }, [attachments?.accountId, attachments?.noteId, attachments?.service]);
+  }, [
+    attachments?.accountId,
+    attachments?.noteId,
+    attachments?.service,
+    attachments?.generation,
+  ]);
   useEffect(
     () => onFileWritesChange(() => setFilesOn(fileWritesEnabled())),
     [],

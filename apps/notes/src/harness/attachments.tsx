@@ -28,7 +28,13 @@ interface Harness {
   calls: { name: string; args: Record<string, unknown>; objectId?: string }[];
   /** The next createUpload fails with this message, once. */
   failNextCreate: string | null;
+  /** createUpload answers after this long. */
+  admissionDelayMs: number;
+  /** How long uploads wait for createUpload before offering Retry. */
+  admissionWaitMs: number;
   connected: boolean;
+  /** The session moves to its next generation (a new sign-in, say). */
+  nextSession(): void;
   doc(): unknown;
   setFiles(on: boolean): void;
   setEditable(editable: boolean): void;
@@ -61,7 +67,10 @@ let counter = 0;
 const harness: Harness = {
   calls: [],
   failNextCreate: null,
+  admissionDelayMs: 0,
+  admissionWaitMs: 30_000,
   connected: true,
+  nextSession: () => undefined,
   doc: () => view?.state.doc.toJSON() ?? null,
   setFiles: setFileWrites,
   setEditable: () => undefined,
@@ -99,6 +108,9 @@ window.__attachments = harness;
 
 const service: AttachmentService = {
   accountId: ACCOUNT,
+  get admissionWaitMs() {
+    return harness.admissionWaitMs;
+  },
   connected: () => harness.connected,
   async createUpload(args) {
     const call: Harness["calls"][number] = {
@@ -120,6 +132,10 @@ const service: AttachmentService = {
       requests.set(args.requestId, request);
     }
     call.objectId = request.objectId;
+    if (harness.admissionDelayMs)
+      await new Promise((resolve) =>
+        setTimeout(resolve, harness.admissionDelayMs),
+      );
     return {
       objectId: request.objectId,
       state: request.state,
@@ -180,6 +196,8 @@ void attachmentCache.retain(ACCOUNT);
 function Harness() {
   const [doc, setDoc] = useState<unknown>(album);
   const [generation, setGeneration] = useState(0);
+  const [session, setSession] = useState(1);
+  harness.nextSession = () => setSession((value) => value + 1);
   const [editable, setEditable] = useState(true);
   const [open, setOpen] = useState(true);
   harness.setEditable = setEditable;
@@ -198,7 +216,12 @@ function Harness() {
         editable={editable}
         onChange={() => undefined}
         binding={binding}
-        attachments={{ accountId: ACCOUNT, noteId: NOTE, service }}
+        attachments={{
+          accountId: ACCOUNT,
+          noteId: NOTE,
+          service,
+          generation: session,
+        }}
       />
     </section>
   );

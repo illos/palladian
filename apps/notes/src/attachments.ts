@@ -29,8 +29,8 @@ export const INLINE_IMAGE_TYPES: ReadonlySet<string> = new Set([
 ]);
 /** Server IDs: the Worker's own check on note and object IDs in paths. */
 const ID = /^[a-z0-9]{16,64}$/;
-/** How long an upload waits for the server to answer a request. */
-const REQUEST_TIMEOUT_MS = 30_000;
+/** How long an upload waits for the server to admit it before offering Retry. */
+export const ADMISSION_WAIT_MS = 30_000;
 
 export interface UploadGrant {
   objectId: string;
@@ -45,6 +45,8 @@ export interface UploadGrant {
 /** What the editor needs from the server for attachments. */
 export interface AttachmentService {
   readonly accountId: string;
+  /** How long an upload waits for `createUpload` (default ADMISSION_WAIT_MS). */
+  readonly admissionWaitMs?: number;
   /** Signed in to the server for this account, and connected. */
   connected(): boolean;
   createUpload(args: {
@@ -55,7 +57,10 @@ export interface AttachmentService {
     sha256: string;
     requestId: string;
   }): Promise<UploadGrant>;
-  /** Stop an upload no note uses (pending fails; ready and unused is deleted). */
+  /**
+   * Stop an upload no note uses (pending fails; ready and unused is
+   * deleted).
+   */
   cancelUpload(objectId: string): Promise<void>;
   /** This account's Convex token for `/files` reads; `refresh` asks for a new one. */
   token(refresh?: boolean): Promise<string | null>;
@@ -76,6 +81,11 @@ export interface AttachmentContext {
   noteId: string | null;
   /** Null while this account is not signed in to the server. */
   service: AttachmentService | null;
+  /**
+   * The session's generation: reads begun under another are discarded
+   * (review round 1, F3).
+   */
+  generation: number;
 }
 
 /** Why bytes could not be had. */
@@ -117,6 +127,7 @@ export async function readAttachment(
   service: AttachmentService,
   noteId: string,
   objectId: string,
+  signal?: AbortSignal,
 ): Promise<Blob> {
   if (!ID.test(noteId) || !ID.test(objectId))
     throw new AttachmentReadError("unavailable");
@@ -131,8 +142,10 @@ export async function readAttachment(
         cache: "no-store",
         credentials: "omit",
         referrerPolicy: "no-referrer",
+        ...(signal ? { signal } : {}),
       });
-    } catch {
+    } catch (error) {
+      if (signal?.aborted) throw error;
       throw new AttachmentReadError("failed");
     }
     if (response.status === 401 && !refresh) continue;
@@ -254,31 +267,6 @@ export function uploadRefusal(error: unknown): UploadError {
   );
 }
 
-function withTimeout<T>(promise: Promise<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () =>
-        reject(
-          new UploadError(
-            "The server did not answer. Check the connection and retry.",
-            true,
-          ),
-        ),
-      REQUEST_TIMEOUT_MS,
-    );
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
-}
-
 /** The `sub` and `exp` claims of a JWT, read without verification. */
 function claims(token: string): { sub?: unknown; exp?: unknown } | null {
   const part = token.split(".")[1];
@@ -307,21 +295,18 @@ export function liveAttachmentService(
   return {
     accountId,
     connected: () => signedIn() && live.getState().connected,
-    async createUpload(args) {
-      return await withTimeout(
-        live.client.mutation(api.files.createUpload, {
-          ...args,
-          noteId: args.noteId as Id<"notes">,
-        }),
-      );
-    },
+    // The admission is kept whole, however long it takes: an upload that
+    // stopped waiting for it still owns its object (review round 1, F7).
+    createUpload: (args) =>
+      live.client.mutation(api.files.createUpload, {
+        ...args,
+        noteId: args.noteId as Id<"notes">,
+      }),
     async cancelUpload(objectId) {
       if (!ID.test(objectId)) return;
-      await withTimeout(
-        live.client.mutation(api.files.cancelUpload, {
-          objectId: objectId as Id<"objects">,
-        }),
-      );
+      await live.client.mutation(api.files.cancelUpload, {
+        objectId: objectId as Id<"objects">,
+      });
     },
     token(refresh = false) {
       if (!signedIn()) return Promise.resolve(null);

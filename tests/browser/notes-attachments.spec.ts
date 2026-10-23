@@ -45,6 +45,9 @@ interface HarnessWindow {
     confirm(): void;
     load(doc: unknown): void;
     close(): void;
+    admissionDelayMs: number;
+    admissionWaitMs: number;
+    nextSession(): void;
   };
 }
 const api = (page: Page) => ({
@@ -930,14 +933,14 @@ test("the byte cache keeps one account's bytes and drops the least recently used
       new Blob([new Uint8Array(n)], { type: "image/png" });
     const pause = () => new Promise((resolve) => setTimeout(resolve, 5));
     await cache.retain("ada");
-    const epoch = cache.mark("ada");
-    await cache.store("ada", "o1", bytes(120), epoch);
+    const ticket = await cache.ticket("ada");
+    await cache.store("ada", "o1", bytes(120), ticket);
     await pause();
-    await cache.store("ada", "o2", bytes(120), epoch);
+    await cache.store("ada", "o2", bytes(120), ticket);
     await pause();
     await cache.read("ada", "o1"); // o1 is now the more recently used
     await pause();
-    await cache.store("ada", "o3", bytes(120), epoch);
+    await cache.store("ada", "o3", bytes(120), ticket);
     const kept = await cache.objects("ada");
     const total = await cache.size();
     // Another account reads nothing; retaining it deletes Ada's bytes.
@@ -945,7 +948,7 @@ test("the byte cache keeps one account's bytes and drops the least recently used
     await cache.retain("bob");
     const afterSwitch = await cache.objects("ada");
     // Bytes fetched for Ada before that are not stored afterwards.
-    await cache.store("ada", "late", bytes(10), epoch);
+    await cache.store("ada", "late", bytes(10), ticket);
     const late = await cache.objects("ada");
     cache.close();
     return { kept, total, other, afterSwitch, late };
@@ -1042,5 +1045,386 @@ test("signing out deletes the account's attachment bytes; another account's go a
   await page.locator(".connection-status").click();
   await page.getByRole("button", { name: "Sign out…" }).click();
   await page.getByRole("button", { name: "Sign out of this device" }).click();
+  await expect.poll(() => cachedRows(page)).toEqual([]);
+});
+
+// ---- Review round 1 of B3: regression tests (fail on 85a42c7) ----
+
+/** Settings of the harness's stand-in server. */
+const configure = (
+  page: Page,
+  values: Partial<{ admissionDelayMs: number; admissionWaitMs: number }>,
+) =>
+  page.evaluate(
+    (settings) =>
+      Object.assign(
+        (window as unknown as HarnessWindow).__attachments,
+        settings,
+      ),
+    values,
+  );
+const nextSession = (page: Page) =>
+  page.evaluate(() =>
+    (window as unknown as HarnessWindow).__attachments.nextSession(),
+  );
+
+/** `/files/notes/*` answered from the album's bytes; `hold` keeps one waiting. */
+async function heldReads(page: Page, hold: string) {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const reads: string[] = [];
+  await page.route(NOTE_FILES, async (route) => {
+    const objectId = route.request().url().split("/").pop()!;
+    reads.push(objectId);
+    if (objectId === hold) await held;
+    await route
+      .fulfill(
+        objectId === IMAGE
+          ? { status: 200, contentType: "image/png", body: PHOTO }
+          : objectId === FILE
+            ? {
+                status: 200,
+                contentType: "application/octet-stream",
+                body: REPORT,
+              }
+            : { status: 404, body: "{}" },
+      )
+      .catch(() => undefined);
+  });
+  return { reads, release };
+}
+
+test("R1 F3: a picture read that finishes after the server took the object away shows and caches nothing", async ({
+  page,
+}) => {
+  const { release } = await heldReads(page, IMAGE);
+  const editor = await harness(page);
+  await api(page).setObjects([IMAGE, FILE]);
+  await api(page).load(ALBUM);
+  const view = editor.locator(".note-image");
+  await expect(view).toHaveAttribute("data-status", "loading");
+  await api(page).setObjects([FILE]);
+  await expect(view.locator(".attachment-placeholder")).toHaveText(
+    "Attachment unavailable",
+  );
+  release();
+  await page.waitForTimeout(500);
+  await expect(view.locator("img")).toHaveCount(0);
+  await expect(view).toHaveAttribute("data-status", "unavailable");
+  expect((await cachedRows(page)).map((row) => row.objectId)).not.toContain(
+    IMAGE,
+  );
+});
+
+test("R1 F3: a download that finishes after the note closed starts nothing", async ({
+  page,
+}) => {
+  const { release } = await heldReads(page, FILE);
+  const editor = await harness(page);
+  await api(page).load(ALBUM);
+  await expect(editor.locator(".note-image img")).toBeVisible();
+  let downloads = 0;
+  page.on("download", () => downloads++);
+  const chip = editor.locator(".file-chip");
+  await chip.click();
+  await chip.click();
+  await expect(chip.locator(".file-meta")).toHaveText("Downloading…");
+  await api(page).close();
+  release();
+  await page.waitForTimeout(1_000);
+  expect(downloads).toBe(0);
+});
+
+test("R1 F3: the lightbox closes when its picture becomes unavailable, and when the session moves on", async ({
+  page,
+}) => {
+  const { editor } = await album(page);
+  await api(page).setObjects([IMAGE, FILE]);
+  const picture = editor.locator(".note-image img");
+  const lightbox = page.getByRole("dialog", { name: "Picture: photo.png" });
+  const open = async () => {
+    await picture.click();
+    if (!(await lightbox.isVisible())) await picture.click();
+    await expect(lightbox).toBeVisible();
+  };
+  await open();
+  await api(page).setObjects([FILE]);
+  await expect(lightbox).toBeHidden();
+  await api(page).setObjects([IMAGE, FILE]);
+  await expect(picture).toBeVisible();
+  await open();
+  await nextSession(page);
+  await expect(lightbox).toBeHidden();
+});
+
+test("R1 F5: a picture that arrives before the server lists it loads once it does", async ({
+  page,
+}) => {
+  const { reads } = await heldReads(page, "none");
+  const editor = await harness(page);
+  await api(page).setObjects([]);
+  // A collaborator adds the picture after "First line.".
+  await api(page).remote([
+    {
+      stepType: "replace",
+      from: 20,
+      to: 20,
+      slice: {
+        content: [
+          {
+            type: "image",
+            attrs: { id: "remote", src: `attachment:${IMAGE}`, alt: "remote" },
+          },
+        ],
+      },
+    },
+  ]);
+  const view = editor.locator(".note-image");
+  await expect(view.locator(".attachment-placeholder")).toHaveText(
+    "Attachment unavailable",
+  );
+  await api(page).setObjects([IMAGE]);
+  await expect(view.locator("img")).toBeVisible();
+  expect(reads).toContain(IMAGE);
+});
+
+test("R1 F6: a pasted attachment the server did not record stops showing once acknowledged", async ({
+  page,
+}) => {
+  const { editor } = await album(page); // the picture's bytes are now cached
+  await api(page).load({
+    type: "doc",
+    content: [
+      { type: "paragraph", content: [{ type: "text", text: "Album" }] },
+      { type: "paragraph", content: [{ type: "text", text: "First line." }] },
+    ],
+  });
+  await api(page).setObjects([]);
+  await caretAfter(editor, "First line.");
+  await editor.evaluate((element, id) => {
+    const data = new DataTransfer();
+    data.setData("text/html", `<img src="attachment:${id}" alt="copied">`);
+    element.dispatchEvent(
+      new ClipboardEvent("paste", {
+        clipboardData: data,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  }, IMAGE);
+  const view = editor.locator(".note-image");
+  // Shown from the cache while the paste is unsent.
+  await expect(view.locator("img")).toBeVisible();
+  // Acknowledged, and the server's list (unchanged, so no new answer) lacks it.
+  await api(page).confirm();
+  await expect(view.locator(".attachment-placeholder")).toHaveText(
+    "Attachment unavailable",
+  );
+  await expect(view.locator("img")).toHaveCount(0);
+});
+
+test("R1 F7: an admission that answers after the wait is released when the upload is removed", async ({
+  page,
+}) => {
+  const editor = await harness(page);
+  await configure(page, { admissionDelayMs: 1_500, admissionWaitMs: 300 });
+  await caretAfter(editor, "First line.");
+  await choose(page, [
+    { name: "photo.png", mimeType: "image/png", buffer: PHOTO },
+  ]);
+  const upload = widget(page, "photo.png");
+  await expect(upload.getByRole("status")).toHaveText(
+    "The server did not answer. Check the connection and retry.",
+  );
+  await upload.getByRole("button", { name: "Remove" }).click();
+  await expect(upload).toHaveCount(0);
+  await expect
+    .poll(async () => (await api(page).calls()).map((call) => call.name))
+    .toEqual(["createUpload", "cancelUpload"]);
+  const calls = await api(page).calls();
+  expect(calls[1]!.args.objectId).toBe(calls[0]!.objectId);
+});
+
+test("R1 F7: Cancel while the server has not answered releases the object once it does, once", async ({
+  page,
+}) => {
+  const editor = await harness(page);
+  await configure(page, { admissionDelayMs: 1_000 });
+  await caretAfter(editor, "First line.");
+  await choose(page, [
+    { name: "photo.png", mimeType: "image/png", buffer: PHOTO },
+  ]);
+  const upload = widget(page, "photo.png");
+  await expect(upload.getByRole("status")).toHaveText("Preparing…");
+  await expect.poll(async () => (await api(page).calls()).length).toBe(1);
+  await upload.getByRole("button", { name: "Cancel" }).click();
+  await expect(upload).toHaveCount(0);
+  await page.waitForTimeout(1_500);
+  const calls = await api(page).calls();
+  expect(calls.map((call) => call.name)).toEqual([
+    "createUpload",
+    "cancelUpload",
+  ]);
+  expect(calls[1]!.args.objectId).toBe(calls[0]!.objectId);
+});
+
+test("R1 F7: Retry after the wait keeps the request, and the late answer releases nothing", async ({
+  page,
+}) => {
+  const editor = await harness(page);
+  const put = await uploads(page);
+  put.open();
+  await configure(page, { admissionDelayMs: 1_500, admissionWaitMs: 300 });
+  await caretAfter(editor, "First line.");
+  await choose(page, [
+    { name: "photo.png", mimeType: "image/png", buffer: PHOTO },
+  ]);
+  const upload = widget(page, "photo.png");
+  await expect(upload.getByRole("status")).toHaveText(
+    "The server did not answer. Check the connection and retry.",
+  );
+  await configure(page, { admissionDelayMs: 0 });
+  await upload.getByRole("button", { name: "Retry" }).click();
+  await expect(upload).toHaveCount(0);
+  const calls = await api(page).calls();
+  expect(calls.map((call) => call.name)).toEqual([
+    "createUpload",
+    "createUpload",
+  ]);
+  expect(calls[1]!.args.requestId).toBe(calls[0]!.args.requestId);
+  // The first answer arrives after the picture landed: nothing is released.
+  await page.waitForTimeout(1_500);
+  expect((await api(page).calls()).map((call) => call.name)).toEqual([
+    "createUpload",
+    "createUpload",
+  ]);
+  expect(await blocks(page)).toContain(
+    `image:attachment:${calls[0]!.objectId}`,
+  );
+});
+
+test("R1 F8: pictures and files open from the keyboard; pictures resize with labelled controls", async ({
+  page,
+}) => {
+  const { editor } = await album(page);
+  const frame = editor.locator(".note-image-frame");
+  await expect(frame).toHaveAttribute("role", "button");
+  await expect(frame).toHaveAttribute("tabindex", "0");
+  await expect(frame).toHaveAttribute("aria-label", "View picture: photo.png");
+  const lightbox = page.getByRole("dialog", { name: "Picture: photo.png" });
+  await frame.focus();
+  await page.keyboard.press("Enter");
+  await expect(lightbox).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(lightbox).toBeHidden();
+  await frame.focus();
+  await page.keyboard.press(" ");
+  await expect(lightbox).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(lightbox).toBeHidden();
+
+  // Resizing without a pointer: labelled buttons, and keys on the picture.
+  await frame.focus();
+  const sizes = editor.getByRole("group", { name: "Picture size" });
+  await expect(sizes).toBeVisible();
+  const shown = (await editor.locator(".note-image img").boundingBox())!.width;
+  await sizes.getByRole("button", { name: "Smaller" }).click();
+  await expect.poll(() => widthOf(page)).toBe(Math.round(shown * 0.8));
+  await sizes.getByRole("button", { name: "Natural size" }).click();
+  await expect.poll(() => widthOf(page)).toBeNull();
+  await frame.focus();
+  await page.keyboard.press("-");
+  await expect.poll(() => widthOf(page)).toBe(Math.round(shown * 0.8));
+  await page.keyboard.press("0");
+  await expect.poll(() => widthOf(page)).toBeNull();
+
+  // A file chip downloads from the keyboard.
+  const chip = editor.locator(".file-chip");
+  await expect(chip).toHaveAttribute("role", "button");
+  await expect(chip).toHaveAttribute(
+    "aria-label",
+    "Download report.pdf, PDF, 2.4 MB",
+  );
+  const download = page.waitForEvent("download");
+  await chip.focus();
+  await page.keyboard.press("Enter");
+  expect((await download).suggestedFilename()).toBe("report.pdf");
+});
+
+/** The agent consent request the connect page asks the Worker for. */
+const REQUEST = {
+  clientId: "agent",
+  clientName: "Test agent",
+  clientUri: null,
+  logoUri: null,
+  clientDomain: null,
+  redirectHost: "agent.example",
+  redirectIsLoopback: false,
+  scopes: [],
+};
+interface PagesWindow {
+  __pages: {
+    answer(next: { kind: string; accountId?: string }): void;
+    status(): string;
+  };
+}
+
+/** A page outside the app, signed in as Ada, with bytes of hers cached. */
+async function sessionPage(page: Page, which: string) {
+  await page.route("**/oauth/request/*", (route) =>
+    route.fulfill({ json: REQUEST }),
+  );
+  await page.goto(
+    `/harness/pages.html?page=${which}&request=${"r".repeat(24)}#${"t".repeat(24)}`,
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as unknown as PagesWindow).__pages.status()),
+    )
+    .toBe("ready");
+  // Bytes Ada's notes left in the cache (as viewing a picture does).
+  await page.evaluate(async (objectId) => {
+    const url = "/src/attachment-cache.ts";
+    const { attachmentCache } = (await import(
+      /* @vite-ignore */ url
+    )) as typeof import("../../apps/notes/src/attachment-cache");
+    await attachmentCache.retain("ada");
+    await attachmentCache.store(
+      "ada",
+      objectId,
+      new Blob([new Uint8Array(64)], { type: "image/png" }),
+    );
+  }, IMAGE);
+  expect(await cachedRows(page)).toEqual([
+    { accountId: "ada", objectId: IMAGE },
+  ]);
+}
+const answer = (page: Page, next: { kind: string; accountId?: string }) =>
+  page.evaluate(
+    (value) => (window as unknown as PagesWindow).__pages.answer(value),
+    next,
+  );
+
+for (const which of ["connect", "invite", "reset"])
+  test(`R1 F1: the ${which} page clears attachment bytes when its session is revoked`, async ({
+    page,
+  }) => {
+    await sessionPage(page, which);
+    await answer(page, { kind: "revoked", accountId: "ada" });
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (window as unknown as PagesWindow).__pages.status(),
+        ),
+      )
+      .toBe("revoked");
+    await expect.poll(() => cachedRows(page)).toEqual([]);
+  });
+
+test("R1 F1: switching accounts on the connect page clears the previous account's bytes", async ({
+  page,
+}) => {
+  await sessionPage(page, "connect");
+  await answer(page, { kind: "ready", accountId: "bob" });
   await expect.poll(() => cachedRows(page)).toEqual([]);
 });

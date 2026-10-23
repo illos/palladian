@@ -85,6 +85,36 @@
   }
 }
 
+/* Labelled resize controls (keyboard and assistive technology), shown on the
+   selected image or while focus is in it. */
+.image-size {
+  display: none;
+  gap: 6px;
+  margin-top: 6px;
+  line-height: 1.2;
+}
+.note-image.ProseMirror-selectednode .image-size,
+.note-image:focus-within .image-size {
+  display: flex;
+}
+.ProseMirror[contenteditable="false"] .image-size {
+  display: none;
+}
+.image-size button {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 12.5px;
+}
+.note-image-frame:focus-visible,
+.file-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 8px;
+}
+
 /* A picture that is loading, offline, unavailable or failed. */
 .attachment-placeholder {
   display: inline-flex;

@@ -72,6 +72,7 @@ import {
 import type { ChannelStatus, NoteChannel } from "./channel";
 import { watchFileCapability } from "./file-capability";
 import { attachmentCache } from "./attachment-cache";
+import { useAttachmentCache } from "./attachment-cache-lifecycle";
 import { liveAttachmentService } from "./attachments";
 import { watchNotebookCapability } from "./notebook-capability";
 import { liveStateSource, type LiveBox } from "./liveBox";
@@ -378,12 +379,9 @@ export function App({
 
   // Attachment bytes stay only for the account the app may show (B3, D28):
   // signing out, a revoked session and switching accounts delete them, as
-  // does any clear of the account's notes, in this tab or another.
-  useEffect(() => {
-    void attachmentCache
-      .retain(permitted ? accountId : null)
-      .catch(() => undefined);
-  }, [permitted, accountId]);
+  // does any clear of the account's notes, in this tab or another. The
+  // pages outside the app install the same lifecycle.
+  useAttachmentCache(session);
   useEffect(
     () =>
       store.subscribe((event) => {
@@ -2517,6 +2515,7 @@ export function App({
                   accountId: currentOpen.accountId,
                   noteId: isLocalNoteId(currentOpen.id) ? null : currentOpen.id,
                   service: attachmentService,
+                  generation: snapshot.generation,
                 }}
                 onChange={(document, text) => {
                   if (currentOpen.kind === "draft")

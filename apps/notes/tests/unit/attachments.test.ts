@@ -513,15 +513,15 @@ describe("the byte cache", () => {
   test("a fetch that finishes after its account's bytes were cleared stores nothing", async () => {
     const cache = fresh();
     await cache.retain("ada");
-    const epoch = cache.mark("ada");
+    const ticket = await cache.ticket("ada");
     const clearing = cache.forget("ada");
-    await cache.store("ada", OBJECT_A, bytes(4), epoch);
+    await cache.store("ada", OBJECT_A, bytes(4), ticket);
     await clearing;
     expect(await cache.objects("ada")).toEqual([]);
     // Signed out and in again: the old mark is still refused.
     await cache.retain(null);
     await cache.retain("ada");
-    await cache.store("ada", OBJECT_A, bytes(4), epoch);
+    await cache.store("ada", OBJECT_A, bytes(4), ticket);
     expect(await cache.read("ada", OBJECT_A)).toBeNull();
     cache.close();
   });
@@ -530,8 +530,11 @@ describe("the byte cache", () => {
     const cache = fresh();
     await cache.retain("ada");
     const writing = cache.store("ada", OBJECT_A, bytes(4));
-    void cache.forget("ada");
+    const clearing = cache.forget("ada");
     await writing;
+    // Unreadable at once; gone once the clear has run.
+    expect(await cache.read("ada", OBJECT_A)).toBeNull();
+    await clearing;
     expect(await cache.objects("ada")).toEqual([]);
     cache.close();
   });

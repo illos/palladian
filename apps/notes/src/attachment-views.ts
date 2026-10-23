@@ -13,10 +13,11 @@ import type {
   ViewMutationRecord,
 } from "prosemirror-view";
 import { AttachmentReadError } from "./attachments";
-import type {
-  AttachmentRuntime,
-  FileInfo,
-  ObjectStatus,
+import {
+  opensFile,
+  type AttachmentRuntime,
+  type FileInfo,
+  type ObjectStatus,
 } from "./editor-attachments";
 import { fileWritesEnabled, onFileWritesChange } from "./file-capability";
 
@@ -78,6 +79,11 @@ function glyph(kind: "file" | "image" | "missing") {
   return svg;
 }
 
+/** Keys that open an attachment from its focused control. */
+const activates = (event: KeyboardEvent) =>
+  event.key === "Enter" || event.key === " ";
+const keyboard = (event: Event) => event.type.startsWith("key");
+
 /** Whether the node at `getPos()` is the selected node. */
 function selected(view: EditorView, getPos: () => number | undefined) {
   const pos = getPos();
@@ -95,6 +101,11 @@ function selected(view: EditorView, getPos: () => number | undefined) {
  * a tap on the selected image opens it full screen; in a read-only note a
  * tap opens it. A corner drag resizes it and saves `width`; double-clicking
  * the corner returns it to natural size.
+ *
+ * Without a pointer (review round 1, F8): the shown picture is a focusable
+ * control that Enter or Space opens; in an editable note, labelled Smaller,
+ * Larger and Natural size buttons (also the -, + and 0 keys on the focused
+ * picture) resize it.
  */
 export class ImageView implements NodeView {
   readonly dom: HTMLElement;
@@ -102,6 +113,7 @@ export class ImageView implements NodeView {
   private picture: HTMLImageElement | null = null;
   private placeholder: HTMLElement | null = null;
   private readonly grip: HTMLElement;
+  private readonly sizes: HTMLElement;
   private url: string | null = null;
   private objectId: string | null = null;
   private stopWatch: (() => void) | null = null;
@@ -125,11 +137,28 @@ export class ImageView implements NodeView {
     this.grip.className = "image-grip";
     this.grip.title = "Drag to resize. Double-click for natural size.";
     this.grip.setAttribute("aria-hidden", "true");
+    this.sizes = document.createElement("div");
+    this.sizes.className = "image-size";
+    this.sizes.setAttribute("role", "group");
+    this.sizes.setAttribute("aria-label", "Picture size");
+    for (const [label, change] of [
+      ["Smaller", () => this.step(-1)],
+      ["Larger", () => this.step(1)],
+      ["Natural size", () => this.commit(null)],
+    ] as const) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.addEventListener("mousedown", (event) => event.preventDefault());
+      button.addEventListener("click", change);
+      this.sizes.append(button);
+    }
     this.dom.append(this.frame);
     this.frame.addEventListener("pointerdown", () => {
       this.pressedSelected = selected(this.view, this.getPos);
     });
     this.frame.addEventListener("click", (event) => this.tap(event));
+    this.frame.addEventListener("keydown", (event) => this.key(event));
     this.grip.addEventListener("pointerdown", (event) => this.grab(event));
     this.grip.addEventListener("pointermove", (event) => this.move(event));
     this.grip.addEventListener("pointerup", (event) => this.release(event));
@@ -166,10 +195,12 @@ export class ImageView implements NodeView {
 
   stopEvent(event: Event) {
     const target = event.target;
+    if (!(target instanceof Node)) return false;
     return (
-      target instanceof Node &&
-      (this.grip.contains(target) ||
-        !!(target instanceof Element && target.closest(".attachment-retry")))
+      this.grip.contains(target) ||
+      this.sizes.contains(target) ||
+      (target instanceof Element && !!target.closest(".attachment-retry")) ||
+      (keyboard(event) && this.frame.contains(target))
     );
   }
 
@@ -237,6 +268,19 @@ export class ImageView implements NodeView {
     this.applyWidth();
   }
 
+  /** Enter or Space opens the picture; -, + and 0 resize it. */
+  private key(event: KeyboardEvent) {
+    if (!this.picture) return;
+    if (activates(event)) {
+      event.preventDefault();
+      this.openPicture();
+    } else if (this.resizable() && /^[-+=0]$/.test(event.key)) {
+      event.preventDefault();
+      if (event.key === "0") this.commit(null);
+      else this.step(event.key === "-" ? -1 : 1);
+    }
+  }
+
   private pictureElement() {
     if (this.picture) return this.picture;
     const picture = document.createElement("img");
@@ -287,6 +331,17 @@ export class ImageView implements NodeView {
       this.picture.alt = alt;
       if (typeof title === "string") this.picture.title = title;
       else this.picture.removeAttribute("title");
+      // The shown picture is a control a keyboard can reach and open.
+      this.frame.setAttribute("role", "button");
+      this.frame.tabIndex = 0;
+      this.frame.setAttribute(
+        "aria-label",
+        "View picture" + (alt ? `: ${alt}` : ""),
+      );
+    } else {
+      this.frame.removeAttribute("role");
+      this.frame.removeAttribute("tabindex");
+      this.frame.removeAttribute("aria-label");
     }
     if (this.placeholder) {
       this.placeholder.setAttribute("role", "img");
@@ -325,27 +380,64 @@ export class ImageView implements NodeView {
     );
   }
 
-  /** The corner grip, while the image can be resized. */
+  /** Whether the picture can be resized here now (a width is a file feature). */
+  private resizable() {
+    return this.loaded() && fileWritesEnabled() && this.view.editable;
+  }
+
+  /** The corner grip and the size buttons, while the image can be resized. */
   private placeGrip() {
     if (this.loaded() && fileWritesEnabled()) {
       if (!this.grip.isConnected) this.frame.append(this.grip);
-    } else if (this.grip.isConnected) this.grip.remove();
+      if (!this.sizes.isConnected) this.dom.append(this.sizes);
+    } else {
+      if (this.grip.isConnected) this.grip.remove();
+      if (this.sizes.isConnected) this.sizes.remove();
+    }
   }
 
   private tap(event: MouseEvent) {
     if (this.grip.contains(event.target as Node)) return;
     if (!this.loaded() || (this.view.editable && !this.pressedSelected)) return;
     event.preventDefault();
-    this.runtime.hooks.openImage({
+    this.openPicture();
+  }
+
+  private openPicture() {
+    if (!this.loaded()) return;
+    this.runtime.showImage({
       src: this.picture!.src,
       alt: String(this.node.attrs.alt ?? ""),
+      objectId: this.objectId,
     });
+  }
+
+  /** The widest the picture may be: its pixels, the column and the limit. */
+  private maxWidth() {
+    const column = this.dom.getBoundingClientRect().width;
+    return Math.min(this.picture?.naturalWidth ?? 0, column, IMAGE_WIDTH_MAX);
+  }
+
+  /** One step smaller or larger (a fifth), within the drag's limits. */
+  private step(direction: -1 | 1) {
+    if (!this.picture || !this.resizable()) return;
+    const max = this.maxWidth();
+    if (max < IMAGE_WIDTH_MIN) return;
+    const min = Math.max(IMAGE_WIDTH_MIN, Math.min(MIN_DRAG_WIDTH, max));
+    const width = this.node.attrs.width;
+    const current =
+      typeof width === "number"
+        ? width
+        : this.picture.getBoundingClientRect().width;
+    const next = Math.round(
+      Math.max(min, Math.min(max, current * (direction < 0 ? 0.8 : 1.25))),
+    );
+    if (next !== width) this.commit(next);
   }
 
   private grab(event: PointerEvent) {
     if (!this.view.editable || !fileWritesEnabled() || !this.picture) return;
-    const column = this.dom.getBoundingClientRect().width;
-    const max = Math.min(this.picture.naturalWidth, column, IMAGE_WIDTH_MAX);
+    const max = this.maxWidth();
     if (max < IMAGE_WIDTH_MIN) return;
     event.preventDefault();
     event.stopPropagation();
@@ -409,7 +501,8 @@ export class ImageView implements NodeView {
  * A file block: a chip with its type, name and size. In an editable note
  * the first tap selects it and a tap on the selected chip opens it; in a
  * read-only note a tap opens it. Opening downloads the file, or runs the
- * opener registered for its type (B4's PDF reader).
+ * opener registered for its type (B4's PDF reader). The chip is also a
+ * focusable control that Enter or Space opens (review round 1, F8).
  */
 export class FileView implements NodeView {
   readonly dom: HTMLElement;
@@ -449,7 +542,22 @@ export class FileView implements NodeView {
       event.preventDefault();
       void this.open();
     });
+    this.chip.setAttribute("role", "button");
+    this.chip.tabIndex = 0;
+    this.chip.addEventListener("keydown", (event) => {
+      if (!activates(event)) return;
+      event.preventDefault();
+      void this.open();
+    });
     this.show();
+  }
+
+  stopEvent(event: Event) {
+    return (
+      keyboard(event) &&
+      event.target instanceof Node &&
+      this.chip.contains(event.target)
+    );
   }
 
   update(node: ProseMirrorNode) {
@@ -515,7 +623,7 @@ export class FileView implements NodeView {
       "aria-label",
       unavailable
         ? `${info.name}: attachment unavailable`
-        : `${info.name}, ${details.join(", ")}`,
+        : `${opensFile(info.mimeType) ? "Open" : "Download"} ${info.name}, ${details.join(", ")}`,
     );
   }
 

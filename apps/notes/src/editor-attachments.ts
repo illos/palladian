@@ -4,7 +4,7 @@ import {
 } from "@palladian/notes-core/attachments";
 import { assignBlockIds } from "@palladian/notes-core/ids";
 import { attachmentSource, notesSchema } from "@palladian/notes-core/schema";
-import { sendableSteps } from "prosemirror-collab";
+import { getVersion, sendableSteps } from "prosemirror-collab";
 import { closeHistory } from "prosemirror-history";
 import type { Node as ProseMirrorNode, NodeType } from "prosemirror-model";
 import {
@@ -23,6 +23,7 @@ import {
 } from "prosemirror-view";
 import type { AttachmentCache } from "./attachment-cache";
 import {
+  ADMISSION_WAIT_MS,
   AttachmentReadError,
   displayType,
   INLINE_IMAGE_TYPES,
@@ -34,6 +35,7 @@ import {
   UploadError,
   uploadRefusal,
   type AttachmentContext,
+  type AttachmentService,
   type UploadGrant,
 } from "./attachments";
 import { fileWritesEnabled } from "./file-capability";
@@ -261,12 +263,16 @@ export interface ObjectRecord {
    */
   deferred: boolean;
   attempt: number;
+  /** Aborts the read under way. */
+  abort: AbortController | null;
   listeners: Set<() => void>;
 }
 
 export interface LightboxImage {
   src: string;
   alt: string;
+  /** The object shown, so the lightbox closes if it becomes unavailable. */
+  objectId: string | null;
 }
 
 /** A file block's attributes. */
@@ -290,6 +296,11 @@ export function registerFileOpener(mimeType: string, opener: FileOpener) {
   return () => void openers.delete(mimeType);
 }
 
+/** Whether a media type opens (B4's reader) rather than downloads. */
+export function opensFile(mimeType: string) {
+  return openers.has(mimeType);
+}
+
 export interface AttachmentHooks {
   /** The open note's attachments, as the app last rendered them. */
   context(): AttachmentContext | undefined;
@@ -298,12 +309,23 @@ export interface AttachmentHooks {
   cache: AttachmentCache;
   notify(message: string): void;
   openImage(image: LightboxImage): void;
+  /** Close the lightbox: its picture became unavailable, or its session ended. */
+  closeImage(): void;
 }
 
-/** One editor's attachments: what its node views show, and its uploads. */
+/**
+ * One editor's attachments: what its node views show, and its uploads.
+ *
+ * Every read of bytes is fenced (review round 1, F3): it counts only while
+ * this editor is open, for the account and session generation it began
+ * in, and while the server still lists the object for the note (checked
+ * again once the bytes arrive). A read that stops counting is aborted and
+ * changes nothing: no picture, no cache entry, no download.
+ */
 export class AttachmentRuntime {
   view: EditorView | null = null;
   readonly uploads: UploadController;
+  private alive = true;
   private readonly records = new Map<string, ObjectRecord>();
   /** Objects the server lists for the note now; null while unknown. */
   private known: ReadonlySet<string> | null = null;
@@ -312,6 +334,12 @@ export class AttachmentRuntime {
     noteId: string | null;
   } = { service: null, noteId: null };
   private stopWatching: (() => void) | null = null;
+  /** The account and session generation reads last began under. */
+  private session: { accountId: string; generation: number } | null = null;
+  /** Downloads under way. */
+  private readonly downloads = new Set<AbortController>();
+  /** What the lightbox shows, while open. */
+  private lightbox: { objectId: string | null } | null = null;
 
   constructor(readonly hooks: AttachmentHooks) {
     this.uploads = new UploadController(this);
@@ -328,7 +356,19 @@ export class AttachmentRuntime {
       (view) => {
         this.view = view;
         this.refresh();
-        return { destroy: () => this.destroy() };
+        return {
+          // The document or its unsent steps changed, an acknowledgement
+          // included: what may show can change with them (F6).
+          update: (next, previous) => {
+            if (
+              next.state.doc !== previous.doc ||
+              (this.hooks.collaborative &&
+                getVersion(next.state) !== getVersion(previous))
+            )
+              this.reconcile();
+          },
+          destroy: () => this.destroy(),
+        };
       },
     );
   }
@@ -390,10 +430,30 @@ export class AttachmentRuntime {
 
   /**
    * The app's context changed (the note reached the server, the connection
-   * came or went): follow the note's objects and load what could not load.
+   * came or went, the session moved on): follow the note's objects, drop
+   * what was read under another session, and load what could not load.
    */
   refresh() {
+    if (!this.alive) return;
     const context = this.context();
+    const session = context
+      ? { accountId: context.accountId, generation: context.generation }
+      : null;
+    if (
+      session?.accountId !== this.session?.accountId ||
+      session?.generation !== this.session?.generation
+    ) {
+      if (this.session) {
+        for (const abort of this.downloads) abort.abort();
+        this.downloads.clear();
+        this.closeImage();
+        for (const [objectId, record] of this.records) {
+          this.invalidate(record);
+          this.set(objectId, "idle");
+        }
+      }
+      this.session = session;
+    }
     const service = context?.service ?? null;
     const noteId = context?.noteId ?? null;
     if (service !== this.watching.service || noteId !== this.watching.noteId) {
@@ -417,14 +477,22 @@ export class AttachmentRuntime {
   }
 
   destroy() {
+    this.alive = false;
+    for (const record of this.records.values()) this.invalidate(record);
+    for (const abort of this.downloads) abort.abort();
+    this.downloads.clear();
     this.uploads.destroy();
     this.stopWatching?.();
     this.stopWatching = null;
     this.records.clear();
+    this.closeImage();
     this.view = null;
   }
 
-  /** Follow an object's status; `wantBytes` loads it for display. */
+  /**
+   * Follow an object's status; `wantBytes` loads it for display, now or
+   * once it becomes available (F5).
+   */
   watch(objectId: string, listener: () => void, wantBytes: boolean) {
     let record = this.records.get(objectId);
     if (!record) {
@@ -434,20 +502,22 @@ export class AttachmentRuntime {
         wanted: false,
         deferred: false,
         attempt: 0,
+        abort: null,
         listeners: new Set(),
       };
       this.records.set(objectId, record);
     }
     record.listeners.add(listener);
+    if (wantBytes) record.wanted = true;
     if (this.gone(objectId)) this.set(objectId, "unavailable");
-    else if (wantBytes && !record.wanted) {
-      record.wanted = true;
-      if (record.status === "idle") void this.load(objectId);
-    }
+    else if (record.wanted && record.status === "idle")
+      void this.load(objectId);
     return () => {
       record.listeners.delete(listener);
-      if (!record.listeners.size && this.records.get(objectId) === record)
+      if (!record.listeners.size && this.records.get(objectId) === record) {
+        this.invalidate(record);
         this.records.delete(objectId);
+      }
     };
   }
 
@@ -459,39 +529,53 @@ export class AttachmentRuntime {
     void this.load(objectId);
   }
 
-  /**
-   * The object's bytes: cached, or read through the Worker and cached.
-   * Throws AttachmentReadError.
-   */
-  async bytes(objectId: string): Promise<Blob> {
-    const context = this.context();
-    if (!context) throw new AttachmentReadError("signed-out");
-    if (this.gone(objectId)) throw new AttachmentReadError("unavailable");
-    const { accountId, service, noteId } = context;
-    const cached = await this.hooks.cache.read(accountId, objectId);
-    if (cached) return cached;
-    if (!service || !noteId) throw new AttachmentReadError("signed-out");
-    const epoch = this.hooks.cache.mark(accountId);
-    let blob: Blob;
-    try {
-      blob = await readAttachment(service, noteId, objectId);
-    } catch (error) {
-      if (error instanceof AttachmentReadError && error.kind === "unavailable")
-        this.unreadable(objectId);
-      throw error;
-    }
-    void this.hooks.cache.store(accountId, objectId, blob, epoch);
-    return blob;
+  /** Show a picture full screen. */
+  showImage(image: LightboxImage) {
+    if (!this.alive) return;
+    this.lightbox = { objectId: image.objectId };
+    this.hooks.openImage(image);
   }
 
-  /** Open a file: its registered opener, or a download. */
+  /**
+   * Open a file: its registered opener, or a download. Nothing happens if,
+   * by the time its bytes arrive, the editor closed, the session moved on
+   * or the object became unavailable. Throws AttachmentReadError.
+   */
   async open(info: FileInfo): Promise<void> {
+    const context = this.context();
+    if (!context || !this.alive) throw new AttachmentReadError("signed-out");
+    if (this.gone(info.objectId)) throw new AttachmentReadError("unavailable");
+    const abort = new AbortController();
+    const holds = this.fence(context);
+    const current = () =>
+      holds() && !abort.signal.aborted && !this.gone(info.objectId);
+    const bytes = async () => {
+      const blob = await this.fetchBytes(
+        info.objectId,
+        context,
+        abort.signal,
+        current,
+      );
+      if (!current()) throw new AttachmentReadError("unavailable");
+      return blob;
+    };
     const opener = openers.get(info.mimeType);
     if (opener) {
-      opener(info, () => this.bytes(info.objectId));
+      opener(info, bytes);
       return;
     }
-    const blob = await this.bytes(info.objectId);
+    this.downloads.add(abort);
+    let blob: Blob;
+    try {
+      blob = await bytes();
+    } catch (error) {
+      if (!current()) return;
+      throw error;
+    } finally {
+      this.downloads.delete(abort);
+    }
+    // Checked once more right before the download begins.
+    if (!current()) return;
     // Always a plain download: the page never renders a file's bytes.
     const url = URL.createObjectURL(
       new Blob([blob], { type: "application/octet-stream" }),
@@ -506,14 +590,31 @@ export class AttachmentRuntime {
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
-  /** The server's list arrived: mark what it does not hold, load what it does. */
+  /** The server's list arrived. */
   private setKnown(objects: ReadonlySet<string> | null) {
     this.known = objects;
-    if (!objects) return;
+    this.reconcile();
+  }
+
+  /**
+   * Recheck what each object may show against the server's list for the
+   * note and our unsent steps (F5, F6): an object neither lists becomes
+   * unavailable (its pending read is dropped and its cached bytes too); one
+   * that is listed again, or that was waiting for the server, loads.
+   */
+  private reconcile() {
+    const known = this.known;
+    if (!known || !this.alive) return;
     const context = this.context();
+    let unsent: Set<string> | null = null;
     for (const [objectId, record] of this.records) {
-      if (this.gone(objectId)) {
+      const listed = known.has(objectId);
+      if (!listed) {
+        unsent ??= this.view ? unsentObjects(this.view.state) : new Set();
+        if (unsent.has(objectId)) continue;
+        if (record.status === "unavailable") continue;
         record.deferred = false;
+        this.invalidate(record);
         if (context) void this.hooks.cache.drop(context.accountId, objectId);
         this.set(objectId, "unavailable");
       } else if (record.status === "unavailable" || record.deferred) {
@@ -550,34 +651,109 @@ export class AttachmentRuntime {
     );
   }
 
+  /** Whether the editor, account and session generation a read began under still hold. */
+  private fence(context: AttachmentContext): () => boolean {
+    const { accountId, generation } = context;
+    return () => {
+      if (!this.alive) return false;
+      const now = this.context();
+      return (
+        !!now && now.accountId === accountId && now.generation === generation
+      );
+    };
+  }
+
+  /** Stop an object's pending read; its result, if any, is ignored. */
+  private invalidate(record: ObjectRecord) {
+    record.attempt++;
+    record.abort?.abort();
+    record.abort = null;
+  }
+
+  /**
+   * The object's bytes: cached, or read through the Worker. Bytes read are
+   * cached only while `current()` holds and the object is still listed.
+   */
+  private async fetchBytes(
+    objectId: string,
+    context: AttachmentContext,
+    signal: AbortSignal,
+    current: () => boolean,
+  ): Promise<Blob> {
+    const { accountId, service, noteId } = context;
+    const ticket = await this.hooks.cache.ticket(accountId);
+    const cached = await this.hooks.cache.read(accountId, objectId);
+    if (cached) return cached;
+    if (!service || !noteId) throw new AttachmentReadError("signed-out");
+    let blob: Blob;
+    try {
+      blob = await readAttachment(service, noteId, objectId, signal);
+    } catch (error) {
+      if (
+        current() &&
+        error instanceof AttachmentReadError &&
+        error.kind === "unavailable"
+      )
+        this.unreadable(objectId);
+      throw error;
+    }
+    if (ticket && current() && !this.gone(objectId))
+      void this.hooks.cache.store(accountId, objectId, blob, ticket);
+    return blob;
+  }
+
   private async load(objectId: string) {
     const record = this.records.get(objectId);
-    if (!record) return;
-    const attempt = ++record.attempt;
-    const late = () =>
-      this.records.get(objectId) !== record || record.attempt !== attempt;
+    if (!record || !this.alive) return;
+    this.invalidate(record);
+    const attempt = record.attempt;
+    const abort = new AbortController();
+    record.abort = abort;
     const context = this.context();
     if (!context) return this.set(objectId, "offline");
     if (this.gone(objectId)) return this.set(objectId, "unavailable");
+    const holds = this.fence(context);
+    const current = () =>
+      holds() &&
+      this.records.get(objectId) === record &&
+      record.attempt === attempt;
     this.set(objectId, "loading");
     try {
-      const blob = await this.bytes(objectId);
-      if (late()) return;
+      const blob = await this.fetchBytes(
+        objectId,
+        context,
+        abort.signal,
+        current,
+      );
+      if (!current()) return;
+      // Checked again now the bytes are here: the server may have taken the
+      // object from the note meanwhile.
+      if (this.gone(objectId)) return this.set(objectId, "unavailable");
       record.blob = blob;
       this.set(objectId, "shown");
     } catch (error) {
-      if (late()) return;
+      if (!current()) return;
       const kind = error instanceof AttachmentReadError ? error.kind : "failed";
-      // `unavailable` was recorded by `bytes`.
+      // `unavailable` was recorded by `fetchBytes`.
       if (kind === "signed-out") this.set(objectId, "offline");
       else if (kind === "failed") this.set(objectId, "failed");
+    } finally {
+      if (record.abort === abort) record.abort = null;
     }
+  }
+
+  private closeImage() {
+    if (!this.lightbox) return;
+    this.lightbox = null;
+    this.hooks.closeImage();
   }
 
   private set(objectId: string, status: ObjectStatus) {
     const record = this.records.get(objectId);
     if (!record) return;
     if (status !== "shown") record.blob = null;
+    if (status === "unavailable" && this.lightbox?.objectId === objectId)
+      this.closeImage();
     if (record.status === status && status !== "shown") return;
     record.status = status;
     for (const listener of record.listeners) listener();
@@ -603,15 +779,45 @@ interface UploadTask {
   sha256: string | null;
   objectId: string | null;
   grant: UploadGrant | null;
+  /** The service the upload's objects came from: they are released there. */
+  service: AttachmentService | null;
   /** Whether `files.cancelUpload` was already asked for this object. */
   released: boolean;
   cancelled: boolean;
+  /** In the note: its object is never released. */
+  landed: boolean;
   abort: AbortController | null;
   dom: HTMLElement;
 }
 
 const requestId = () => "upload-" + crypto.randomUUID();
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** `promise`, or a retryable failure once `ms` pass; `promise` runs on. */
+function within<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () =>
+        reject(
+          new UploadError(
+            "The server did not answer. Check the connection and retry.",
+            true,
+          ),
+        ),
+      ms,
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
 
 /** A file's name as sent: what the system gave it, or a plain default. */
 function uploadName(file: File) {
@@ -646,8 +852,10 @@ export class UploadController {
         sha256: null,
         objectId: null,
         grant: null,
+        service: null,
         released: false,
         cancelled: false,
+        landed: false,
         abort: null,
         dom: document.createElement("div"),
       };
@@ -784,18 +992,32 @@ export class UploadController {
       throw new UploadError("Files can be at most 25 MB.", false);
     this.show(task, "preparing");
     this.service(task);
+    // Taken now: the bytes are kept only if the account's cache was not
+    // cleared while the upload ran.
+    const ticket = await this.runtime.hooks.cache.ticket(task.accountId);
     task.sha256 ??= await sha256Hex(file);
     const noteId = await this.noteId(task);
     if (task.cancelled) throw new DOMException("Cancelled", "AbortError");
-    const ask = () =>
-      this.service(task).createUpload({
+    const ask = () => {
+      const service = this.service(task);
+      const request = task.requestId;
+      task.service = service;
+      const admission = service.createUpload({
         noteId,
         name: uploadName(file),
         mimeType: file.type,
         size: file.size,
         sha256: task.sha256!,
-        requestId: task.requestId,
+        requestId: request,
       });
+      // The admission stays this upload's however late it answers
+      // (review round 1, F7).
+      void admission.then(
+        (grant) => this.admitted(task, service, request, grant),
+        () => undefined,
+      );
+      return within(admission, service.admissionWaitMs ?? ADMISSION_WAIT_MS);
+    };
     let grant = await ask();
     task.objectId = grant.objectId;
     if (grant.state === "failed") {
@@ -822,11 +1044,13 @@ export class UploadController {
     }
     this.show(task, "finishing");
     // The bytes are here already: keep them so the picture shows at once.
-    void this.runtime.hooks.cache.store(
-      task.accountId,
-      grant.objectId,
-      file.slice(0, file.size, displayType(grant.mimeType)),
-    );
+    if (ticket)
+      void this.runtime.hooks.cache.store(
+        task.accountId,
+        grant.objectId,
+        file.slice(0, file.size, displayType(grant.mimeType)),
+        ticket,
+      );
     return grant;
   }
 
@@ -864,16 +1088,42 @@ export class UploadController {
       this.release(task);
       return;
     }
+    task.landed = true;
     view.dispatch(tr);
+  }
+
+  /**
+   * An admission answered. One that answers after its upload was removed,
+   * closed or started again is released, through the service that made it;
+   * one that answers after the upload stopped waiting gives Remove its
+   * object to release.
+   */
+  private admitted(
+    task: UploadTask,
+    service: AttachmentService,
+    request: string,
+    grant: UploadGrant,
+  ) {
+    if (grant.state === "failed" || task.landed) return;
+    const current = task.requestId === request;
+    if (current && !task.cancelled && this.tasks.has(task.id)) {
+      task.objectId ??= grant.objectId;
+      task.service ??= service;
+      return;
+    }
+    if (current) {
+      if (task.released && task.objectId === grant.objectId) return;
+      task.objectId = grant.objectId;
+      task.released = true;
+    }
+    void service.cancelUpload(grant.objectId).catch(() => undefined);
   }
 
   /** Ask the server to drop an object no note will use (best effort). */
   private release(task: UploadTask) {
-    if (!task.objectId || task.released) return;
+    if (!task.objectId || task.released || task.landed || !task.service) return;
     task.released = true;
-    const service = this.runtime.context()?.service;
-    if (service && service.accountId === task.accountId)
-      void service.cancelUpload(task.objectId).catch(() => undefined);
+    void task.service.cancelUpload(task.objectId).catch(() => undefined);
   }
 
   private fail(task: UploadTask, message: string, retryable: boolean) {
