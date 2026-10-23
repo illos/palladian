@@ -4,7 +4,8 @@
 // version and comparing it with the previous and the current one, paging,
 // Restore as a new note (the copy has the version's text, in the same
 // notebook or the person's default one; the original note, and another
-// person typing in it, are untouched), History held without a connection and
+// person typing in it, are untouched; a refusal reaches the panel showing the
+// version, or a toast), History held without a connection and
 // kept open from a row with a pending journal, and that a read-only
 // collaborator, or an editor whose access drops to read, never reaches
 // History. In-place restore was withdrawn after review round 5 (see the
@@ -21,7 +22,7 @@
 // URLs; `dev-target.mjs` checks them all before anything is provisioned.
 // SCREENSHOT_DIR, if set, receives pictures of the panel. HISTORY_E2E_STEPS
 // (comma-separated: list, compare, f3, f2, paging, reader, phone, new-note,
-// downgrade) runs only those steps after the setup. HISTORY_E2E_DEBUG logs
+// refused, downgrade) runs only those steps after the setup. HISTORY_E2E_DEBUG logs
 // page errors, failed requests and reloads.
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
@@ -129,7 +130,7 @@ async function convexGate(context) {
       const data = protocol(message);
       const path = data?.type === "Mutation" ? data.udfPath : null;
       if (path && holding.has(path))
-        held.push({ path, send: () => server.send(message) });
+        held.push({ path, args: data.args, send: () => server.send(message) });
       else server.send(message);
     });
   });
@@ -139,6 +140,10 @@ async function convexGate(context) {
     },
     held(path) {
       return held.filter((item) => item.path === path).length;
+    },
+    /** The arguments of the held mutations on `path`, oldest first. */
+    heldArgs(path) {
+      return held.filter((item) => item.path === path).map((item) => item.args);
     },
     release(path) {
       holding.delete(path);
@@ -780,6 +785,116 @@ try {
     await expect(editorC).toContainText("word2", { timeout: 20_000 });
     step(
       "Restore as a new note by an editor who cannot add notes to the notebook: the copy goes to his default notebook",
+    );
+  }
+
+  if (wanted("refused")) {
+    // Review round 8 (R8-1): a restore's refusal outlives the panel that
+    // started it. Cy may add notes to Ada's notebook, so his copy goes there;
+    // Ada lowers that access while the copy is held. His own grant on the note
+    // keeps his History open, so the server's refusal is real.
+    const cy = await convex(c, "query", "account:me", {});
+    const notebookId = (await convex(a, "query", "notes:get", { noteId }))
+      .summary.notebookId;
+    await convex(a, "mutation", "notebooks:update", {
+      notebookId,
+      name: "Ada's kitchen",
+    });
+    const member = (role) =>
+      convex(a, "mutation", "sharing:setNotebookMember", {
+        notebookId,
+        principalId: cy.id,
+        role,
+      });
+    // The sidebar's notebook (the phone sheet's copy is hidden).
+    const kitchen = c.getByRole("button", { name: /^Ada's kitchen/ });
+    const refusedText = "This action needs edit access to the notebook.";
+    const notesIn = async () =>
+      (
+        await convex(a, "query", "library:recent", {
+          notebookId,
+          limit: 100,
+          includeTrashed: true,
+        })
+      ).notes.length;
+    const notesBefore = await notesIn();
+    /** Cy confirms Restore as a new note on the oldest version; it is held. */
+    const startHeld = async (cyHistory) => {
+      await cyHistory
+        .getByRole("button", { name: "Restore as a new note…" })
+        .click();
+      await cyHistory.getByRole("button", { name: "Create note" }).click();
+      await expect
+        .poll(() => deskC.gate.held("notes:create"), { timeout: 10_000 })
+        .toBe(1);
+      assert.equal(
+        deskC.gate.heldArgs("notes:create")[0]?.[0]?.notebookId,
+        notebookId,
+        "Cy's copy goes to Ada's notebook",
+      );
+    };
+    const openHistory = async () => {
+      await c.getByRole("button", { name: "Note history" }).click();
+      const cyHistory = c.getByRole("dialog", { name: "History of Recipe" });
+      await expect(cyHistory.locator(".history-row").first()).toBeVisible({
+        timeout: 20_000,
+      });
+      await cyHistory.locator(".history-row").last().click();
+      return cyHistory;
+    };
+
+    // Start, close History, reopen the same version while the copy is held,
+    // then the server refuses it: the reopened panel says why.
+    await member("edit");
+    await expect(kitchen).toBeVisible({ timeout: 20_000 });
+    deskC.gate.hold("notes:create");
+    let cyHistory = await openHistory();
+    await startHeld(cyHistory);
+    await cyHistory.getByRole("button", { name: "Done" }).click();
+    await expect(cyHistory).toBeHidden();
+    cyHistory = await openHistory();
+    await expect(
+      cyHistory.getByRole("button", { name: "Creating…" }),
+    ).toBeDisabled();
+    await member("read");
+    deskC.gate.release("notes:create");
+    await expect(cyHistory.getByRole("alert")).toHaveText(refusedText, {
+      timeout: 20_000,
+    });
+    await expect(
+      cyHistory.getByRole("button", { name: "Create note" }),
+    ).toBeEnabled();
+    await shot(c, "desktop-refused-reopened");
+    await cyHistory.getByRole("button", { name: "Dismiss" }).click();
+    await expect(cyHistory.getByRole("alert")).toHaveCount(0);
+
+    // Start, close History, and the refusal arrives with no panel showing
+    // the version: a toast says why. (Cy's access to the notebook is removed
+    // and given back, so his app has seen it as editable again.)
+    await member(null);
+    await expect(kitchen).toHaveCount(0, { timeout: 20_000 });
+    await member("edit");
+    await expect(kitchen).toBeVisible({ timeout: 20_000 });
+    deskC.gate.hold("notes:create");
+    // The reopened panel still asks to confirm; Cancel, then start over.
+    await cyHistory.getByRole("button", { name: "Cancel" }).click();
+    await startHeld(cyHistory);
+    await cyHistory.getByRole("button", { name: "Done" }).click();
+    await expect(cyHistory).toBeHidden();
+    await member("read");
+    deskC.gate.release("notes:create");
+    await expect(c.locator(".toast", { hasText: refusedText })).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(
+      c.getByRole("dialog", { name: "History of Recipe" }),
+    ).toHaveCount(0);
+    // Neither restore made a note.
+    assert.equal(await notesIn(), notesBefore);
+    await member(null);
+    await expect(kitchen).toHaveCount(0, { timeout: 20_000 });
+    step(
+      "review R8-1: a refused restore says why in the History reopened on its version, or in a toast once History is closed",
     );
   }
 

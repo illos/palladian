@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { notesSchema } from "@palladian/notes-core/schema";
 import {
+  COPY_NEEDS_FILES_MESSAGE,
+  copyFailureMessage,
   copyNeedsFiles,
   isFilesOffRefusal,
   kindLabels,
@@ -190,5 +192,23 @@ describe("restoring a version as a new note while files are off (B1+B2)", () => 
     expect(
       isFilesOffRefusal({ code: "not_found", message: "Note not found." }),
     ).toBe(false);
+  });
+
+  test("a failed restore is worded the same for the panel and the toast", () => {
+    expect(
+      copyFailureMessage({
+        code: "invalid",
+        message: "File blocks are not enabled on this server yet.",
+      }),
+    ).toBe(COPY_NEEDS_FILES_MESSAGE);
+    expect(
+      copyFailureMessage({ code: "denied", message: "You can only read." }),
+    ).toBe("You can only read.");
+    expect(
+      copyFailureMessage({
+        code: "transient",
+        message: "Connection unavailable.",
+      }),
+    ).toBe("Connection unavailable.");
   });
 });

@@ -18,8 +18,8 @@ import type {
 } from "./cache";
 import { emptyDocument, validateCachedDocument } from "./document";
 import { smartDate } from "./dates";
-import { copyInSession, serverAnswered } from "./in-session";
-import { CopyKeys } from "./copy-keys";
+import { copyInSession } from "./in-session";
+import { CopyKeys, restoreCopy, type VersionCopies } from "./copy-keys";
 import { EditorSurface } from "./EditorSurface";
 import { Icon } from "./Icons";
 import { Appearance } from "./Appearance";
@@ -1369,72 +1369,82 @@ export function App({
     if (menuStale) setMenu(null);
   }, [menuStale]);
   /**
-   * One creation key per Restore-as-new-note operation until the server
-   * answers (`CopyKeys`, History review round 6, R6-2), kept here so it
-   * outlives the History panel.
+   * Restore-as-new-note operations (`CopyKeys`: one creation key each until
+   * the server answers, and the last failure's notice; History review rounds
+   * 6 and 8), kept here so they outlive the History panel.
    */
   const [copyKeys] = useState(() => new CopyKeys());
   const [, setCopiesChanged] = useState(0);
-  function copyState(noteId: string, revision: number) {
-    return accountId ? copyKeys.state(accountId, noteId, revision) : null;
+  /** A note's operations, for its History panel, in this account. */
+  function versionCopies(noteId: string): VersionCopies {
+    const account = accountId;
+    return {
+      state: (revision) =>
+        account ? copyKeys.state(account, noteId, revision) : null,
+      notice: (revision) =>
+        account ? copyKeys.notice(account, noteId, revision) : null,
+      dismiss: (revision) => {
+        if (!account) return;
+        copyKeys.dismiss(account, noteId, revision);
+        setCopiesChanged((count) => count + 1);
+      },
+      show: (revision) =>
+        account ? copyKeys.show(account, noteId, revision) : () => {},
+      restore: (doc, revision, describe) =>
+        restoreAsNewNote(noteId, revision, doc, describe),
+    };
   }
 
   /**
    * Restore as a new note (after review round 5): a new note with the
    * version's text, in the same notebook if this person can add notes there,
    * otherwise their default notebook, as Duplicate does. The original note,
-   * and anyone typing in it, is not touched. Made in this account and session
-   * only, and shown only there (`copyInSession`, review rounds 6 and 7):
-   * closing History, the toast, its Open and `failed` (the panel's notice)
-   * each check the session as they happen.
+   * and anyone typing in it, is not touched. `restoreCopy` runs it: one key
+   * per operation, made and shown only in this session (closing History, the
+   * toast and its Open check the session as they happen), and a failure goes
+   * to the History panel showing the version by then, or else to a toast.
    */
   async function restoreAsNewNote(
     noteId: string,
     revision: number,
     doc: string,
-    failed: (failure: unknown) => void,
+    describe: (failure: unknown) => string,
   ) {
-    const current = sessionTicket();
     const account = accountId;
-    if (!account || !liveConnected || !current())
-      return failed(new Error("Not connected."));
-    const key = copyKeys.start(account, noteId, revision);
-    if (!key) return;
-    setCopiesChanged((count) => count + 1);
+    if (!account) return;
     const row = rows.find((r) => r.accountId === account && r.id === noteId);
     const book = notebooks.find((n) => n.id === row?.notebookId);
     const notebookId =
       book && book.role !== "read"
         ? book.id
         : (liveState.profile?.defaultNotebookId ?? undefined);
-    const outcome = await copyInSession(
-      current,
-      async () => {
+    await restoreCopy({
+      keys: copyKeys,
+      account,
+      noteId,
+      revision,
+      current: sessionTicket(),
+      connected: liveConnected,
+      prepare: async () => {
         const { duplicateNote } = await import("./note-tools");
         const client = liveRef.current?.client;
         return client ? { duplicateNote, client } : null;
       },
       // Naming the note it comes from proves access to any attachments in
       // the version: an editor may copy what the note's history holds (B1).
-      ({ duplicateNote, client }) =>
+      dispatch: ({ duplicateNote, client }, key) =>
         duplicateNote(client, account, doc, notebookId, noteId, key),
-      (id) => void openRemote(id),
-      {
-        made: (_, open) => {
-          setDialog((shown) =>
-            shown?.kind === "history" && shown.noteId === noteId ? null : shown,
-          );
-          toast("Restored as a new note", { label: "Open", run: open });
-        },
-        failed,
+      open: (id) => void openRemote(id),
+      made: (_, open) => {
+        setDialog((shown) =>
+          shown?.kind === "history" && shown.noteId === noteId ? null : shown,
+        );
+        toast("Restored as a new note", { label: "Open", run: open });
       },
-    );
-    // Once the server has answered (made, or refused, which makes nothing)
-    // a later restore may use a new key; otherwise the key stays for the
-    // retry. Bookkeeping only: it does not change the screen.
-    if (serverAnswered(outcome)) copyKeys.answered(account, noteId, revision);
-    else copyKeys.unanswered(account, noteId, revision);
-    setCopiesChanged((count) => count + 1);
+      describe,
+      toast: (message) => toast(message),
+      changed: () => setCopiesChanged((count) => count + 1),
+    });
   }
   // History closes once the note no longer offers it to this person: a lost
   // edit role, Trash, or the note gone. The note as it is now comes from its
@@ -2165,10 +2175,7 @@ export function App({
               title={dialog.title}
               connected={liveConnected}
               onClose={() => setDialog(null)}
-              copyState={(revision) => copyState(dialog.noteId, revision)}
-              onRestoreAsNew={(doc, revision, failed) =>
-                restoreAsNewNote(dialog.noteId, revision, doc, failed)
-              }
+              copies={versionCopies(dialog.noteId)}
             />
           </Suspense>
         </PanelBoundary>

@@ -320,6 +320,22 @@
   color: var(--ink);
   border: 1px solid var(--border);
 }
+/* A failed restore's notice, kept by App until dismissed or retried. */
+.history-notice {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 0 0 10px;
+}
+.history-notice .error {
+  flex: 1;
+  margin: 0;
+}
+.history-actions .history-notice button.link-button {
+  padding: 0 4px;
+  background: transparent;
+  color: var(--accent);
+}
 
 @media (max-width: 760px) {
   .history-panel {

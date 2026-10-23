@@ -105,3 +105,12 @@ export function isFilesOffRefusal(error: { code: string; message: string }) {
     error.code === "invalid" && /not enabled on this server/.test(error.message)
   );
 }
+
+/**
+ * A failed restore in words, for the History panel's notice or App's toast:
+ * the files-off refusal as `COPY_NEEDS_FILES_MESSAGE`, anything else as the
+ * server or transport says it.
+ */
+export function copyFailureMessage(error: { code: string; message: string }) {
+  return isFilesOffRefusal(error) ? COPY_NEEDS_FILES_MESSAGE : error.message;
+}

@@ -11,7 +11,7 @@ import { parseStoredDoc } from "@palladian/notes-core/document";
 import { plainText } from "@palladian/notes-core/projection";
 import { notesSchema } from "@palladian/notes-core/schema";
 import { DOMSerializer, type Node as ProseMirrorNode } from "prosemirror-model";
-import type { CopyState } from "./copy-keys";
+import type { VersionCopies } from "./copy-keys";
 import { Icon } from "./Icons";
 import { fileWritesEnabled } from "./file-capability";
 import { timeRange } from "./dates";
@@ -19,9 +19,9 @@ import type { LiveController } from "./live";
 import { transportError } from "./live";
 import { changed, diffText, type TextDiff } from "./text-diff";
 import {
+  copyFailureMessage,
   copyNeedsFiles,
   COPY_NEEDS_FILES_MESSAGE,
-  isFilesOffRefusal,
   kindLabels,
   pageChain,
   pageKey,
@@ -50,19 +50,10 @@ const compareLabels: Record<Compare, string> = {
   current: "vs Current",
 };
 
-/**
- * Creates a new note from a version's stored document (App does this, with
- * one creation key per version until answered: History review round 6). A
- * failure is reported through `failed`, and only while the session it
- * started in holds (round 7); on success App closes History.
- */
-type RestoreAsNew = (
-  doc: string,
-  revision: number,
-  failed: (failure: unknown) => void,
-) => Promise<void>;
-/** Whether a copy of a version is on its way, or sent without an answer. */
-type CopyStateOf = (revision: number) => CopyState;
+/** A failed restore in words; the same for the notice and the toast. */
+function describeFailure(failure: unknown) {
+  return copyFailureMessage(transportError(failure));
+}
 
 type Current = { doc: string; revision: number } | null | undefined;
 
@@ -71,18 +62,16 @@ export default function HistoryPanel({
   noteId,
   title,
   connected,
-  copyState,
+  copies,
   onClose,
-  onRestoreAsNew,
 }: {
   live: LiveController;
   noteId: string;
   title: string;
   /** Signed in and connected now: creating a note needs the server. */
   connected: boolean;
-  copyState: CopyStateOf;
+  copies: VersionCopies;
   onClose: () => void;
-  onRestoreAsNew: RestoreAsNew;
 }) {
   return (
     <ConvexProvider client={live.client}>
@@ -90,9 +79,8 @@ export default function HistoryPanel({
         noteId={noteId as Id<"notes">}
         title={title}
         connected={connected}
-        copyState={copyState}
+        copies={copies}
         onClose={onClose}
-        onRestoreAsNew={onRestoreAsNew}
       />
     </ConvexProvider>
   );
@@ -102,16 +90,14 @@ function History({
   noteId,
   title,
   connected,
-  copyState,
+  copies,
   onClose,
-  onRestoreAsNew,
 }: {
   noteId: Id<"notes">;
   title: string;
   connected: boolean;
-  copyState: CopyStateOf;
+  copies: VersionCopies;
   onClose: () => void;
-  onRestoreAsNew: RestoreAsNew;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -162,9 +148,8 @@ function History({
               version={selected}
               current={current}
               connected={connected}
-              copy={copyState(selected.revision)}
+              copies={copies}
               onBack={() => setSelected(null)}
-              onRestoreAsNew={onRestoreAsNew}
             />
           ) : (
             <p className="history-empty">
@@ -281,17 +266,15 @@ function VersionView({
   version,
   current,
   connected,
-  copy,
+  copies,
   onBack,
-  onRestoreAsNew,
 }: {
   noteId: Id<"notes">;
   version: Version;
   current: Current;
   connected: boolean;
-  copy: CopyState;
+  copies: VersionCopies;
   onBack: () => void;
-  onRestoreAsNew: RestoreAsNew;
 }) {
   const [compare, setCompare] = useState<Compare>("version");
   const shown = useQuery(api.history.read, {
@@ -411,10 +394,8 @@ function VersionView({
         doc={shown?.doc ?? null}
         connected={connected}
         needsFiles={needsFiles}
-        copy={copy}
-        onRestoreAsNew={(doc, failed) =>
-          onRestoreAsNew(doc, version.revision, failed)
-        }
+        revision={version.revision}
+        copies={copies}
       />
     </>
   );
@@ -468,40 +449,38 @@ function DiffView({ diff }: { diff: TextDiff }) {
  */
 function NewNoteControls({
   doc,
+  revision,
   connected,
   needsFiles,
-  copy,
-  onRestoreAsNew,
+  copies,
 }: {
   /** The version's stored document, once read. */
   doc: string | null;
+  revision: number;
   connected: boolean;
   /** The version has file content the server cannot copy yet. */
   needsFiles: boolean;
-  /** A copy of this version on its way, or sent without an answer. */
-  copy: CopyState;
-  onRestoreAsNew: (
-    doc: string,
-    failed: (failure: unknown) => void,
-  ) => Promise<void>;
+  copies: VersionCopies;
 }) {
+  /** A copy of this version on its way, or sent without an answer. */
+  const copy = copies.state(revision);
+  /** Why the last restore of this version made no note (kept by App). */
+  const notice = copies.notice(revision);
   const [confirming, setConfirming] = useState(copy === "sending");
   const [sending, setBusy] = useState(false);
   // Also while a copy sent before History was closed is on its way.
   const busy = sending || copy === "sending";
-  const [notice, setNotice] = useState<string | null>(null);
+  // While this version is shown here, its restores' failures come here, even
+  // one started from a panel since closed (review round 8, R8-1).
+  const latest = useRef(copies);
+  latest.current = copies;
+  useLayoutEffect(() => latest.current.show(revision), [revision]);
   async function run() {
     if (!doc || busy) return;
     setBusy(true);
-    setNotice(null);
     try {
-      // On success App closes History; otherwise the panel stays usable.
-      await onRestoreAsNew(doc, (failure) => {
-        const error = transportError(failure);
-        setNotice(
-          isFilesOffRefusal(error) ? COPY_NEEDS_FILES_MESSAGE : error.message,
-        );
-      });
+      // On success App closes History; a failure comes back as the notice.
+      await copies.restore(doc, revision, describeFailure);
     } finally {
       setBusy(false);
     }
@@ -509,9 +488,18 @@ function NewNoteControls({
   return (
     <footer className="history-actions">
       {notice && (
-        <p role="alert" className="error">
-          {notice}
-        </p>
+        <div className="history-notice">
+          <p role="alert" className="error">
+            {notice}
+          </p>
+          <button
+            type="button"
+            className="link-button"
+            onClick={() => copies.dismiss(revision)}
+          >
+            Dismiss
+          </button>
+        </div>
       )}
       {!connected && (
         <p role="status" className="history-legend">
@@ -559,7 +547,7 @@ function NewNoteControls({
           className="history-restore"
           disabled={!connected || !doc || needsFiles}
           onClick={() => {
-            setNotice(null);
+            copies.dismiss(revision);
             setConfirming(true);
           }}
         >
