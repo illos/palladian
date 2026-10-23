@@ -187,6 +187,7 @@ try {
   const menu = page.getByRole("dialog", { name: "Actions for Alpha" });
   await shot(page, "desktop-row-menu");
   await expect(menu.getByRole("menuitem")).toHaveText([
+    "Pin",
     "Duplicate",
     "Move…",
     "Share…",
@@ -385,9 +386,27 @@ try {
   const touch = await fingers(phone);
   const phoneRow = (name) =>
     phone.getByRole("button", { name: new RegExp(`^${name}\\b`) }).first();
-  await expect(phoneRow("Echo")).toBeVisible({ timeout: 20_000 });
+  // Rows by note ID: trashing Echo right after typing leaves a recovered
+  // copy of it (the sync core keeps both versions), so its name is not unique.
+  const phoneNote = (id) =>
+    phone.locator(`.note-row-wrap[data-note-id="${id}"] .note-row`);
+  await expect(phoneNote(ids.Echo)).toBeVisible({ timeout: 20_000 });
+  // The recovered copy of Echo, when there is one, arrives on its own time;
+  // wait until the list stops changing so rows do not move under a swipe.
+  let rowsBefore = -1;
+  await expect
+    .poll(
+      async () => {
+        const now = await phone.locator(".note-row").count();
+        const stable = now === rowsBefore;
+        rowsBefore = now;
+        return stable;
+      },
+      { timeout: 30_000, intervals: [1_500] },
+    )
+    .toBe(true);
 
-  let at = await center(phoneRow("Echo"));
+  let at = await center(phoneNote(ids.Echo));
   if (shots) await touch.hold(at.x, at.y, -230, "phone-full-swipe");
   await touch.swipe(at.x, at.y, -260);
   await expect(phone.getByText("Moved to Trash")).toBeVisible({
@@ -399,7 +418,7 @@ try {
   ).not.toContainText("In Trash", { timeout: 20_000 });
   step("phone: a full left swipe moves to Trash; Undo restores");
 
-  at = await center(phoneRow("Echo"));
+  at = await center(phoneNote(ids.Echo));
   await touch.swipe(at.x, at.y, -120);
   const share = phone.locator(".swipe-actions.trailing").getByRole("button", {
     name: "Share",
@@ -416,7 +435,7 @@ try {
   await phone.getByRole("button", { name: "Done" }).click();
   step("phone: a short left swipe rests on Move and Share");
 
-  at = await center(phoneRow("Echo"));
+  at = await center(phoneNote(ids.Echo));
   await touch.swipe(at.x, at.y, 120);
   await phone
     .locator(".swipe-actions.leading")
@@ -462,6 +481,12 @@ try {
 
   await phone.getByRole("button", { name: "Open navigation" }).first().click();
   await phone.getByRole("button", { name: "All Notes" }).click();
+  // Clear of toasts and the bottom bar: the list header (with Sort) is
+  // taller since A6, which puts Charlie near the bottom of the screen.
+  await expect(phone.locator(".toast")).toHaveCount(0, { timeout: 8_000 });
+  await phoneRow("Charlie").evaluate((row) =>
+    row.scrollIntoView({ block: "center" }),
+  );
   at = await center(phoneRow("Charlie"));
   await touch.dragAndHold(at.x, at.y, -40, 1000);
   await expect(phone.locator(".swipe-actions")).toHaveCount(0);

@@ -129,6 +129,8 @@ Pending: the owner's iPhone checks of swipes, long press, the action sheet, navi
 
 ## Found during this work (not changed)
 
+- **A recovered copy after trashing right after typing (found 2026-10-23).** The open note is closed first, so its typing is journaled before Trash. If a push is still in flight, the sync core can later find a saved draft for a note that is in Trash, and keep both versions: a copy of the note appears in its notebook. After Undo, the person sees the note twice. No text is lost. This is the sync core's conflict-copy recovery (fundamentals) and is reported to the owner with the other sync items. `actions-e2e.mjs` now finds rows by note ID, because of this.
+
 A new note created **offline** and left blank stays in the list as "Untitled · Empty note · Local draft", including after a reload, and would be created on the server once online. Deltos discarded blank new notes. Online, a blank new note is never created. This is the draft journal's behaviour (fundamentals) and is reported to the owner with the two save issues from the Settings work.
 
 ## Evidence
