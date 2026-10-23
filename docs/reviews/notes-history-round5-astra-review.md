@@ -1,19 +1,23 @@
-# Note history (A4) — round 5 independent review
+# Note history — independent review, round 5
 
-Reviewer: GPT-6-Astra (Codex, high reasoning), delegated read-only on 2026-10-23. Reviewed `df0db7e..813dad2` on `feat/notes-history`.
-
-Recorded as relayed by the owner's coordinator ("Verbatim summary"); the coordinator's decision that followed it is under Design change after review round 5 in `notes-history-implementation.md`.
+Reviewer: GPT-6-Astra (Codex, high reasoning), delegated read-only on 2026-10-23. Reviewed `df0db7e..813dad2` (and `0042ef8..813dad2`) on `feat/notes-history`. Report recorded verbatim below; responses are in `notes-history-implementation.md` (in-place restore was withdrawn after this round).
 
 ---
 
-Round 5 of the A4 review (`df0db7e..813dad2`) came back CHANGES NEEDED with four more blocking findings in the restore keeper. Verbatim summary:
+CHANGES NEEDED
 
-- **R5-1:** the 10-minute timeout releases editors before the restore arrives.
-- **R5-2:** unreadable or lost storage permits editing.
-- **R5-3:** another window's refusal erases an unresolved or applied restore.
-- **R5-4:** expiry is not atomic.
-- **R5-5:** a delayed sign-out can clear a newer account.
-- **R5-6:** IndexedDB connection recovery is incomplete.
-- **R5-7:** the `account` precondition and the `channel.ts` getter are sound; the D28 exception is unapproved.
+1. **R5-1 — blocking: the ten-minute timeout releases editors before arrival.** [restore-keeper.ts:94](/srv/presidium/projects/palladian/code/.worktrees/history/apps/notes/src/restore-keeper.ts:94) ignores an applied restore once its timestamp expires, regardless of `collabVersion`. A local probe using the actual `NoteChannel` reproduced: timeout → editing resumes → new typing → delayed restore deletes that typing and its pending step. The unit test explicitly expects this unsafe release. **Fix:** release only after that editor incorporates the revision or safely reloads current content; elapsed time must not authorize editing.
 
-In-place Restore cannot be made safe in app code alone: whole-document replacement dropping unsent typing is the fundamentals issue the owner hasn't approved fixing. **Decision: switch A4 to "Restore as a new note"** until a fundamentals fix exists.
+2. **R5-2 — blocking: unreadable or lost storage permits editing.** [restore-keeper.ts:152](/srv/presidium/projects/palladian/code/.worktrees/history/apps/notes/src/restore-keeper.ts:152) makes an initial failed read `unavailable`, while subsequent failures retain stale `ready` state. Neither necessarily holds editing at [line 75](/srv/presidium/projects/palladian/code/.worktrees/history/apps/notes/src/restore-keeper.ts:75). Probes found no hold despite a durable pending record in both cases. Simulated database deletion also produced zero records and no hold while the original request remained in flight. **Fix:** preserve active operation holds independently, distinguish unavailable reads from confirmed absence, and require recovery/reconciliation before releasing affected editors. Successful writes in private browsing cannot establish survival after storage disappears.
+
+3. **R5-3 — blocking: another window’s refusal can erase an unresolved or applied restore.** [restore-send.ts:31](/srv/presidium/projects/palladian/code/.worktrees/history/apps/notes/src/restore-send.ts:31) classifies authentication/access failures as `refused`; [restore-keeper.ts:255](/srv/presidium/projects/palladian/code/.worktrees/history/apps/notes/src/restore-keeper.ts:255) then deletes the shared record. These checks precede receipt lookup, so refusal does not establish historical non-application. A two-keeper probe confirmed that a refused replay removes the original window’s hold while its request remains in flight; its later success cannot recreate the deleted record. **Fix:** retain uncertain outcomes, including authentication failures, and make settlement monotonic: an unconfirmed refusal must never erase an applied revision or cancel another outstanding request.
+
+4. **R5-4 — should fix: expiry is not an atomic read–modify–write.** [restore-keeper.ts:196](/srv/presidium/projects/palladian/code/.worktrees/history/apps/notes/src/restore-keeper.ts:196) chooses expired IDs from memory, then deletes them unconditionally. A probe refreshed `appliedAt` through another connection immediately before expiry; the refreshed record was still deleted. Individual inserts and applied updates are transactional, but this overall operation is not. **Fix:** evaluate eligibility and delete within the same IndexedDB readwrite transaction, alongside R5-1’s safe retention policy.
+
+5. **R5-5 — blocking: delayed sign-out can clear a newer account.** [App.tsx:1510](/srv/presidium/projects/palladian/code/.worktrees/history/apps/notes/src/App.tsx:1510) waits before invoking the session controller’s logout fence, then calls `session.logout()` without checking the originating account/generation. A probe using the exact callback and real `SessionController` switched A → B during settlement; A’s pending sign-out subsequently signed out and cleared B. **Fix:** bind sign-out to its initiating session and establish logout intent before asynchronous settlement. Test account switching during both settlement and timeout.
+
+6. **R5-6 — should fix: database connection recovery is incomplete.** [restore-store.ts:98](/srv/presidium/projects/palladian/code/.worktrees/history/apps/notes/src/restore-store.ts:98) handles `versionchange`, but not abnormal `close`. After forced closure, repeated reads reused the closed connection and returned `InvalidStateError`. Upgrading to version 2 correctly released the old connection, but subsequent version-1 opens returned `VersionError`. The blocked handler also rejects without closing a later successful connection. **Fix:** invalidate closed connections, close abandoned late opens, and expose an explicit upgrade/reload recovery state.
+
+7. **R5-7 — note: several fixes are sound, but acceptance remains gated.** The account precondition and client session checks are correctly placed; receipts prevent duplicate application for authenticated same-account replays. [channel.ts:120](/srv/presidium/projects/palladian/code/.worktrees/history/apps/notes/src/channel.ts:120) is genuinely read-only, and reconnect does not reset its editor state. The replay-refusal wording is corrected. The [D28 exception](/srv/presidium/projects/palladian/code/.worktrees/history/docs/reviews/notes-history-implementation.md:102) clearly states fields and proposed retention, but remains unapproved. **Required follow-up:** record the owner’s decision and rerun service evidence with `account` intact after updating dev; deployment alone does not resolve the findings above.
+
+Validation passed: 20 Node tests, 275 frontend unit tests, 125 backend tests, both typechecks, 96 Chromium browser tests with 18 skips, and two offline tests. Targeted probes used mocked transport, fake-indexeddb, and actual channel/session code. No deployments or actual services were contacted; real iPhone and WebKit checks remain unperformed. The worktree remains clean.
