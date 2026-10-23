@@ -12,6 +12,10 @@
 //     finalizes through `npx convex run --identity` as the file service, and
 //     places the bytes in the local bucket with `wrangler r2 object put`.
 //
+//   EXPECT_FILES_DISABLED=1: the deployment has FILES_WRITES_ENABLED off;
+//     the script checks that file writes are refused and reads still work,
+//     then stops (review round 3).
+//
 // Prints only non-secret progress. Creates disposable accounts each run.
 import { execFile } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -29,6 +33,7 @@ const SITE_ORIGIN = process.env.SITE_ORIGIN ?? "http://localhost:5178";
 const ISSUER = process.env.AGENT_JWT_ISSUER ?? "http://localhost:8787";
 const TRUSTED = process.env.SERVICE_KEY_TRUSTED !== "0";
 const R2_PERSIST = process.env.R2_PERSIST_TO;
+const GATE_OFF = process.env.EXPECT_FILES_DISABLED === "1";
 const BACKEND_DIR =
   process.env.NOTES_BACKEND_DIR ??
   new URL("../../notes-backend", import.meta.url).pathname;
@@ -213,7 +218,73 @@ async function upload(granted, bytes) {
   assert(done?.status === "ready", "finalized as the file service");
 }
 
+/** With FILES_WRITES_ENABLED off: file writes refused, everything else fine. */
+async function gateOff() {
+  log(`worker ${WORKER}, convex ${CONVEX_URL}, files expected off`);
+  const ada = await createPerson("Ada");
+  const refused = /not enabled/;
+  const note = await ada.client.mutation(api.notes.createFromMarkdown, {
+    markdown: "Gate check\n\nPlain text and ![web](https://example.com/w.png)",
+  });
+  log("plain notes, including web images without a width, still save");
+  await expectError(
+    ada.client.mutation(api.files.createUpload, {
+      noteId: note.noteId,
+      name: "a.png",
+      mimeType: "image/png",
+      size: PIXEL.length,
+      sha256: sha256(PIXEL),
+    }),
+    refused,
+    "upload tickets are refused",
+  );
+  await expectError(
+    ada.client.mutation(api.notes.createFromMarkdown, {
+      markdown: "Sized\n\n![x](https://example.com/x.png){width=300}",
+    }),
+    refused,
+    "an image width is refused",
+  );
+  await expectError(
+    ada.client.mutation(api.notes.edit, {
+      noteId: note.noteId,
+      edits: [
+        {
+          type: "append",
+          markdown: "[a.pdf](attachment:k57a1b2c3d4e5f6g7h8j9k0m1n2p3q4r)",
+        },
+      ],
+    }),
+    refused,
+    "a file block is refused",
+  );
+  const response = await put(
+    "k57a1b2c3d4e5f6g7h8j9k0m1n2p3q4r",
+    "t".repeat(43),
+    PIXEL,
+  );
+  assert(
+    response.status === 403,
+    `the Worker answers 403 (${response.status})`,
+  );
+  log(
+    "uploads, widths and file blocks are refused with a clear message; the Worker answers 403",
+  );
+  const read = await ada.client.query(api.notes.readMarkdown, {
+    noteId: note.noteId,
+    format: "markdown",
+  });
+  assert(read.markdown.includes("Plain text"), "the note reads back");
+  await ada.client.mutation(api.notes.edit, {
+    noteId: note.noteId,
+    edits: [{ type: "append", markdown: "More text." }],
+  });
+  log("reads and ordinary edits are unaffected");
+  log("PASS (files off)");
+}
+
 async function main() {
+  if (GATE_OFF) return gateOff();
   log(
     `worker ${WORKER}, convex ${CONVEX_URL}, service key ${TRUSTED ? "trusted" : "not trusted"}`,
   );
