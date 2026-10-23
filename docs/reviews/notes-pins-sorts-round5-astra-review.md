@@ -1,0 +1,20 @@
+# Pins and sort orders — independent review, round 5
+
+Reviewer: GPT-6-Astra (Codex, high reasoning), delegated read-only on 2026-10-23. Reviewed `058e0c5..8bd5439` and the whole A6 range `5211e06..8bd5439` on `feat/notes-pins-sorts`. Report recorded verbatim below; responses are in `notes-pins-sorts-implementation.md`.
+
+---
+
+ACCEPTED — ready to merge. No blocking or should-fix findings in `058e0c5..8bd5439` or the complete A6 range.
+
+1. **R5-1 — note: multi-batch reorders remain non-atomic.** [note-tools.ts:72](/srv/presidium/projects/palladian/code/.worktrees/pins-sorts/apps/notes/src/note-tools.ts:72) submits every batch before awaiting results. A limits-enabled local probe rejected batch 2 of 3: batches 1 and 3 committed, leaving 101 positions and version 2. The operation rejected, and [App.tsx:827](/srv/presidium/projects/palladian/code/.worktrees/pins-sorts/apps/notes/src/App.tsx:827) removes its overlay; subsequent snapshots expose the partial arrangement. This is acceptable for personal ordering metadata, but does not provide rollback or atomic ordering across devices. **Follow-up:** document partial completion and retain this regression test.
+
+2. **R5-2 — note: retain tests for the replacement ordering contract.** The old queue test was removed; committed tests do not directly protect the new batching/reconnect behavior. Local probes verified adjacent batch submission, later actions starting despite an unresolved earlier acknowledgement, maximum-version selection, and SDK restart/resume order. **Follow-up:** add these cases around [note-tools.ts:65](/srv/presidium/projects/palladian/code/.worktrees/pins-sorts/apps/notes/src/note-tools.ts:65). Also make [arrangement.test.ts:817](/srv/presidium/projects/palladian/code/.worktrees/pins-sorts/apps/notes-backend/tests/arrangement.test.ts:817) explicitly assert that the stale row sorts first; my independent probe enforced that condition and passed.
+
+The round-4 fixes are correct in the reviewed paths:
+
+- **Account isolation:** all three public mutations check the captured account immediately after authentication, including unpinning ([arrangement.ts:222](/srv/presidium/projects/palladian/code/.worktrees/pins-sorts/apps/notes-backend/convex/arrangement.ts:222), lines 261 and 312). Authorization still derives from the authenticated principal. The app uses Better Auth’s `user.id` ([auth-service.ts:24](/srv/presidium/projects/palladian/code/.worktrees/pins-sorts/apps/notes/src/auth-service.ts:24)); account creation stores that same value. Cross-account rejection tests pass, and a separate-session/same-user probe accepted legitimate writes.
+- **Mutation ordering:** reliance on Convex is sound here. The installed SDK preserves insertion order on restart/resume and sends authentication before buffered mutations. The server uses a sequential mutation queue; this also matches the documented [execution guarantee](https://docs.convex.dev/functions/mutation-functions) and [retry guarantee](https://docs.convex.dev/client/react/overview#retries). Authentication changes do not reorder requests; the new account precondition prevents replay into another account.
+- **Duplicates:** oldest-row selection agrees with writes, and exactly 20 extras are repaired while 21 are refused ([arrangement.ts:199](/srv/presidium/projects/palladian/code/.worktrees/pins-sorts/apps/notes-backend/convex/arrangement.ts:199), line 329). Both boundary tests and the forced reverse-notebook-order probe passed.
+- **Call budget:** unchanged. Instrumented `mine` used **3,005** main-database reads. Conservative bounds remain **308 / 207 / 2,911** for pin/order/positions, plus two authentication lookups; cleanup remains three. Duplicate repair reads one additional document per entry, without adding query calls.
+
+Validation passed: **20 session tests, 122 app tests, 121 backend tests, both typechecks, 68 Chromium browser cases, two offline cases, and six targeted probes**. Browser suites skipped 18 cases. Probes used mocks and `convex-test`; no actual backend services, WebKit, or real iPhone tested. Worktree unchanged at `8bd5439`; no commits, pushes, or deployments.

@@ -289,7 +289,7 @@ Deltos reference: `views/NavContent.tsx`, `components/NotebookMenuBody.tsx`, `Co
 
 ### A6. Pinning and sort orders (M, small backend)
 
-Implemented 2026-10-22, in review (`docs/reviews/notes-pins-sorts-implementation.md`). Custom order uses a drag handle with arrow keys instead of long-press-and-move, and the order is a select in the list header.
+Implemented 2026-10-22 and accepted 2026-10-23 after five independent review rounds (`docs/reviews/notes-pins-sorts-implementation.md`). Custom order uses a drag handle with arrow keys instead of long-press-and-move, and the order is a select in the list header.
 
 Owner decision D102 brings both back. Deltos reference: `lib/noteSort.ts`, `db/mutate.ts` (pin), `components/NotebookMenuBody.tsx` (Sort), `lib/dnd/customReorderImpl.tsx`, `lib/customOrderReorder.ts`; ROAD-0019; GOTCHA-0035 to GOTCHA-0038.
 

@@ -814,24 +814,35 @@ describe("arrangement", () => {
     const archive = await ada.as.mutation(api.notebooks.create, {
       name: "Archive",
     });
-    // The oldest row is the note's position; a later stale row sits in a
-    // notebook that sorts first.
+    // The note lives in the notebook whose ID sorts later; its oldest row is
+    // there. A newer, stale row sits in the notebook that sorts first, so a
+    // read in notebook order would meet it first.
+    const [earlier, later] =
+      archive < ada.notebookId
+        ? [archive, ada.notebookId]
+        : [ada.notebookId, archive];
+    if (later === archive)
+      await ada.as.mutation(api.lifecycle.move, {
+        noteId: first,
+        notebookId: archive,
+      });
     await t.run(async (ctx) => {
       await ctx.db.insert("notePositions", {
         principalId: ada.id,
-        notebookId: ada.notebookId,
+        notebookId: later,
         noteId: first,
         key: "F",
       });
       await ctx.db.insert("notePositions", {
         principalId: ada.id,
-        notebookId: archive,
+        notebookId: earlier,
         noteId: first,
         key: "k",
       });
     });
+    expect(earlier < later).toBe(true);
     expect((await ada.as.query(api.arrangement.mine, {})).positions).toEqual([
-      { notebookId: ada.notebookId, noteId: first, key: "F" },
+      { notebookId: later, noteId: first, key: "F" },
     ]);
   });
 
