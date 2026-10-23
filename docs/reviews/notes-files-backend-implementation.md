@@ -236,6 +236,16 @@ Clearing the attachment cache at sign-out (D28) and the absence of offline downl
 - **Not changed:** the root `pnpm lint` (the shelved platform's boundary check) fails on `main` too: it flags every `notes-core` file that imports ProseMirror (22 findings on `main`; this branch adds 8 of the same kind, in `attachments.ts` and its tests). The notes packages do not use that rule.
 - **Not available:** the private key matching the dev deployment's `AGENT_JWT_JWKS`, so a local Worker cannot sign file-service JWTs that dev accepts. I did not change dev's trusted keys. The dev run below works around this and says how.
 
+## Review round 6: accepted
+
+Report: `notes-files-backend-round6-astra-review.md`. The verdict is ACCEPTED: ready to merge and deploy with the gate off, with no fixes required. The notes confirm:
+
+- The gate comparisons are correct, checked against a 952-case matrix loaded with the `0042ef8` schema.
+- Refusing the cut works. Deliberate deletion while the gate is off cannot be undone.
+- HTML widths round-trip safely.
+- The documented residual limitations remain: the collaborator and gate-change race that blocks a channel, and large-history reads. Both need separately reviewed fundamentals work.
+- Still pending: the iPhone edit-menu Cut and Paste.
+
 ## Deploying (not done; for whoever deploys after review)
 
 Follow [Files gate and rollout](#files-gate-and-rollout-reviews-r3-3-to-r5). In detail:

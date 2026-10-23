@@ -1,0 +1,17 @@
+# Files backend — independent review, round 6
+
+Reviewer: GPT-6-Astra (Codex, high reasoning), delegated read-only on 2026-10-23. Reviewed `63d5619..4c118b8` and the whole range `0042ef8..4c118b8` on `feat/notes-files-backend`. Report recorded verbatim below; responses are in `notes-files-backend-implementation.md`.
+
+---
+
+ACCEPTED — ready to merge and deploy **with the gate off**. No new blocking or should-fix findings.
+
+1. **R6-1 — note: Gate comparisons are correct.** File blocks, attachment images and `(source, width)` pairs remain separate in [attachments.ts:122](/srv/presidium/projects/palladian/code/.worktrees/files-backend/packages/notes-core/src/attachments.ts:122), including [named-source copies](/srv/presidium/projects/palladian/code/.worktrees/files-backend/apps/notes-backend/convex/documents.ts:102). Changed widths and cross-kind conversions are refused; moving existing features between blocks or nested containers is allowed. My 952-case matrix passed; 40 accepted results also loaded using the actual `0042ef8` schema. **Fix:** none required.
+
+2. **R6-2 — note: Cut refusal works; deliberate deletion remains irreversible while gated.** The [cut handler](/srv/presidium/projects/palladian/code/.worktrees/files-backend/apps/notes/src/editor.tsx:726) prevents ProseMirror’s destructive handling. Additional Chromium tests confirmed native `execCommand("cut")` refusal for node and select-all selections, and dragging outside the editor preserved the source. Select-all/type-over deletes attachments without advance warning; undo then displays the [refusal message](/srv/presidium/projects/palladian/code/.worktrees/files-backend/apps/notes/src/file-capability.ts:60). This is consistent with the explicitly retained deliberate-deletion policy, rather than another cut bypass. **Follow-up:** verify native iPhone edit-menu Cut/Paste; code inspection supports the shared handler, but mobile Chromium is not iOS evidence.
+
+3. **R6-3 — note: HTML widths round-trip safely.** [schema.ts:286](/srv/presidium/projects/palladian/code/.worktrees/files-backend/packages/notes-core/src/schema.ts:286) converts `data-width` to a bounded integer before storing or rendering it. Invalid, fractional, oversized and injection-shaped values were discarded. Foreign HTML can supply this marker, but it gains no trust: numeric validation and the capability filter still apply. The browser HTML copy/paste regressions passed. **Fix:** none required.
+
+4. **R6-4 — note: Documented residual limitations remain.** Collaborator/gate-change races can still produce an `invalid` response, after which [channel.ts:313](/srv/presidium/projects/palladian/code/.worktrees/files-backend/apps/notes/src/channel.ts:313) blocks synchronization and [line 359](/srv/presidium/projects/palladian/code/.worktrees/files-backend/apps/notes/src/channel.ts:359) stops journaling. The inherited large-history read limit also remains documented. **Follow-up:** address recoverable rejection with preserved drafts, and checkpoint history by accumulated bytes, in separately reviewed work. This acceptance does not resolve those limitations.
+
+Verification passed: core **53**, backend **186**, Worker **111**, app **20 + 211** tests; all requested typechecks; **30** existing editor/gate browser cases and **8** additional cases. Backend/Worker checks used mocks, `convex-test` and local R2 simulation; browsers used fixtures. No dev/production service checks or real-iPhone checks were performed. Repository remained clean; nothing was committed, pushed or deployed.
