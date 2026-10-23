@@ -110,21 +110,71 @@ export function previewMatches(
  * this person's notes: one that is read-only now, or one gone from this
  * device's list, unless there is evidence the person deleted it themselves
  * (the server files the owner's draft for a notebook they deleted in their
- * default notebook). The evidence is the role this tab last saw (`lastRole`)
- * or the server's answer (`deletedByMe`); without either, ownership is
- * unknown and the draft counts as lost (review rounds 2 and 3; D86). The app
- * neither opens, shows nor searches such a draft.
+ * default notebook). The evidence is the role this tab last saw for this
+ * account (`lastRole`) or the server's answer for this account
+ * (`deletedByMe`); without either, ownership is unknown and the draft counts
+ * as lost (review rounds 2 to 4; D86). The app neither opens, shows nor
+ * searches such a draft.
+ *
+ * A conflict copy (`source` set) is not decided here: it is authorized
+ * through its source note, which the cache's source-access fencing already
+ * holds or revokes (review round 4, R4-2).
  */
 export function draftNotebookLost(
-  draft: { id: string; notebookId?: string | undefined },
+  draft: {
+    id: string;
+    notebookId?: string | undefined;
+    source?: string | undefined;
+  },
   notebooks: readonly { id: string; role: NoteRole }[],
   lastRole: (notebookId: string) => NoteRole | undefined,
   deletedByMe: (notebookId: string) => boolean,
 ): boolean {
-  if (!isLocalNoteId(draft.id) || !draft.notebookId) return false;
+  if (!isLocalNoteId(draft.id) || !draft.notebookId || draft.source)
+    return false;
   const listed = notebooks.find((notebook) => notebook.id === draft.notebookId);
   if (listed) return listed.role === "read";
   return (
     lastRole(draft.notebookId) !== "owner" && !deletedByMe(draft.notebookId)
   );
+}
+
+/** One key per account and item, so nothing is shared across accounts. */
+function scoped(accountId: string, id: string) {
+  return JSON.stringify([accountId, id]);
+}
+
+/**
+ * The role each notebook had when this device last listed it, per account
+ * (review round 4, R4-1): what one account saw never counts as evidence for
+ * another account signed in later in the same window.
+ */
+export class NotebookEvidence {
+  private readonly roles = new Map<string, NoteRole>();
+  remember(
+    notebooks: readonly { accountId: string; id: string; role: NoteRole }[],
+  ) {
+    for (const notebook of notebooks)
+      this.roles.set(scoped(notebook.accountId, notebook.id), notebook.role);
+  }
+  role(accountId: string, notebookId: string): NoteRole | undefined {
+    return this.roles.get(scoped(accountId, notebookId));
+  }
+}
+
+/**
+ * The notebook each draft started in this window is for, per account
+ * (review rounds 2 and 4). `undefined` means "the default notebook".
+ */
+export class DraftTargets {
+  private readonly targets = new Map<string, string | undefined>();
+  set(accountId: string, draftId: string, notebookId: string | undefined) {
+    this.targets.set(scoped(accountId, draftId), notebookId);
+  }
+  has(accountId: string, draftId: string) {
+    return this.targets.has(scoped(accountId, draftId));
+  }
+  get(accountId: string, draftId: string) {
+    return this.targets.get(scoped(accountId, draftId));
+  }
 }

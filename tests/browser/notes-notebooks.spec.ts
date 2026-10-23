@@ -515,3 +515,97 @@ test("review round 3, R3-4: after a reload or in a new tab, unknown ownership do
     page.getByRole("textbox", { name: "Note content" }),
   ).toBeHidden();
 });
+
+test("review round 4, R4-2: conflict copies stay available through their source, also offline after a reload", async ({
+  page,
+}) => {
+  await seed(page);
+  // Two conflict copies whose source the person can still open directly:
+  // one shared with them individually from a notebook they cannot see, one
+  // whose source moved to a notebook they cannot see while the copy's own
+  // notebook (Team) went away.
+  await page.evaluate(async () => {
+    type Store = {
+      captureFence(accountId: string): Promise<unknown>;
+      cacheSummaries(
+        accountId: string,
+        rows: unknown[],
+        removed: string[],
+        fence: unknown,
+      ): Promise<string[]>;
+      writeDraft(draft: unknown): Promise<void>;
+    };
+    const store = (window as unknown as { __notesHarness: { store: Store } })
+      .__notesHarness.store;
+    const account = "fixture-account";
+    const fence = await store.captureFence(account);
+    const summary = (
+      id: string,
+      title: string,
+      notebookId: string,
+      role: string,
+    ) => ({
+      id,
+      title,
+      preview: "",
+      updatedAt: 1_700_000_000_000,
+      notebookId,
+      role,
+      trashed: false,
+    });
+    await store.cacheSummaries(
+      account,
+      [
+        summary(
+          "fixture-welcome",
+          "Welcome to your notes",
+          "book-hidden",
+          "read",
+        ),
+        summary("fixture-third", "Third note", "book-elsewhere", "edit"),
+      ],
+      [],
+      fence,
+    );
+    const doc = (text: string) =>
+      JSON.stringify({
+        type: "doc",
+        content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+      });
+    for (const [id, source, notebookId, text] of [
+      ["local-copy-granted", "fixture-welcome", "book-hidden", "Granted copy"],
+      ["local-copy-moved", "fixture-third", "book-team", "Moved copy"],
+    ] as const)
+      await store.writeDraft({
+        accountId: account,
+        id,
+        source,
+        notebookId,
+        document: doc(text),
+        text,
+        updatedAt: Date.now(),
+      });
+  });
+  // Team, the moved copy's notebook, goes away.
+  await listNotebooks(page, ["book-journal", "book-notes", "book-recipes"]);
+  const editor = page.getByRole("textbox", { name: "Note content" });
+  const check = async () => {
+    for (const [id, text] of [
+      ["local-copy-granted", "Granted copy"],
+      ["local-copy-moved", "Moved copy"],
+    ] as const) {
+      const row = rowOf(page, id);
+      await expect(row.locator(".row-unavailable")).toHaveCount(0);
+      await expect(row).toContainText(text);
+      await row.locator(".note-row").click();
+      await expect(editor).toContainText(text);
+      if (await page.getByRole("button", { name: "All notes" }).isVisible())
+        await page.getByRole("button", { name: "All notes" }).click();
+    }
+  };
+  await check();
+  // Reopened offline after a reload, with nothing learned in this tab.
+  await page.goto("/?fixture=1&session=stall");
+  await expect(rowOf(page, "local-copy-moved")).toHaveCount(1);
+  await check();
+});

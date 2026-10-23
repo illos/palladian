@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import {
+  DraftTargets,
   draftNotebookLost,
+  NotebookEvidence,
   newNoteNotebook,
   notebookActions,
   notebookCounts,
@@ -170,5 +172,56 @@ describe("review round 3", () => {
     expect(lost("local-1", "gone", "owner")).toBe(false);
     // Someone else's notebook stays lost.
     expect(lost("local-1", "gone", "edit")).toBe(true);
+  });
+});
+
+describe("review round 4", () => {
+  test("R4-1: what one account saw is never evidence for another account", () => {
+    const evidence = new NotebookEvidence();
+    // Account A listed notebook X as its own.
+    evidence.remember([{ accountId: "a", id: "x", role: "owner" }]);
+    // Account B, signed in later in the same window, has a cached draft for
+    // X; X is not in B's list, and B has no evidence of its own.
+    const lost = (account: string, mine = false) =>
+      draftNotebookLost(
+        { id: "local-b", notebookId: "x" },
+        [],
+        (notebook) => evidence.role(account, notebook),
+        () => mine,
+      );
+    expect(lost("b")).toBe(true);
+    expect(lost("a")).toBe(false);
+    // B's own evidence: the server says B deleted X, or B listed it as owner.
+    expect(lost("b", true)).toBe(false);
+    evidence.remember([{ accountId: "b", id: "x", role: "edit" }]);
+    expect(lost("b")).toBe(true);
+    evidence.remember([{ accountId: "b", id: "x", role: "owner" }]);
+    expect(lost("b")).toBe(false);
+    expect(evidence.role("a", "x")).toBe("owner");
+  });
+
+  test("R4-1: draft targets are per account", () => {
+    const targets = new DraftTargets();
+    targets.set("a", "local-1", "x");
+    expect(targets.has("a", "local-1")).toBe(true);
+    expect(targets.get("a", "local-1")).toBe("x");
+    expect(targets.has("b", "local-1")).toBe(false);
+    expect(targets.get("b", "local-1")).toBeUndefined();
+  });
+
+  test("R4-2: conflict copies are left to their source's access", () => {
+    const lost = (source?: string) =>
+      draftNotebookLost(
+        {
+          id: "local-copy",
+          notebookId: "unseen",
+          ...(source ? { source } : {}),
+        },
+        [],
+        () => undefined,
+        () => false,
+      );
+    expect(lost("source-note")).toBe(false);
+    expect(lost()).toBe(true);
   });
 });

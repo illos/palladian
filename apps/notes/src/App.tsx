@@ -42,7 +42,9 @@ import {
 } from "./arrange";
 import { dropIndex, placement } from "./reorder";
 import {
+  DraftTargets,
   draftNotebookLost,
+  NotebookEvidence,
   newNoteNotebook,
   notebookActionLabels,
   notebookActions,
@@ -263,12 +265,13 @@ export function App({
   /** A notebook whose "New note here" waits for its list to show. */
   const [newNoteIn, setNewNoteIn] = useState<string | null>(null);
   /**
-   * Notebooks this device has listed, with the role they had: tells a removed
-   * notebook from a new one, and the person's own from someone else's.
+   * Notebooks this device has listed, with the role they had, per account:
+   * tells a removed notebook from a new one, and the person's own from
+   * someone else's, never across accounts (review round 4, R4-1).
    */
-  const listedNotebooks = useRef(new Map<string, NoteRole>());
-  /** The notebook each draft started here is for; drafts keep it. */
-  const draftTargets = useRef(new Map<string, string | undefined>());
+  const listedNotebooks = useRef(new NotebookEvidence());
+  /** The notebook each draft started here is for, per account. */
+  const draftTargets = useRef(new DraftTargets());
   /**
    * Notebooks the server says this person deleted themselves (and those it
    * was asked about), so their drafts stay available after a reload or in a
@@ -775,7 +778,7 @@ export function App({
         shown ?? liveState.profile?.defaultNotebookId ?? undefined;
       // Only a notebook chosen by the list it was started in can be lost
       // later; one going to the default notebook never is.
-      draftTargets.current.set(id, shown);
+      draftTargets.current.set(accountId, id, shown);
       const request = openRequest.current;
       const channel = await makeChannel(
         {
@@ -819,6 +822,7 @@ export function App({
     };
     draft.key = draft.id;
     draftTargets.current.set(
+      accountId,
       draft.id,
       newNoteNotebook(
         section.kind === "notebook" ? section.id : null,
@@ -832,17 +836,26 @@ export function App({
 
   /** The notebook an uncreated draft is for: as started here, or as stored. */
   function draftNotebook(id: string): string | undefined {
-    if (draftTargets.current.has(id)) return draftTargets.current.get(id);
+    if (accountId && draftTargets.current.has(accountId, id))
+      return draftTargets.current.get(accountId, id);
     return rows.find((row) => row.accountId === accountId && row.id === id)
       ?.notebookId;
   }
 
-  /** An uncreated draft for a notebook that no longer takes its notes. */
-  function draftLost(draft: { id: string; notebookId?: string | undefined }) {
+  /**
+   * An uncreated draft of the signed-in account for a notebook that no
+   * longer takes its notes; conflict copies are left to their source.
+   */
+  function draftLost(draft: {
+    id: string;
+    notebookId?: string | undefined;
+    source?: string | undefined;
+  }) {
+    if (!accountId) return false;
     return draftNotebookLost(
       draft,
-      notebooks,
-      (id) => listedNotebooks.current.get(id),
+      notebooks.filter((notebook) => notebook.accountId === accountId),
+      (id) => listedNotebooks.current.role(accountId, id),
       (id) => deletedByMe.accountId === accountId && deletedByMe.mine.has(id),
     );
   }
@@ -1430,8 +1443,10 @@ export function App({
             row.accountId === accountId &&
             isLocalNoteId(row.id) &&
             row.notebookId !== undefined &&
+            row.source === undefined &&
             !notebooks.some((notebook) => notebook.id === row.notebookId) &&
-            listedNotebooks.current.get(row.notebookId) === undefined &&
+            listedNotebooks.current.role(row.accountId, row.notebookId) ===
+              undefined &&
             !(
               deletedByMe.accountId === accountId &&
               deletedByMe.asked.has(row.notebookId)
@@ -1478,6 +1493,10 @@ export function App({
     draftLost({
       id: currentOpen.id,
       notebookId: draftNotebook(currentOpen.id),
+      // A conflict copy is authorized through its source (R4-2).
+      source: rows.find(
+        (row) => row.accountId === accountId && row.id === currentOpen.id,
+      )?.source,
     });
   useEffect(() => {
     if (!openDraftLost) return;
@@ -1733,11 +1752,11 @@ export function App({
   // on another device) stops being shown; All Notes shows instead. One just
   // created, not listed yet, stays shown (review round 1, F1).
   useEffect(() => {
-    for (const notebook of notebooks)
-      listedNotebooks.current.set(notebook.id, notebook.role);
+    listedNotebooks.current.remember(notebooks);
     if (
       section.kind === "notebook" &&
-      listedNotebooks.current.has(section.id) &&
+      accountId !== null &&
+      listedNotebooks.current.role(accountId, section.id) !== undefined &&
       !notebooks.some((notebook) => notebook.id === section.id)
     )
       setSection({ kind: "all" });
