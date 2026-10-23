@@ -10,9 +10,19 @@ import "../styles.css";
  * two swipe rows whose actions and open state the browser tests control.
  */
 const layouts = {
-  full: { leading: ["duplicate"], trailing: ["move", "share"], full: "trash" },
-  trashed: { leading: ["restore"], trailing: ["delete"], full: null },
-  none: { leading: [], trailing: [], full: null },
+  full: {
+    leading: ["duplicate"],
+    trailing: ["move", "share"],
+    full: "trash",
+    fullLeading: "pin",
+  },
+  trashed: {
+    leading: ["restore"],
+    trailing: ["delete"],
+    full: null,
+    fullLeading: null,
+  },
+  none: { leading: [], trailing: [], full: null, fullLeading: null },
 } satisfies Record<string, SwipeLayout>;
 type LayoutName = keyof typeof layouts;
 

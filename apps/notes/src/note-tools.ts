@@ -26,15 +26,20 @@ export async function duplicateNote(
 
 /**
  * Pins, sort orders and custom positions are personal (D102). Each write
- * returns the person's arrangement version after it.
+ * names the account it was made in, so the server refuses it if it arrives
+ * under another sign-in, and returns the person's arrangement version after
+ * it. Convex sends one client's mutations in the order they were called,
+ * including after a reconnect, so this device's writes apply in order.
  */
 export async function setPin(
   client: ConvexReactClient,
+  account: string,
   noteId: string,
   pinned: boolean,
 ): Promise<number> {
   return (
     await client.mutation(api.arrangement.setPin, {
+      account,
       noteId: noteId as Id<"notes">,
       pinned,
     })
@@ -43,37 +48,40 @@ export async function setPin(
 
 export async function setOrder(
   client: ConvexReactClient,
+  account: string,
   list: string,
   order: "edited" | "alpha" | "created" | "custom",
 ): Promise<number> {
-  return (await client.mutation(api.arrangement.setOrder, { list, order }))
-    .version;
+  return (
+    await client.mutation(api.arrangement.setOrder, { account, list, order })
+  ).version;
 }
 
 /**
- * Writes positions in batches the server accepts, stopping if the account
- * or session changed in between.
+ * Writes positions in batches the server accepts. All batches are sent at
+ * once, one after another, so no other write from this device lands between
+ * them.
  */
 export async function setPositions(
   client: ConvexReactClient,
+  account: string,
   notebookId: string,
   entries: { noteId: string; key: string }[],
-  current: () => boolean,
-): Promise<number | undefined> {
-  let version: number | undefined;
-  for (let start = 0; start < entries.length; start += 100) {
-    if (!current()) return undefined;
-    version = (
-      await client.mutation(api.arrangement.setPositions, {
+): Promise<number> {
+  const batches: Promise<{ version: number }>[] = [];
+  for (let start = 0; start < entries.length; start += 100)
+    batches.push(
+      client.mutation(api.arrangement.setPositions, {
+        account,
         notebookId: notebookId as Id<"notebooks">,
         entries: entries.slice(start, start + 100).map((entry) => ({
           noteId: entry.noteId as Id<"notes">,
           key: entry.key,
         })),
-      })
-    ).version;
-  }
-  return version;
+      }),
+    );
+  const results = await Promise.all(batches);
+  return Math.max(...results.map((result) => result.version));
 }
 
 export function fileName(title: string, extension: string) {

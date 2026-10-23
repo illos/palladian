@@ -5,7 +5,6 @@ import {
   orderEdit,
   pinEdit,
   positionsEdit,
-  serialQueue,
   settleEdits,
   spacedKeys,
   withEdits,
@@ -187,30 +186,5 @@ describe("settling unconfirmed changes", () => {
     expect(settleEdits(edits, arrangement({ version: 3 }))).toBe(edits);
     expect(settleEdits(edits, arrangement())).toBe(edits);
     expect(settleEdits(edits, null)).toBe(edits);
-  });
-});
-
-describe("writes in order", () => {
-  test("a later write waits for an earlier multi-step one, even if it fails", async () => {
-    const enqueue = serialQueue();
-    const log: string[] = [];
-    let release!: () => void;
-    const paused = new Promise<void>((resolve) => (release = resolve));
-    const first = enqueue(async () => {
-      log.push("first batch 1");
-      await paused;
-      log.push("first batch 2");
-      throw new Error("refused");
-    });
-    const second = enqueue(async () => {
-      log.push("second");
-      return 7;
-    });
-    await Promise.resolve();
-    expect(log).toEqual(["first batch 1"]);
-    release();
-    await expect(first).rejects.toThrow("refused");
-    await expect(second).resolves.toBe(7);
-    expect(log).toEqual(["first batch 1", "first batch 2", "second"]);
   });
 });

@@ -79,6 +79,8 @@ async function human(t: T, name: string) {
   return {
     id: made.principalId,
     notebookId: made.notebookId,
+    /** The app's account ID (the Better Auth user ID). */
+    account: made.userId,
     as: t.withIdentity({
       subject: made.userId,
       sessionId: made.sessionId,
@@ -126,11 +128,13 @@ describe("arrangement", () => {
     const first = await note(ada, "First");
     await share(t, ada.notebookId, bea.id, "read", ada.id);
     await ada.as.mutation(api.arrangement.setPin, {
+      account: ada.account,
       noteId: first,
       pinned: true,
     });
     // Pinning again changes nothing.
     await ada.as.mutation(api.arrangement.setPin, {
+      account: ada.account,
       noteId: first,
       pinned: true,
     });
@@ -140,11 +144,13 @@ describe("arrangement", () => {
     expect((await bea.as.query(api.arrangement.mine, {})).pins).toEqual([]);
     // A reader may pin a note for themselves.
     await bea.as.mutation(api.arrangement.setPin, {
+      account: bea.account,
       noteId: first,
       pinned: true,
     });
     expect((await bea.as.query(api.arrangement.mine, {})).pins).toHaveLength(1);
     await ada.as.mutation(api.arrangement.setPin, {
+      account: ada.account,
       noteId: first,
       pinned: false,
     });
@@ -158,24 +164,32 @@ describe("arrangement", () => {
     const bea = await human(t, "Bea");
     const first = await note(ada, "First");
     await expect(
-      bea.as.mutation(api.arrangement.setPin, { noteId: first, pinned: true }),
+      bea.as.mutation(api.arrangement.setPin, {
+        account: bea.account,
+        noteId: first,
+        pinned: true,
+      }),
     ).rejects.toThrow(/not found/);
     await expect(
       bea.as.mutation(api.arrangement.setOrder, {
+        account: bea.account,
         list: ada.notebookId,
         order: "alpha",
       }),
     ).rejects.toThrow(/not found/);
     const member = await share(t, ada.notebookId, bea.id, "read", ada.id);
     await bea.as.mutation(api.arrangement.setPin, {
+      account: bea.account,
       noteId: first,
       pinned: true,
     });
     await bea.as.mutation(api.arrangement.setOrder, {
+      account: bea.account,
       list: ada.notebookId,
       order: "custom",
     });
     await bea.as.mutation(api.arrangement.setPositions, {
+      account: bea.account,
       notebookId: ada.notebookId,
       entries: [{ noteId: first, key: "V" }],
     });
@@ -188,6 +202,7 @@ describe("arrangement", () => {
     });
     // Unpinning needs no access: it only removes the person's own row.
     await bea.as.mutation(api.arrangement.setPin, {
+      account: bea.account,
       noteId: first,
       pinned: false,
     });
@@ -233,7 +248,11 @@ describe("arrangement", () => {
       /Only people/,
     );
     await expect(
-      agent.mutation(api.arrangement.setPin, { noteId: first, pinned: true }),
+      agent.mutation(api.arrangement.setPin, {
+        account: "agent",
+        noteId: first,
+        pinned: true,
+      }),
     ).rejects.toThrow(/Only people/);
     await expect(t.query(api.arrangement.mine, {})).rejects.toThrow(/Sign in/);
   });
@@ -242,25 +261,30 @@ describe("arrangement", () => {
     const t = setup();
     const ada = await human(t, "Ada");
     await ada.as.mutation(api.arrangement.setOrder, {
+      account: ada.account,
       list: "all",
       order: "alpha",
     });
     await ada.as.mutation(api.arrangement.setOrder, {
+      account: ada.account,
       list: "all",
       order: "created",
     });
     await ada.as.mutation(api.arrangement.setOrder, {
+      account: ada.account,
       list: ada.notebookId,
       order: "custom",
     });
     await expect(
       ada.as.mutation(api.arrangement.setOrder, {
+        account: ada.account,
         list: "all",
         order: "custom",
       }),
     ).rejects.toThrow(/per notebook/);
     await expect(
       ada.as.mutation(api.arrangement.setOrder, {
+        account: ada.account,
         list: "not-a-notebook",
         order: "alpha",
       }),
@@ -286,6 +310,7 @@ describe("arrangement", () => {
       name: "Archive",
     });
     await ada.as.mutation(api.arrangement.setPositions, {
+      account: ada.account,
       notebookId: ada.notebookId,
       entries: [
         { noteId: first, key: "V" },
@@ -294,6 +319,7 @@ describe("arrangement", () => {
     });
     // Rewriting a position replaces it.
     await ada.as.mutation(api.arrangement.setPositions, {
+      account: ada.account,
       notebookId: ada.notebookId,
       entries: [{ noteId: second, key: "M" }],
     });
@@ -307,18 +333,21 @@ describe("arrangement", () => {
     ]);
     await expect(
       ada.as.mutation(api.arrangement.setPositions, {
+        account: ada.account,
         notebookId: ada.notebookId,
         entries: [{ noteId: first, key: "no spaces" }],
       }),
     ).rejects.toThrow(/Invalid position/);
     await expect(
       ada.as.mutation(api.arrangement.setPositions, {
+        account: ada.account,
         notebookId: archive,
         entries: [{ noteId: first, key: "V" }],
       }),
     ).rejects.toThrow(/another notebook/);
     await expect(
       ada.as.mutation(api.arrangement.setPositions, {
+        account: ada.account,
         notebookId: ada.notebookId,
         entries: Array.from({ length: 101 }, () => ({
           noteId: first,
@@ -329,6 +358,7 @@ describe("arrangement", () => {
     // One position per note in a write.
     await expect(
       ada.as.mutation(api.arrangement.setPositions, {
+        account: ada.account,
         notebookId: ada.notebookId,
         entries: [
           { noteId: first, key: "V" },
@@ -339,6 +369,7 @@ describe("arrangement", () => {
     // Keys never end in 0, as the app generates them.
     await expect(
       ada.as.mutation(api.arrangement.setPositions, {
+        account: ada.account,
         notebookId: ada.notebookId,
         entries: [{ noteId: first, key: "V0" }],
       }),
@@ -357,10 +388,12 @@ describe("arrangement", () => {
     });
     for (const person of [ada, bea]) {
       await person.as.mutation(api.arrangement.setPin, {
+        account: person.account,
         noteId: second,
         pinned: true,
       });
       await person.as.mutation(api.arrangement.setPositions, {
+        account: person.account,
         notebookId: ada.notebookId,
         entries: [
           { noteId: first, key: "V" },
@@ -380,6 +413,7 @@ describe("arrangement", () => {
     ).toEqual([second]);
     // A position in the new notebook, set before the cleanup runs, stays.
     await ada.as.mutation(api.arrangement.setPositions, {
+      account: ada.account,
       notebookId: archive,
       entries: [{ noteId: first, key: "V" }],
     });
@@ -418,6 +452,7 @@ describe("arrangement", () => {
     const second = await note(ada, "Second");
     const third = await note(ada, "Third");
     await bea.as.mutation(api.arrangement.setPositions, {
+      account: bea.account,
       notebookId: ada.notebookId,
       entries: [
         { noteId: first, key: "F" },
@@ -506,16 +541,22 @@ describe("arrangement", () => {
     });
     // While they are still usable, the quotas hold.
     await expect(
-      bea.as.mutation(api.arrangement.setPin, { noteId: own, pinned: true }),
+      bea.as.mutation(api.arrangement.setPin, {
+        account: bea.account,
+        noteId: own,
+        pinned: true,
+      }),
     ).rejects.toThrow(/up to 100/);
     await expect(
       bea.as.mutation(api.arrangement.setPositions, {
+        account: bea.account,
         notebookId: bea.notebookId,
         entries: [{ noteId: own, key: "V" }],
       }),
     ).rejects.toThrow(/up to 500/);
     // Lists that are gone are reclaimed at once.
     await bea.as.mutation(api.arrangement.setOrder, {
+      account: bea.account,
       list: bea.notebookId,
       order: "custom",
     });
@@ -525,10 +566,12 @@ describe("arrangement", () => {
     // Once the notebook is no longer shared, the old rows are reclaimed.
     await t.run((ctx) => ctx.db.delete(member));
     await bea.as.mutation(api.arrangement.setPin, {
+      account: bea.account,
       noteId: own,
       pinned: true,
     });
     await bea.as.mutation(api.arrangement.setPositions, {
+      account: bea.account,
       notebookId: bea.notebookId,
       entries: [{ noteId: own, key: "V" }],
     });
@@ -547,6 +590,7 @@ describe("arrangement", () => {
     const member = await share(t, ada.notebookId, bea.id, "read", ada.id);
     const first = await note(ada, "First");
     await bea.as.mutation(api.arrangement.setPositions, {
+      account: bea.account,
       notebookId: ada.notebookId,
       entries: [{ noteId: first, key: "V" }],
     });
@@ -576,6 +620,7 @@ describe("arrangement", () => {
         });
     });
     await bea.as.mutation(api.arrangement.setPositions, {
+      account: bea.account,
       notebookId: bea.notebookId,
       entries: [{ noteId: own, key: "V" }],
     });
@@ -655,6 +700,7 @@ describe("arrangement", () => {
     const own = await note(bea, "Own");
     await expect(
       bea.as.mutation(api.arrangement.setPositions, {
+        account: bea.account,
         notebookId: bea.notebookId,
         entries: [{ noteId: own, key: "V" }],
       }),
@@ -668,18 +714,21 @@ describe("arrangement", () => {
     expect((await ada.as.query(api.arrangement.mine, {})).version).toBe(0);
     expect(
       await ada.as.mutation(api.arrangement.setPin, {
+        account: ada.account,
         noteId: first,
         pinned: true,
       }),
     ).toEqual({ version: 1 });
     expect(
       await ada.as.mutation(api.arrangement.setOrder, {
+        account: ada.account,
         list: "all",
         order: "alpha",
       }),
     ).toEqual({ version: 2 });
     expect(
       await ada.as.mutation(api.arrangement.setPositions, {
+        account: ada.account,
         notebookId: ada.notebookId,
         entries: [{ noteId: first, key: "V" }],
       }),
@@ -705,6 +754,7 @@ describe("arrangement", () => {
       { notebookId: ada.notebookId, noteId: first, key: "F" },
     ]);
     await ada.as.mutation(api.arrangement.setPositions, {
+      account: ada.account,
       notebookId: ada.notebookId,
       entries: [{ noteId: first, key: "z" }],
     });
@@ -720,5 +770,112 @@ describe("arrangement", () => {
     expect((await ada.as.query(api.arrangement.mine, {})).positions).toEqual([
       { notebookId: ada.notebookId, noteId: first, key: "z" },
     ]);
+  });
+
+  test("a write made in another account is refused and changes nothing", async () => {
+    const t = setup();
+    const ada = await human(t, "Ada");
+    const bea = await human(t, "Bea");
+    const own = await note(bea, "Own");
+    // A change Ada made, arriving under Bea's sign-in.
+    await expect(
+      bea.as.mutation(api.arrangement.setOrder, {
+        account: ada.account,
+        list: "all",
+        order: "alpha",
+      }),
+    ).rejects.toThrow(/another account/);
+    await expect(
+      bea.as.mutation(api.arrangement.setPin, {
+        account: ada.account,
+        noteId: own,
+        pinned: true,
+      }),
+    ).rejects.toThrow(/another account/);
+    await expect(
+      bea.as.mutation(api.arrangement.setPositions, {
+        account: ada.account,
+        notebookId: bea.notebookId,
+        entries: [{ noteId: own, key: "V" }],
+      }),
+    ).rejects.toThrow(/another account/);
+    expect(await bea.as.query(api.arrangement.mine, {})).toEqual({
+      version: 0,
+      pins: [],
+      orders: [],
+      positions: [],
+    });
+  });
+
+  test("reads and writes agree on which duplicate counts, across notebooks", async () => {
+    const t = setup(true);
+    const ada = await human(t, "Ada");
+    const first = await note(ada, "First");
+    const archive = await ada.as.mutation(api.notebooks.create, {
+      name: "Archive",
+    });
+    // The oldest row is the note's position; a later stale row sits in a
+    // notebook that sorts first.
+    await t.run(async (ctx) => {
+      await ctx.db.insert("notePositions", {
+        principalId: ada.id,
+        notebookId: ada.notebookId,
+        noteId: first,
+        key: "F",
+      });
+      await ctx.db.insert("notePositions", {
+        principalId: ada.id,
+        notebookId: archive,
+        noteId: first,
+        key: "k",
+      });
+    });
+    expect((await ada.as.query(api.arrangement.mine, {})).positions).toEqual([
+      { notebookId: ada.notebookId, noteId: first, key: "F" },
+    ]);
+  });
+
+  test("up to 20 stored duplicates are removed; more are refused", async () => {
+    const t = setup(true);
+    const ada = await human(t, "Ada");
+    const first = await note(ada, "First");
+    const second = await note(ada, "Second");
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 21; i++)
+        await ctx.db.insert("notePositions", {
+          principalId: ada.id,
+          notebookId: ada.notebookId,
+          noteId: first,
+          key: "V",
+        });
+      for (let i = 0; i < 22; i++)
+        await ctx.db.insert("notePositions", {
+          principalId: ada.id,
+          notebookId: ada.notebookId,
+          noteId: second,
+          key: "V",
+        });
+    });
+    await ada.as.mutation(api.arrangement.setPositions, {
+      account: ada.account,
+      notebookId: ada.notebookId,
+      entries: [{ noteId: first, key: "k" }],
+    });
+    await expect(
+      ada.as.mutation(api.arrangement.setPositions, {
+        account: ada.account,
+        notebookId: ada.notebookId,
+        entries: [{ noteId: second, key: "k" }],
+      }),
+    ).rejects.toThrow(/Too many stored positions/);
+    const rows = await t.run((ctx) =>
+      ctx.db
+        .query("notePositions")
+        .withIndex("by_principal_and_note", (q) =>
+          q.eq("principalId", ada.id).eq("noteId", first),
+        )
+        .collect(),
+    );
+    expect(rows.map((r) => r.key)).toEqual(["k"]);
   });
 });

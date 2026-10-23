@@ -159,19 +159,6 @@ export function settleEdits(
   return kept.length === pending.length ? pending : kept;
 }
 
-/**
- * Runs tasks one after another in the order they were added, so one device's
- * multi-step writes never interleave and its versions follow its changes.
- */
-export function serialQueue() {
-  let tail: Promise<unknown> = Promise.resolve();
-  return <T>(task: () => Promise<T>): Promise<T> => {
-    const run = tail.then(task);
-    tail = run.catch(() => undefined);
-    return run;
-  };
-}
-
 /** The synced arrangement with the unconfirmed changes on top, in order. */
 export function withEdits(
   saved: Arrangement | null,

@@ -30,7 +30,6 @@ import {
   orderOf,
   pinEdit,
   positionsEdit,
-  serialQueue,
   settleEdits,
   withEdits,
   type ArrangementEdit,
@@ -801,22 +800,18 @@ export function App({
       liveRef.current === at.live;
   }
 
-  /** One device's arrangement writes reach the server one at a time, in order. */
-  const [arrangeInOrder] = useState(serialQueue);
-
   /**
-   * Show a change at once, then save it after this device's earlier changes.
-   * It stays shown until a synced arrangement reaches the version the server
-   * returned for it; a failed save removes it, and it expires after 30
-   * seconds in any case.
+   * Show a change at once, then save it. It stays shown until a synced
+   * arrangement reaches the version the server returned for it; a failed
+   * save removes it, and it expires after 30 seconds in any case.
    */
   async function rearrange(
     edit: ArrangementEdit,
     current: () => boolean,
     save: (
       client: NonNullable<typeof live>["client"],
-      current: () => boolean,
-    ) => Promise<number | undefined>,
+      account: string,
+    ) => Promise<number>,
   ) {
     const client = liveRef.current?.client;
     if (!current() || !client || !accountId) return;
@@ -825,16 +820,14 @@ export function App({
     const drop = () =>
       setPendingEdits((edits) => edits.filter((pending) => pending.id !== id));
     setTimeout(drop, 30_000);
-    let version: number | undefined;
+    let version: number;
     try {
-      version = await arrangeInOrder(() =>
-        current() ? save(client, current) : Promise.resolve(undefined),
-      );
+      // The write names this account; the server refuses it under another.
+      version = await save(client, accountId);
     } catch (failure) {
       drop();
       throw failure;
     }
-    if (version === undefined) return drop();
     setPendingEdits((edits) =>
       settleEdits(
         edits.map((pending) =>
@@ -849,8 +842,8 @@ export function App({
     const current = sessionTicket();
     try {
       const { setOrder } = await import("./note-tools");
-      await rearrange(orderEdit(list, order), current, (client) =>
-        setOrder(client, list, order),
+      await rearrange(orderEdit(list, order), current, (client, account) =>
+        setOrder(client, account, list, order),
       );
     } catch (failure) {
       failed(failure);
@@ -889,8 +882,7 @@ export function App({
       await rearrange(
         positionsEdit(notebookId, writes),
         current,
-        (client, stillCurrent) =>
-          setPositions(client, notebookId, writes, stillCurrent),
+        (client, account) => setPositions(client, account, notebookId, writes),
       );
     } catch (failure) {
       failed(failure);
@@ -1130,7 +1122,7 @@ export function App({
           await rearrange(
             pinEdit(target.id, pinned, Date.now()),
             current,
-            (client) => setPin(client, target.id, pinned),
+            (client, account) => setPin(client, account, target.id, pinned),
           );
           return toast(pinned ? "Pinned" : "Unpinned");
         }

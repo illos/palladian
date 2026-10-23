@@ -157,6 +157,18 @@ async function nextVersion(ctx: MutationCtx, person: Person) {
 
 const written = v.object({ version: v.number() });
 
+/**
+ * The account a change was made in, as the app knows it (the Better Auth
+ * user ID). A write that reaches the server under another account, e.g. one
+ * buffered offline before the person switched accounts, is refused. This is
+ * only an equality check against the signed-in person; it grants nothing.
+ */
+const account = v.string();
+function sameAccount(person: Person, expected: string) {
+  if (person.authUserId !== expected)
+    fail("conflict", "This change was made in another account.");
+}
+
 export const mine = query({
   args: {},
   returns: v.object({
@@ -182,28 +194,32 @@ export const mine = query({
     for (const row of await ordersOf(ctx, person, ORDER_LIMIT))
       if (await access.listReadable(row.list))
         orders.push({ list: row.list, order: row.order });
-    const positions = [];
-    // One position per note: the first row, which is the one writes update.
-    const seen = new Set<string>();
+    // One position per note: its oldest row, the one writes update (they
+    // read the person's rows for a note oldest first).
+    const canonical = new Map<string, Doc<"notePositions">>();
     for (const row of await positionsOf(ctx, person, POSITION_LIMIT)) {
-      if (seen.has(row.noteId)) continue;
-      seen.add(row.noteId);
+      const kept = canonical.get(row.noteId);
+      if (!kept || row._creationTime < kept._creationTime)
+        canonical.set(row.noteId, row);
+    }
+    const positions = [];
+    for (const row of canonical.values())
       if (await access.positionLive(row))
         positions.push({
           notebookId: row.notebookId,
           noteId: row.noteId,
           key: row.key,
         });
-    }
     return { version: await versionOf(ctx, person), pins, orders, positions };
   },
 });
 
 export const setPin = mutation({
-  args: { noteId: v.id("notes"), pinned: v.boolean() },
+  args: { account, noteId: v.id("notes"), pinned: v.boolean() },
   returns: written,
   handler: async (ctx, args) => {
     const person = await requireHuman(ctx);
+    sameAccount(person, args.account);
     const existing = await ctx.db
       .query("pins")
       .withIndex("by_principal_and_note", (q) =>
@@ -238,10 +254,11 @@ export const setPin = mutation({
 
 /** A list's sort order: "all" for All Notes, or a notebook ID. */
 export const setOrder = mutation({
-  args: { list: v.string(), order },
+  args: { account, list: v.string(), order },
   returns: written,
   handler: async (ctx, args) => {
     const person = await requireHuman(ctx);
+    sameAccount(person, args.account);
     if (args.list === "all") {
       if (args.order === "custom")
         fail("invalid", "Custom order is set per notebook.");
@@ -285,12 +302,14 @@ export const setOrder = mutation({
  */
 export const setPositions = mutation({
   args: {
+    account,
     notebookId: v.id("notebooks"),
     entries: v.array(v.object({ noteId: v.id("notes"), key: v.string() })),
   },
   returns: written,
   handler: async (ctx, args) => {
     const person = await requireHuman(ctx);
+    sameAccount(person, args.account);
     if (args.entries.length > BATCH_LIMIT)
       fail("too_large", `At most ${BATCH_LIMIT} positions at once.`);
     if (new Set(args.entries.map((e) => e.noteId)).size < args.entries.length)
@@ -312,8 +331,8 @@ export const setPositions = mutation({
         .withIndex("by_principal_and_note", (q) =>
           q.eq("principalId", person._id).eq("noteId", entry.noteId),
         )
-        .take(DUPLICATE_LIMIT + 1);
-      if (extra.length >= DUPLICATE_LIMIT)
+        .take(DUPLICATE_LIMIT + 2);
+      if (extra.length > DUPLICATE_LIMIT)
         fail("invalid", "Too many stored positions for one note.");
       for (const row of extra) await ctx.db.delete(row._id);
       writes.push({ entry, existing: existing ?? null });

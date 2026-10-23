@@ -110,6 +110,24 @@ Round 3 evidence:
 - Both typechecks: pass.
 - `arrange-e2e.mjs` against dev Convex, with this branch's backend pushed: 9 steps, passing on two consecutive runs with no page errors.
 
+## Review round 4 responses
+
+Report: `notes-pins-sorts-round4-astra-review.md`. Before these fixes, A2 was merged and released, and this branch was rebased onto `main` (`5211e06`) without conflicts.
+
+| Finding                                         | Response                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R4-1 — buffered writes can cross accounts       | Fixed on the server. `setPin`, `setOrder` and `setPositions` take the account the change was made in, which is the app's account ID (the Better Auth user ID). They refuse with "This change was made in another account." unless it equals the signed-in person's `authUserId`. This is purely an equality check and grants nothing. A write buffered offline under one account that is sent after switching accounts is therefore refused. Backend test: all three writes made "as Ada" under Bea's sign-in are refused, and Bea's arrangement is unchanged. |
+| R4-2 — one unresolved write stalls later writes | Fixed by removing the app's write queue. The Convex client sends one client's mutations in the order they were called, and resends unanswered ones in that order after a reconnect (`request_manager.restart`). `setPositions` now sends all of a reorder's batches at once, back to back, so no other write from this device lands between them. Nothing in the app waits on an earlier write any more. The session ticket still guards the start of every action, and the account check above guards anything sent later.                                    |
+| R4-3 — duplicate ordering edge cases            | Fixed. Reads keep each note's oldest row, the same row writes update, whatever notebook it is in. Writes remove up to 20 extra rows and refuse more than 20. Limits-enabled tests cover a stale duplicate in a notebook that sorts first, and exactly 20 versus 21 extras.                                                                                                                                                                                                                                                                                     |
+
+Round 4 evidence:
+
+- Backend tests: 121, including the account precondition and duplicate-ordering tests.
+- App unit tests: 122.
+- Browser tests: 68 passed on both Chromium projects, on a private port.
+- `arrange-e2e.mjs` against dev Convex, with this branch's backend pushed: 9 steps, passing on two consecutive runs with no page errors.
+- Both typechecks: pass.
+
 ## Found during this work (not changed)
 
 - Retention purge (`lifecycle.purgeExpired`) handles 100 notes in one transaction and deletes their note grants inline; with many grants per note it can exceed Convex's write limit (review R2-7). This predates A6 and is left to the lifecycle owner.
