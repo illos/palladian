@@ -14,18 +14,14 @@ import { DOMSerializer, type Node as ProseMirrorNode } from "prosemirror-model";
 import { Icon } from "./Icons";
 import { timeRange } from "./dates";
 import type { LiveController } from "./live";
+import { transportError } from "./live";
 import { changed, diffText, type TextDiff } from "./text-diff";
 import {
-  canRestore,
   kindLabels,
   pageChain,
   pageKey,
   previousRevision,
-  restoreOutcomeText,
   versionKey,
-  type RestoreHold,
-  type RestoreOutcome,
-  type RestoreRequest,
   type Version,
   type VersionPageResult,
 } from "./versions";
@@ -34,9 +30,10 @@ import "./history.css";
 /**
  * A note's server history (plan 08, A4; the UI after Deltos's HistoryPanel):
  * the versions, newest first, then one version read-only, compared with the
- * one before it or with the note now, and restored. Restoring appends a
- * revision on the server; open editors, this device's included, receive it
- * through collaboration. Editors only (D13): the server refuses everyone else.
+ * one before it or with the note now, and restored as a new note. Restoring
+ * never touches the note itself (see the design change after review round 5
+ * in docs/reviews/notes-history-implementation.md). Editors only (D13): the
+ * server refuses everyone else.
  */
 
 const PAGE = 30;
@@ -48,34 +45,8 @@ const compareLabels: Record<Compare, string> = {
   current: "vs Current",
 };
 
-const holdNotices: Record<
-  Exclude<NonNullable<RestoreHold>, "pending">,
-  string
-> = {
-  storage:
-    "Restoring needs this browser to record the restore first, and its restore records are not available or could not be read.",
-  unsaved: "Waiting for your changes in this window to save…",
-  offline: "Not connected. Restore when the connection is back.",
-};
-
-/**
- * How long a restore in flight keeps History open. After this the person may
- * close it; the note stays read-only in this window until the restore settles.
- */
-export const RESTORE_PATIENCE_MS = 20_000;
-
-interface RestoreCallbacks {
-  /**
-   * Records and sends a restore (App's `RestoreKeeper`); resolves with its
-   * outcome. The note stays read-only until the outcome is known.
-   */
-  onRestore: (
-    request: RestoreRequest,
-    version: Version,
-  ) => Promise<RestoreOutcome>;
-  /** Sends an unresolved restore of this note again to learn its outcome. */
-  onCheck: () => void;
-}
+/** Creates a new note from a version's stored document (App does this). */
+type RestoreAsNew = (doc: string) => Promise<void>;
 
 type Current = { doc: string; revision: number } | null | undefined;
 
@@ -83,34 +54,26 @@ export default function HistoryPanel({
   live,
   noteId,
   title,
-  restoreHold,
   connected,
-  restoring,
   onClose,
-  onRestore,
-  onCheck,
+  onRestoreAsNew,
 }: {
   live: LiveController;
   noteId: string;
   title: string;
-  /** Why this window may not restore now (see `restoreHold`), or null. */
-  restoreHold: RestoreHold;
+  /** Signed in and connected now: creating a note needs the server. */
   connected: boolean;
-  /** When this window sent the restore of this note it is waiting on. */
-  restoring: number | null;
   onClose: () => void;
-} & RestoreCallbacks) {
+  onRestoreAsNew: RestoreAsNew;
+}) {
   return (
     <ConvexProvider client={live.client}>
       <History
         noteId={noteId as Id<"notes">}
         title={title}
-        hold={restoreHold}
         connected={connected}
-        restoring={restoring}
         onClose={onClose}
-        onRestore={onRestore}
-        onCheck={onCheck}
+        onRestoreAsNew={onRestoreAsNew}
       />
     </ConvexProvider>
   );
@@ -119,43 +82,21 @@ export default function HistoryPanel({
 function History({
   noteId,
   title,
-  hold,
   connected,
-  restoring,
   onClose,
-  onRestore,
-  onCheck,
+  onRestoreAsNew,
 }: {
   noteId: Id<"notes">;
   title: string;
-  hold: RestoreHold;
   connected: boolean;
-  restoring: number | null;
   onClose: () => void;
-} & RestoreCallbacks) {
+  onRestoreAsNew: RestoreAsNew;
+}) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     ref.current?.showModal();
   }, []);
-  // While a restore is in flight, History stays open (so nothing behind it
-  // can be typed into) until the answer, or for RESTORE_PATIENCE_MS.
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    if (restoring === null) return;
-    const wait = restoring + RESTORE_PATIENCE_MS - Date.now();
-    if (wait <= 0) return;
-    const timer = setTimeout(() => setTick((tick) => tick + 1), wait);
-    return () => clearTimeout(timer);
-  }, [restoring]);
-  const pinned =
-    restoring !== null && Date.now() - restoring < RESTORE_PATIENCE_MS;
-  const pinnedNow = useRef(pinned);
-  pinnedNow.current = pinned;
-  const close = () => {
-    if (!pinned) onClose();
-  };
-  // The note now: what "vs Current" compares with, and the revision a restore
-  // expects to replace.
+  // The note now: what "vs Current" compares with.
   const current = useQuery(api.notes.content, { noteId });
   const [selected, setSelected] = useState<Version | null>(null);
   return (
@@ -165,17 +106,13 @@ function History({
       aria-label={`History of ${title}`}
       onCancel={(event) => {
         event.preventDefault();
-        close();
+        onClose();
       }}
       // The browser may close the dialog itself (a second Escape without a
-      // click in between cannot be cancelled): reopen it while a restore
-      // holds it, and otherwise let App know it closed.
-      onClose={() => {
-        if (pinnedNow.current) ref.current?.showModal();
-        else onClose();
-      }}
+      // click in between cannot be cancelled): let App know it closed.
+      onClose={onClose}
       onClick={(event) => {
-        if (event.target === event.currentTarget) close();
+        if (event.target === event.currentTarget) onClose();
       }}
     >
       <header className="history-header">
@@ -183,45 +120,16 @@ function History({
           <h2>History</h2>
           <p className="history-note-title">{title}</p>
         </div>
-        <button
-          type="button"
-          className="link-button"
-          disabled={pinned}
-          onClick={close}
-        >
+        <button type="button" className="link-button" onClick={onClose}>
           Done
         </button>
       </header>
-      {restoring !== null && !pinned && (
-        <p role="status" className="history-stalled">
-          Still restoring. You can close History; the restore may still apply,
-          and this note stays read-only in this window until it is confirmed.
-        </p>
-      )}
-      {restoring === null && hold === "pending" && (
-        <div role="status" className="history-stalled">
-          <p>
-            A restore of this note from this browser is not confirmed yet. The
-            note stays read-only until it is.
-          </p>
-          <button
-            type="button"
-            className="link-button"
-            disabled={!connected}
-            onClick={onCheck}
-          >
-            Check again
-          </button>
-        </div>
-      )}
       <div className="history-body">
         <section className="history-versions" aria-label="Versions">
           <VersionList
             noteId={noteId}
             selected={selected}
             currentRevision={current?.revision}
-            // The version being restored stays chosen until the answer.
-            locked={restoring !== null}
             onSelect={setSelected}
           />
         </section>
@@ -232,15 +140,14 @@ function History({
               noteId={noteId}
               version={selected}
               current={current}
-              hold={hold}
-              restoring={restoring !== null}
+              connected={connected}
               onBack={() => setSelected(null)}
-              onRestore={onRestore}
-              onCheck={onCheck}
+              onRestoreAsNew={onRestoreAsNew}
             />
           ) : (
             <p className="history-empty">
-              Choose a version to read it, compare it or restore it.
+              Choose a version to read it, compare it, or restore it as a new
+              note.
             </p>
           )}
         </section>
@@ -259,13 +166,11 @@ function VersionList({
   noteId,
   selected,
   currentRevision,
-  locked,
   onSelect,
 }: {
   noteId: Id<"notes">;
   selected: Version | null;
   currentRevision: number | undefined;
-  locked: boolean;
   onSelect: (version: Version) => void;
 }) {
   const [pages, setPages] = useState(1);
@@ -309,7 +214,6 @@ function VersionList({
             type="button"
             className="history-row"
             aria-pressed={selectedKey === versionKey(version)}
-            disabled={locked}
             onClick={() => onSelect(version)}
           >
             <span className="history-row-who">
@@ -354,19 +258,17 @@ function VersionView({
   noteId,
   version,
   current,
-  hold,
-  restoring,
+  connected,
   onBack,
-  onRestore,
-  onCheck,
+  onRestoreAsNew,
 }: {
   noteId: Id<"notes">;
   version: Version;
   current: Current;
-  hold: RestoreHold;
-  restoring: boolean;
+  connected: boolean;
   onBack: () => void;
-} & RestoreCallbacks) {
+  onRestoreAsNew: RestoreAsNew;
+}) {
   const [compare, setCompare] = useState<Compare>("version");
   const shown = useQuery(api.history.read, {
     noteId,
@@ -411,12 +313,7 @@ function VersionView({
 
   return (
     <>
-      <button
-        type="button"
-        className="history-back"
-        disabled={restoring}
-        onClick={onBack}
-      >
+      <button type="button" className="history-back" onClick={onBack}>
         <Icon name="back" size={15} />
         Versions
       </button>
@@ -473,14 +370,10 @@ function VersionView({
           <p className="history-loading">Loading…</p>
         )}
       </div>
-      <RestoreControls
-        noteId={noteId}
-        version={version}
-        current={current}
-        hold={hold}
-        busy={restoring}
-        onRestore={onRestore}
-        onCheck={onCheck}
+      <NewNoteControls
+        doc={shown?.doc ?? null}
+        connected={connected}
+        onRestoreAsNew={onRestoreAsNew}
       />
     </>
   );
@@ -528,68 +421,34 @@ function DiffView({ diff }: { diff: TextDiff }) {
   );
 }
 
-function RestoreControls({
-  version,
-  current,
-  hold,
-  busy,
-  onRestore,
+/**
+ * "Restore as a new note": confirm, then App creates the note (and closes
+ * History, offering Open). Nothing changes in the note whose history this is.
+ */
+function NewNoteControls({
+  doc,
+  connected,
+  onRestoreAsNew,
 }: {
-  noteId: Id<"notes">;
-  version: Version;
-  current: Current;
-  hold: RestoreHold;
-  /** A restore of this note is in flight from this window. */
-  busy: boolean;
-} & RestoreCallbacks) {
+  /** The version's stored document, once read. */
+  doc: string | null;
+  connected: boolean;
+  onRestoreAsNew: RestoreAsNew;
+}) {
   const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  // The latest hold and state, for the check just before sending.
-  const holdNow = useRef(hold);
-  holdNow.current = hold;
-  const busyNow = useRef(busy);
-  busyNow.current = busy;
-
   async function run() {
-    // The panel is modal, so no typing starts here while it is open; still,
-    // check again at the last moment.
-    if (!current || holdNow.current || busyNow.current) return;
-    busyNow.current = true;
+    if (!doc || busy) return;
+    setBusy(true);
     setNotice(null);
-    // The revision the person is replacing; if someone edits first, the
-    // server refuses rather than discarding their edit unseen. App records
-    // the request before sending it and keeps the note read-only until the
-    // outcome is known, even if History closes or the page reloads.
-    const outcome = await onRestore(
-      {
-        revision: version.revision,
-        expectedRevision: current.revision,
-        requestId: crypto.randomUUID(),
-      },
-      version,
-    );
-    if (outcome.kind === "conflict") {
-      setConfirming(false);
-      setNotice(
-        "The note changed before the restore reached it, so nothing was restored. History now shows the latest changes; restore again if you still want this version.",
-      );
-    } else if (outcome.kind === "unanswered") {
-      setConfirming(false);
-      setNotice(
-        "The restore did not reach the server, so it is not confirmed yet. The note stays read-only here until it is.",
-      );
-    } else if (outcome.kind === "refused") setNotice(outcome.message);
-    else if (outcome.kind === "not-recorded")
-      setNotice(restoreOutcomeText(outcome));
+    try {
+      await onRestoreAsNew(doc);
+    } catch (failure) {
+      setNotice(transportError(failure).message);
+      setBusy(false);
+    }
   }
-
-  if (!current) return null;
-  if (!canRestore(version, current.revision))
-    return (
-      <footer className="history-actions">
-        <p className="history-legend">This is the note as it is now.</p>
-      </footer>
-    );
   return (
     <footer className="history-actions">
       {notice && (
@@ -597,25 +456,24 @@ function RestoreControls({
           {notice}
         </p>
       )}
-      {hold && hold !== "pending" && (
+      {!connected && (
         <p role="status" className="history-legend">
-          {holdNotices[hold]}
+          Not connected. Restore when the connection is back.
         </p>
       )}
       {confirming ? (
         <div className="history-confirm">
           <p>
-            Replace the note’s text with this version? Everyone with the note
-            open sees the change. Typing not yet saved in other windows or on
-            other devices is lost. The text it replaces stays in History.
+            Create a new note with this version’s text? This note stays as it
+            is.
           </p>
           <div className="button-row">
             <button
               type="button"
-              disabled={busy || !!hold}
+              disabled={busy || !connected || !doc}
               onClick={() => void run()}
             >
-              {busy ? "Restoring…" : "Restore"}
+              {busy ? "Creating…" : "Create note"}
             </button>
             <button
               type="button"
@@ -631,13 +489,13 @@ function RestoreControls({
         <button
           type="button"
           className="history-restore"
-          disabled={!!hold}
+          disabled={!connected || !doc}
           onClick={() => {
             setNotice(null);
             setConfirming(true);
           }}
         >
-          Restore this version…
+          Restore as a new note…
         </button>
       )}
     </footer>

@@ -17,24 +17,7 @@ import type {
   NotesStore,
 } from "./cache";
 import { emptyDocument, validateCachedDocument } from "./document";
-import { dayAndTime, smartDate } from "./dates";
-import {
-  restoreHold,
-  restoreOutcomeText,
-  type RestoreOutcome,
-  type RestoreRequest,
-  type Version,
-} from "./versions";
-import {
-  noteHold,
-  pendingRestore,
-  RestoreKeeper,
-  sendInSession,
-  type NoteHold,
-  type PendingRestore,
-  type SendRestore,
-} from "./restore-keeper";
-import { openRecordStore } from "./restore-store";
+import { smartDate } from "./dates";
 import { EditorSurface } from "./EditorSurface";
 import { Icon } from "./Icons";
 import { Appearance } from "./Appearance";
@@ -170,12 +153,6 @@ const statusLabels = {
   "signed-out": "Signed out",
 };
 
-/** Tells this browser's other windows that restore records changed. */
-const restoreChannel =
-  typeof BroadcastChannel === "undefined"
-    ? null
-    : new BroadcastChannel("palladian-restores");
-
 function randomId() {
   return crypto.randomUUID().replace(/-/g, "");
 }
@@ -194,24 +171,6 @@ function channelLabel(status: ChannelStatus | null, ready: boolean) {
       return "Saved";
     case "blocked":
       return status.message;
-  }
-}
-
-/** The open note's status while a restore holds it (see `noteHold`). */
-function holdLabel(reason: NoteHold["reason"], connected: boolean) {
-  switch (reason) {
-    case "loading":
-      return "Checking this device’s restores…";
-    case "unreadable":
-      return "Restore records on this device could not be read — editing is paused";
-    case "sending":
-      return "Restoring a version — editing resumes when it is done";
-    case "unconfirmed":
-      return connected
-        ? "Restoring a version — not confirmed yet"
-        : "Restoring a version — checked again when connected";
-    case "arriving":
-      return "Restoring a version — editing resumes when it arrives";
   }
 }
 
@@ -261,28 +220,6 @@ export function App({
   const shownTab = settingsTab ?? (phone ? null : "account");
   const [section, setSection] = useState<Section>({ kind: "all" });
   const [dialog, setDialog] = useState<Dialog>(null);
-  const dialogRef = useRef(dialog);
-  dialogRef.current = dialog;
-  /**
-   * Restores this browser has sent (review rounds 3 and 4; `RestoreKeeper`).
-   * Each is recorded durably before it is sent; while it is unresolved, or
-   * applied but not yet received by an editor here, its note is read-only in
-   * this window. The records are shared with this browser's other windows.
-   */
-  const sendRestoreRef = useRef<SendRestore>(async () => ({
-    kind: "unanswered",
-  }));
-  const [keeper] = useState(
-    () =>
-      new RestoreKeeper(
-        openRecordStore(),
-        (record) => sendRestoreRef.current(record),
-        () => restoreChannel?.postMessage("changed"),
-      ),
-  );
-  const restores = useSyncExternalStore(keeper.subscribe, keeper.getState);
-  /** Restores this window has sent or re-checked on the current connection. */
-  const restoresChecked = useRef(new Set<string>());
   const [menu, setMenu] = useState<Menu | null>(null);
   /** The note row resting open after a swipe; one at a time. */
   const [openSwipe, setOpenSwipe] = useState<string | null>(null);
@@ -1357,25 +1294,8 @@ export function App({
       : section.kind === "notebook"
         ? (notebooks.find((n) => n.id === section.id)?.name ?? "Notebook")
         : "All notes";
-  // Whether a restore holds the open note's editor here: unresolved, or
-  // applied but not yet received by this editor. Notes not yet on the server
-  // cannot have been restored.
-  const openHold =
-    currentOpen &&
-    accountId &&
-    !isLocalNoteId(currentOpen.id) &&
-    (currentOpen.kind === "live" || currentOpen.kind === "draft")
-      ? noteHold(
-          restores,
-          accountId,
-          currentOpen.id,
-          currentOpen.channel?.collabVersion ?? null,
-          Date.now(),
-        )
-      : null;
   const editable =
     !!currentOpen &&
-    !openHold &&
     (currentOpen.kind === "draft" ||
       (currentOpen.kind === "live" &&
         !currentOpen.trashed &&
@@ -1393,9 +1313,7 @@ export function App({
             : "Cached copy — read only"
           : currentOpen.trashed
             ? "In Trash — restore to edit"
-            : openHold
-              ? holdLabel(openHold.reason, liveConnected)
-              : channelLabel(channelStatus, !!currentOpen.channel?.ready);
+            : channelLabel(channelStatus, !!currentOpen.channel?.ready);
   const sessionStatus =
     statusLabels[snapshot.status] +
     (snapshot.status === "ready" && live && !liveState.connected
@@ -1435,122 +1353,34 @@ export function App({
   useEffect(() => {
     if (menuStale) setMenu(null);
   }, [menuStale]);
-  // Restores go out only for the account they were recorded in, within one
-  // session (`sendInSession`), with the client of that session.
-  sendRestoreRef.current = (record) =>
-    sendInSession(
-      record,
-      { account: () => snapshotRef.current.accountId, ticket: sessionTicket },
-      async () => {
-        const { sendRestore } = await import("./restore-send");
-        const client = liveRef.current?.client;
-        return client ? (request) => sendRestore(client, request) : null;
-      },
-    );
-  /** Says what became of a restore, unless History is showing it already. */
-  function reportRestore(
-    record: PendingRestore,
-    outcome: RestoreOutcome,
-    replay: boolean,
-  ) {
-    const showing =
-      dialogRef.current?.kind === "history" &&
-      dialogRef.current.noteId === record.noteId;
-    if (outcome.kind === "restored") {
-      if (showing) setDialog(null);
-      toast(`Restored the version from ${dayAndTime(record.versionEndedAt)}`);
-    } else if (!showing || replay) toast(restoreOutcomeText(outcome, replay));
-  }
-  /** Records a restore durably, then sends it. */
-  async function startRestore(
-    noteId: string,
-    request: RestoreRequest,
-    version: Version,
-  ): Promise<RestoreOutcome> {
-    if (!accountId) return { kind: "unanswered" };
-    const record: PendingRestore = {
-      accountId,
-      noteId,
-      ...request,
-      versionEndedAt: version.endedAt,
-      since: Date.now(),
-    };
-    restoresChecked.current.add(record.requestId);
-    const outcome = await keeper.restore(record);
-    reportRestore(record, outcome, false);
-    return outcome;
-  }
-  /** Sends an unresolved restore again, unchanged, to learn its outcome. */
-  async function checkRestore(record: PendingRestore) {
-    restoresChecked.current.add(record.requestId);
-    reportRestore(record, await keeper.check(record), true);
-  }
-  // Restore records: read them, follow other windows' changes, and retire
-  // applied ones once their hold has run out.
-  useEffect(() => {
-    void keeper.reload();
-    const reload = () => void keeper.reload();
-    restoreChannel?.addEventListener("message", reload);
-    const timer = setInterval(() => void keeper.expire(), 30_000);
-    return () => {
-      restoreChannel?.removeEventListener("message", reload);
-      clearInterval(timer);
-    };
-  }, [keeper]);
-  // Restores this account left unresolved (by a reload, another window, or
-  // an answer that never came) are checked once each time it connects. Other
-  // accounts' records wait until that account signs in again.
-  useEffect(() => {
-    if (!liveConnected || !accountId) {
-      restoresChecked.current.clear();
-      return;
-    }
-    for (const record of restores.records)
-      if (
-        record.accountId === accountId &&
-        record.appliedRevision === undefined &&
-        !restores.inFlight.has(record.requestId) &&
-        !restoresChecked.current.has(record.requestId)
-      )
-        void checkRestore(record);
-  }, [liveConnected, accountId, restores]);
   /**
-   * Signing out first checks this account's unresolved restores if the
-   * server is reachable (for up to 10 s). Otherwise they stay recorded and are
-   * checked when this account signs in here again; they never replay for
-   * another account.
+   * Restore as a new note (after review round 5): a new note with the
+   * version's text, in the same notebook if this person can add notes there,
+   * otherwise their default notebook, as Duplicate does. The original note,
+   * and anyone typing in it, is not touched.
    */
-  async function signOut() {
-    if (accountId && liveConnected) {
-      const mine = restores.records.filter(
-        (record) =>
-          record.accountId === accountId &&
-          record.appliedRevision === undefined,
-      );
-      if (mine.length)
-        await Promise.race([
-          Promise.all(mine.map((record) => checkRestore(record))),
-          new Promise((resolve) => setTimeout(resolve, 10_000)),
-        ]);
-    }
-    return session.logout();
+  async function restoreAsNewNote(noteId: string, doc: string) {
+    if (!live || !liveConnected) throw new Error("Not connected.");
+    const row = rows.find((r) => r.accountId === accountId && r.id === noteId);
+    const book = notebooks.find((n) => n.id === row?.notebookId);
+    const notebookId =
+      book && book.role !== "read"
+        ? book.id
+        : (liveState.profile?.defaultNotebookId ?? undefined);
+    const { duplicateNote } = await import("./note-tools");
+    const id = await duplicateNote(live.client, doc, notebookId);
+    setDialog(null);
+    toast("Restored as a new note", {
+      label: "Open",
+      run: () => void openRemote(id),
+    });
   }
-  /** Removes this device's unreadable restore records, if the person agrees. */
-  async function discardUnreadableRestores() {
-    if (
-      !confirm(
-        "Discard the restore records on this device that cannot be read? If one of them was a restore still on its way, typing in that note could be lost when it arrives.",
-      )
-    )
-      return;
-    await keeper.discardUnreadable();
-  }
-
   // History closes once the note no longer offers it to this person: a lost
   // edit role, Trash, or the note gone. The note as it is now comes from its
   // row (or the open note, which follows its row); a server note with unsent
   // edits is still a server note. A lost connection does not close it (the
-  // panel holds Restore instead), and offline it hides with the other dialogs.
+  // panel holds its button instead), and offline it hides with the other
+  // dialogs.
   const historyNow =
     dialog?.kind === "history"
       ? currentTarget(dialog.noteId, dialog.source)
@@ -1561,35 +1391,6 @@ export function App({
     (!historyNow ||
       historyNow.accountId !== accountId ||
       !noteActions(historyNow, true).includes("history"));
-  // Restoring replaces the whole note, so it waits for this window's own
-  // typing in it to reach the server, for the connection, and for any
-  // earlier restore of it from this browser to be resolved; and it needs
-  // this browser to be able to record it first.
-  const historyRestore =
-    dialog?.kind === "history" && accountId
-      ? pendingRestore(restores, accountId, dialog.noteId)
-      : undefined;
-  const historyHold =
-    dialog?.kind === "history"
-      ? restoreHold({
-          connected: liveConnected,
-          pending: !!historyRestore,
-          recordable:
-            restores.status === "ready" &&
-            !restores.corrupt.some(
-              (entry) =>
-                entry.accountId === null || entry.accountId === accountId,
-            ),
-          open:
-            currentOpen?.id === dialog.noteId
-              ? { kind: currentOpen.kind, status: channelStatus?.kind ?? null }
-              : null,
-          journaled:
-            rows.find(
-              (row) => row.accountId === accountId && row.id === dialog.noteId,
-            )?.kind === "draft",
-        })
-      : null;
   useEffect(() => {
     if (historyStale) setDialog(null);
   }, [historyStale]);
@@ -2159,33 +1960,6 @@ export function App({
                   <Icon name="menu" size={20} />
                 </button>
                 <span className="save-status">{statusText}</span>
-                {openHold?.reason === "unconfirmed" && liveConnected && (
-                  <button
-                    type="button"
-                    className="link-button check-restore"
-                    onClick={() => void checkRestore(openHold.record)}
-                  >
-                    Check again
-                  </button>
-                )}
-                {openHold?.reason === "unreadable" && (
-                  <>
-                    <button
-                      type="button"
-                      className="link-button check-restore"
-                      onClick={() => void keeper.reload()}
-                    >
-                      Check again
-                    </button>
-                    <button
-                      type="button"
-                      className="link-button check-restore"
-                      onClick={() => void discardUnreadableRestores()}
-                    >
-                      Discard…
-                    </button>
-                  </>
-                )}
                 {openActions.length > 0 && (
                   <span className="note-actions">
                     {openActions
@@ -2311,7 +2085,7 @@ export function App({
                       detail={snapshot.error ?? null}
                       canSignOut={permitted}
                       onRetry={() => session.retry()}
-                      onSignOut={() => signOut()}
+                      onSignOut={() => session.logout()}
                     />
                   )}
                 </>
@@ -2328,20 +2102,9 @@ export function App({
               live={live}
               noteId={dialog.noteId}
               title={dialog.title}
-              restoreHold={historyHold}
               connected={liveConnected}
-              restoring={
-                historyRestore
-                  ? (restores.inFlight.get(historyRestore.requestId) ?? null)
-                  : null
-              }
               onClose={() => setDialog(null)}
-              onRestore={(request, version) =>
-                startRestore(dialog.noteId, request, version)
-              }
-              onCheck={() => {
-                if (historyRestore) void checkRestore(historyRestore);
-              }}
+              onRestoreAsNew={(doc) => restoreAsNewNote(dialog.noteId, doc)}
             />
           </Suspense>
         </PanelBoundary>

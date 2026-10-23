@@ -259,7 +259,7 @@ None of this changes the shared schema in `packages/notes-core`.
 
 ### A4. History (M)
 
-Implemented 2026-10-22, in review (`docs/reviews/notes-history-implementation.md`).
+Implemented 2026-10-22, with Restore as a new note (in-place Restore withdrawn after review round 5), in review (`docs/reviews/notes-history-implementation.md`).
 
 Deltos reference: `components/HistoryPanel.tsx`, for the UI only. Deltos kept per-device snapshots; Palladian has server revisions, so `lib/historyCapture.ts` does not port.
 

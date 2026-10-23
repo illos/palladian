@@ -40,17 +40,6 @@
   color: var(--secondary);
   overflow-wrap: anywhere;
 }
-.history-stalled {
-  margin: 0;
-  padding: 10px 22px;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
-  color: var(--ink);
-  background: var(--sel);
-}
-.history-stalled p {
-  margin: 0 0 6px;
-}
 .history-body {
   flex: 1;
   min-height: 0;

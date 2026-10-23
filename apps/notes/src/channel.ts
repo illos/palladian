@@ -113,14 +113,6 @@ export class NoteChannel implements EditorBinding {
     return !this.blocked && (!this.created || this.caughtUp);
   }
 
-  /**
-   * The revision this editor has incorporated, or null before it attaches.
-   * Read-only; History holds an editor until it has received a restore.
-   */
-  get collabVersion(): number | null {
-    return this.view ? getVersion(this.view.state) : null;
-  }
-
   /** What the editor shows now, including typing not yet saved anywhere. */
   current(): { document: string; text: string } | null {
     const doc = this.view?.state.doc;

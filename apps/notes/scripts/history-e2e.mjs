@@ -2,29 +2,27 @@
 // deployment + the app + Chromium on a desktop and an emulated iPhone. Covers
 // the version list (who, what, when) after edits by two people, reading an old
 // version and comparing it with the previous and the current one, paging,
-// restoring while another signed-in person is typing in the note (a refused
-// restore first, then both converge; what happens to their words is checked
-// word by word), and that a read-only collaborator, or an editor whose access
-// drops to read, never reaches History. The review rounds add: Restore waits
-// for this window's own unsent typing and for the connection; a restore's
-// note stays read-only while it is in flight, across note switches, reloads
-// and other windows, until its outcome is known and each window's editor has
-// received it; unconfirmed restores are reconciled (also at sign-out) and
-// applied once; unreadable records pause editing; and the known other-tab
-// gap is pinned. Prints no secrets. Disposable @example.test accounts only.
+// Restore as a new note (the copy has the version's text, in the same
+// notebook or the person's default one; the original note, and another
+// person typing in it, are untouched), History held without a connection and
+// kept open from a row with a pending journal, and that a read-only
+// collaborator, or an editor whose access drops to read, never reaches
+// History. In-place restore was withdrawn after review round 5 (see the
+// implementation report). Prints no secrets. Disposable @example.test
+// accounts only.
 //
-// Typing is held unsent, a restore is held in flight, and a connection is
-// dropped deterministically by routing each page's Convex WebSocket through
-// the script (`convexGate`), not by timing.
+// Typing is held unsent and a connection is dropped deterministically by
+// routing each page's Convex WebSocket through the script (`convexGate`), not
+// by timing.
 //
 // CONVEX_DEPLOYMENT selects the development deployment (dev:…), NOTES_APP_URL
 // the app (served with that deployment's VITE_NOTES_* URLs), NOTES_BACKEND_DIR
 // the backend checkout, CONVEX_SITE_URL and CONVEX_CLOUD_URL the deployment's
-// URLs. SCREENSHOT_DIR, if set, receives pictures of the panel.
-// HISTORY_E2E_STEPS (comma-separated: list, compare, f3, f1, f2, restore,
-// r2-1, r3-1, r3-1-replay, r4-4, r4-5, tab, paging, reader, downgrade, phone,
-// signout) runs only those steps after the setup.
-// HISTORY_E2E_DEBUG logs page errors, failed requests and reloads.
+// URLs; `dev-target.mjs` checks them all before anything is provisioned.
+// SCREENSHOT_DIR, if set, receives pictures of the panel. HISTORY_E2E_STEPS
+// (comma-separated: list, compare, f3, f2, paging, reader, phone, new-note,
+// downgrade) runs only those steps after the setup. HISTORY_E2E_DEBUG logs
+// page errors, failed requests and reloads.
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -109,84 +107,30 @@ function protocol(message) {
  * connection and refuse new ones.
  */
 /**
- * Set when the development deployment's `history.restore` predates its
- * `account` precondition (review round 4): the gate then removes `account`
- * from restore requests, which that deployment would otherwise reject as an
- * unknown argument. The precondition itself is tested in the backend.
+ * Routes a context's Convex WebSockets through the script, so a test can hold
+ * chosen mutations (an editor's `notes:push`) unsent and release them later in
+ * order, or drop the connection and refuse new ones.
  */
-let stripRestoreAccount = false;
-
 async function convexGate(context) {
   const holding = new Set();
-  const failing = new Set();
-  const holdingAnswers = new Set();
   let held = [];
-  let heldAnswers = [];
-  let holdingIncoming = false;
-  let heldIncoming = [];
   const links = new Set();
   let refusing = false;
   await context.routeWebSocket(/\/api\/[^/]+\/sync$/, (ws) => {
     if (refusing) return void ws.close();
     const server = ws.connectToServer();
-    const link = { ws, server, watched: new Map() };
+    const link = { ws, server };
     links.add(link);
     ws.onClose(() => {
       links.delete(link);
       server.close();
     });
-    ws.onMessage((original) => {
-      let message = original;
+    ws.onMessage((message) => {
       const data = protocol(message);
       const path = data?.type === "Mutation" ? data.udfPath : null;
-      const args = data?.args ? structuredClone(data.args) : undefined;
-      if (
-        path === "history:restore" &&
-        stripRestoreAccount &&
-        data.args?.[0] &&
-        "account" in data.args[0]
-      ) {
-        delete data.args[0].account;
-        message = JSON.stringify(data);
-      }
-      if (path && failing.has(path)) {
-        failing.delete(path);
-        // As if the answer were lost: the client learns nothing it can use.
-        ws.send(
-          JSON.stringify({
-            type: "MutationResponse",
-            requestId: data.requestId,
-            success: false,
-            result: "Synthetic failure from the test gate",
-            logLines: [],
-          }),
-        );
-        return;
-      }
-      if (path && holdingAnswers.has(path))
-        link.watched.set(data.requestId, path);
       if (path && holding.has(path))
-        held.push({ path, args, send: () => server.send(message) });
+        held.push({ path, send: () => server.send(message) });
       else server.send(message);
-    });
-    server.onMessage((message) => {
-      const data = protocol(message);
-      if (
-        data?.type === "MutationResponse" &&
-        link.watched.has(data.requestId)
-      ) {
-        heldAnswers.push({
-          path: link.watched.get(data.requestId),
-          send: () => ws.send(message),
-        });
-        return;
-      }
-      // Query updates (a note's steps among them), when they are held.
-      if (holdingIncoming && data?.type === "Transition") {
-        heldIncoming.push(() => ws.send(message));
-        return;
-      }
-      ws.send(message);
     });
   });
   return {
@@ -196,52 +140,10 @@ async function convexGate(context) {
     held(path) {
       return held.filter((item) => item.path === path).length;
     },
-    /** The arguments of the held mutations of this function. */
-    heldArgs(path) {
-      return held.filter((item) => item.path === path).map((item) => item.args);
-    },
     release(path) {
       holding.delete(path);
       for (const item of held) if (item.path === path) item.send();
       held = held.filter((item) => item.path !== path);
-    },
-    /** Forgets held mutations unsent (their page has gone). */
-    discard(path) {
-      holding.delete(path);
-      held = held.filter((item) => item.path !== path);
-    },
-    failNext(path) {
-      failing.add(path);
-    },
-    /** Lets mutations of this function through but keeps their answers. */
-    holdAnswers(path) {
-      holdingAnswers.add(path);
-    },
-    heldAnswers(path) {
-      return heldAnswers.filter((item) => item.path === path).length;
-    },
-    /** Stops keeping answers; the ones kept are never delivered. */
-    dropAnswers(path) {
-      holdingAnswers.delete(path);
-      heldAnswers = heldAnswers.filter((item) => item.path !== path);
-    },
-    /** Delivers the answers kept, in order, and stops keeping them. */
-    releaseAnswers(path) {
-      holdingAnswers.delete(path);
-      for (const item of heldAnswers) if (item.path === path) item.send();
-      heldAnswers = heldAnswers.filter((item) => item.path !== path);
-    },
-    /** Keeps query updates (including a note's steps) from the page. */
-    holdIncoming() {
-      holdingIncoming = true;
-    },
-    heldIncoming() {
-      return heldIncoming.length;
-    },
-    releaseIncoming() {
-      holdingIncoming = false;
-      for (const send of heldIncoming) send();
-      heldIncoming = [];
     },
     disconnect() {
       refusing = true;
@@ -402,21 +304,6 @@ try {
   site = target.site;
   cloud = target.cloud;
   step(`everything points at the development deployment ${target.name}`);
-  // Does that deployment's history.restore take the account precondition yet?
-  const spec = spawnSync("npx", ["convex", "function-spec"], {
-    cwd: backend,
-    encoding: "utf8",
-    timeout: 120_000,
-  });
-  const restoreSpec = JSON.parse(spec.stdout || "{}").functions?.find(
-    (fn) => fn.identifier === "history.js:restore",
-  );
-  assert.ok(restoreSpec, "the deployment has history.restore");
-  stripRestoreAccount = !("account" in (restoreSpec.args?.value ?? {}));
-  if (stripRestoreAccount)
-    step(
-      "note: this deployment's history.restore predates the account precondition, so the gate removes `account` from restore requests (the precondition is tested in the backend)",
-    );
 
   begin("setup");
   // Ada owns the note; Cy may edit it; Bo may only read it.
@@ -466,12 +353,9 @@ try {
   const rows = history.locator(".history-row");
   const versionText = history.getByRole("document", { name: "Version text" });
   const changes = history.getByRole("document", { name: "Changes" });
-  const restoreButton = history.getByRole("button", {
-    name: "Restore this version…",
+  const newNoteButton = history.getByRole("button", {
+    name: "Restore as a new note…",
   });
-  const waiting = history.getByText(
-    "Waiting for your changes in this window to save…",
-  );
   const offline = history.getByText(
     "Not connected. Restore when the connection is back.",
   );
@@ -554,12 +438,6 @@ try {
       history.getByText(/compared with an empty note/),
     ).toBeVisible();
     await expect(changes.locator("ins")).toContainText(["Recipe"]);
-    // The newest version is the note as it is now; it cannot be restored.
-    await rows.first().click();
-    await expect(
-      history.getByText("This is the note as it is now."),
-    ).toBeVisible();
-    await expect(restoreButton).toHaveCount(0);
     await closeHistory();
     step(
       "an old version reads read-only, and compares with the previous and current",
@@ -596,45 +474,17 @@ try {
     );
   }
 
-  if (wanted("f1")) {
-    // Ada's own typing is held unsent: Restore waits for it.
-    deskA.gate.hold("notes:push");
-    await typeAtEnd(a, editorA, " Unsent here.");
-    await expect(a.locator(".save-status")).toHaveText("Saving…");
-    await openHistory();
-    await rows.nth(2).click();
-    await expect(waiting).toBeVisible({ timeout: 10_000 });
-    await expect(restoreButton).toBeDisabled();
-    await a.waitForTimeout(1_000);
-    await expect(restoreButton).toBeDisabled();
-    await shot(a, "desktop-restore-waiting");
-    assert.ok(deskA.gate.held("notes:push") >= 1, "Ada's typing was held");
-    deskA.gate.release("notes:push");
-    await expect(waiting).toBeHidden({ timeout: 20_000 });
-    await expect(restoreButton).toBeEnabled();
-    // What Ada typed reached the server before any restore could replace it.
-    const newest = (await convex(a, "query", "history:list", { noteId }))
-      .versions[0];
-    const now = await convex(a, "query", "history:read", {
-      noteId,
-      revision: newest.revision,
-    });
-    assert.ok(now.markdown.includes("Unsent here."), "Ada's typing was saved");
-    await closeHistory();
-    step("review F1: Restore waits until this window's own typing is saved");
-  }
-
   if (wanted("f2")) {
     await openHistory();
     await rows.nth(2).click();
-    await expect(restoreButton).toBeEnabled({ timeout: 20_000 });
+    await expect(newNoteButton).toBeEnabled({ timeout: 20_000 });
     deskA.gate.disconnect();
     await expect(a.getByTestId("session-status")).toContainText(
       "server unreachable",
       { timeout: 20_000 },
     );
     await expect(offline).toBeVisible();
-    await expect(restoreButton).toBeDisabled();
+    await expect(newNoteButton).toBeDisabled();
     await closeHistory();
     await expect(a.getByRole("button", { name: "Note history" })).toHaveCount(
       0,
@@ -654,554 +504,10 @@ try {
     await openHistory();
     await rows.nth(2).click();
     await expect(offline).toBeHidden();
-    await expect(restoreButton).toBeEnabled({ timeout: 20_000 });
+    await expect(newNoteButton).toBeEnabled({ timeout: 20_000 });
     await closeHistory();
     step(
-      "review F2: losing the connection holds Restore and hides History; it returns with the connection",
-    );
-  }
-
-  if (wanted("restore")) {
-    // Restore Ada's first edit while Cy is typing. First, Cy's word lands
-    // while Ada's restore is in flight: the server refuses it.
-    await openHistory();
-    await rows.nth(2).click();
-    await expect(versionText).toContainText("Ada's first edit.", {
-      timeout: 20_000,
-    });
-    await expect(versionText).not.toContainText("Cy was here.");
-    deskA.gate.hold("history:restore");
-    await restoreButton.click();
-    await history.getByRole("button", { name: "Restore", exact: true }).click();
-    await expect.poll(() => deskA.gate.held("history:restore")).toBe(1);
-    await typeAtEnd(c, editorC, " word1");
-    await saved(c);
-    deskA.gate.release("history:restore");
-    await expect(
-      history.getByText(/The note changed before the restore/),
-    ).toBeVisible({ timeout: 20_000 });
-    await expect(editorC).toContainText("Ada's second line.");
-    await expect(editorA).toContainText("word1", { timeout: 20_000 });
-    // Now Cy types a word his device has not sent when the restore arrives.
-    deskC.gate.hold("notes:push");
-    await typeAtEnd(c, editorC, " word2");
-    await expect(c.locator(".save-status")).toHaveText("Saving…");
-    await restoreButton.click();
-    await history.getByRole("button", { name: "Restore", exact: true }).click();
-    await expect(history).toBeHidden({ timeout: 20_000 });
-    await expect(a.locator(".toast")).toContainText(
-      "Restored the version from Today",
-    );
-    // Cy's editor receives the restore through collaboration.
-    await expect(editorC).not.toContainText("Ada's second line.", {
-      timeout: 20_000,
-    });
-    deskC.gate.release("notes:push");
-    await a.waitForTimeout(2_000);
-    await typeAtEnd(c, editorC, " After restore.");
-    await saved(c);
-    await expect(editorA).toContainText("After restore.", { timeout: 20_000 });
-    await expect
-      .poll(
-        async () => (await editorA.innerText()) === (await editorC.innerText()),
-        { timeout: 20_000 },
-      )
-      .toBe(true);
-    const finalText = await editorA.innerText();
-    for (const kept of [
-      "Recipe",
-      "First line. Ada's first edit.",
-      "After restore.",
-    ])
-      assert.ok(finalText.includes(kept), `kept: ${kept}`);
-    for (const gone of ["Cy was here.", "Ada's second line.", "word1"])
-      assert.ok(!finalText.includes(gone), `restored away: ${gone}`);
-    const after = await convex(a, "query", "history:list", { noteId });
-    const restoreAt = after.versions.findIndex((v) => v.kind === "restore");
-    assert.ok(
-      restoreAt > 0,
-      "Cy's later typing is a version after the restore",
-    );
-    const restored = after.versions[restoreAt];
-    assert.equal(restored.actorName, "Ada");
-    assert.equal(after.versions[0].actorName, "Cy");
-    // word1 reached the server before the restore: it is in History.
-    const before = await convex(a, "query", "history:read", {
-      noteId,
-      revision: restored.baseRevision,
-    });
-    assert.ok(before.markdown.includes("word1"), "word1 is in History");
-    // word2 had not left Cy's device. The restore replaced the whole note, and
-    // his editor's unsent steps were rebased onto it and dropped: the word is
-    // neither in the note nor in History. This is collaboration behaviour in
-    // the fundamentals, reported as found (review round 1, F1).
-    assert.ok(!before.markdown.includes("word2"), "word2 was never saved");
-    assert.ok(
-      !finalText.includes("word2"),
-      "word2 did not survive the restore",
-    );
-    const server = await convex(a, "query", "history:read", {
-      noteId,
-      revision: after.versions[0].revision,
-    });
-    assert.ok(server.markdown.includes("After restore."));
-    assert.ok(server.markdown.includes("First line. Ada's first edit."));
-    assert.ok(!server.markdown.includes("Ada's second line."));
-    assert.ok(!server.markdown.includes("word2"));
-    step(
-      "a refused restore, then a restore while Cy types: both converge and Cy's later typing stays",
-    );
-    step(
-      "documented, not changed: Cy's word typed but unsent when the restore arrived is lost; his saved word is in History",
-    );
-  }
-
-  if (wanted("r2-1")) {
-    // Review round 2, R2-1: Ada's restore is held in flight. History cannot
-    // be dismissed and the note is read-only here; after the patience time
-    // History may close, but the note stays read-only, so typing (with its
-    // push held, as the reviewer did) cannot start; then the restore lands
-    // and editing resumes.
-    await openHistory();
-    await rows.nth(1).click();
-    await expect(versionText).not.toContainText("After restore.", {
-      timeout: 20_000,
-    });
-    deskA.gate.hold("history:restore");
-    await restoreButton.click();
-    await history.getByRole("button", { name: "Restore", exact: true }).click();
-    await expect.poll(() => deskA.gate.held("history:restore")).toBe(1);
-    await a.keyboard.press("Escape");
-    await expect(history).toBeVisible();
-    await expect(history.getByRole("button", { name: "Done" })).toBeDisabled();
-    await expect(
-      history.getByRole("button", { name: "Restoring…" }),
-    ).toBeDisabled();
-    await expect(editorA).toHaveAttribute("contenteditable", "false");
-    await expect(a.locator(".save-status")).toHaveText(/^Restoring a version/);
-    await expect(history.getByText(/^Still restoring/)).toBeVisible({
-      timeout: 30_000,
-    });
-    await shot(a, "desktop-restore-stalled");
-    await closeHistory();
-    await expect(editorA).toHaveAttribute("contenteditable", "false");
-    deskA.gate.hold("notes:push");
-    await editorA.click();
-    await a.keyboard.press("Control+End");
-    await a.keyboard.type(" Typed while restoring.");
-    await a.waitForTimeout(1_000);
-    await expect(editorA).not.toContainText("Typed while restoring.");
-    assert.equal(deskA.gate.held("notes:push"), 0, "nothing was typed");
-    deskA.gate.release("history:restore");
-    await expect(a.locator(".toast")).toContainText(
-      "Restored the version from Today",
-      { timeout: 20_000 },
-    );
-    await expect(editorA).not.toContainText("After restore.", {
-      timeout: 20_000,
-    });
-    await expect(editorA).toHaveAttribute("contenteditable", "true", {
-      timeout: 20_000,
-    });
-    deskA.gate.release("notes:push");
-    await typeAtEnd(a, editorA, " Resumed.");
-    await saved(a);
-    const newest = (await convex(a, "query", "history:list", { noteId }))
-      .versions[0];
-    const now = await convex(a, "query", "history:read", {
-      noteId,
-      revision: newest.revision,
-    });
-    assert.ok(now.markdown.includes("Resumed."), "typing resumed and saved");
-    assert.ok(!now.markdown.includes("After restore."), "the restore applied");
-    step(
-      "review R2-1: while a restore is in flight, History stays open and the note stays read-only, even after History closes",
-    );
-  }
-
-  /** How many restores the note's history has, from the server. */
-  const restoreCount = async () =>
-    (
-      await convex(a, "query", "history:list", { noteId, limit: 100 })
-    ).versions.filter((version) => version.kind === "restore").length;
-  /** The restores this browser has recorded and not resolved. */
-  const recorded = (page) =>
-    page.evaluate(
-      () =>
-        new Promise((resolve, reject) => {
-          const open = indexedDB.open("palladian-restores", 1);
-          open.onupgradeneeded = () =>
-            open.result.createObjectStore("restores");
-          open.onsuccess = () => {
-            const read = open.result
-              .transaction("restores")
-              .objectStore("restores")
-              .getAll();
-            read.onsuccess = () => {
-              open.result.close();
-              resolve(read.result.filter((r) => r.appliedRevision == null));
-            };
-            read.onerror = () => reject(read.error);
-          };
-          open.onerror = () => reject(open.error);
-        }),
-    );
-  const sendRestore = async () => {
-    await restoreButton.click();
-    await history.getByRole("button", { name: "Restore", exact: true }).click();
-  };
-
-  if (wanted("r3-1")) {
-    // Review round 3, R3-1: the hold is the note's, not one opening's, and it
-    // survives a reload until the restore's outcome is known.
-    await convex(a, "mutation", "notes:createFromMarkdown", {
-      markdown: "Second note\n\nSomething else.",
-    });
-    await expect(
-      a.getByRole("button", { name: /^Second note\b/ }).first(),
-    ).toBeVisible({ timeout: 20_000 });
-    // A marker the restore takes away: the version before it lacks it.
-    await typeAtEnd(a, editorA, " R3 marker.");
-    await saved(a);
-    const before = await restoreCount();
-    await openHistory();
-    await rows.nth(1).click();
-    await expect(versionText).not.toContainText("R3 marker.", {
-      timeout: 20_000,
-    });
-    deskA.gate.hold("history:restore");
-    await sendRestore();
-    await expect.poll(() => deskA.gate.held("history:restore")).toBe(1);
-    const [sent] = deskA.gate.heldArgs("history:restore");
-    await expect(history.getByText(/^Still restoring/)).toBeVisible({
-      timeout: 30_000,
-    });
-    await closeHistory();
-    // The reviewer's scenario: another note, then back.
-    await openNote(a, "Second note");
-    await recipeRow.click();
-    await expect(editorA).toContainText("R3 marker.", { timeout: 20_000 });
-    await expect(editorA).toHaveAttribute("contenteditable", "false");
-    await expect(a.locator(".save-status")).toHaveText(/^Restoring a version/);
-    await editorA.click();
-    await a.keyboard.press("Control+End");
-    await a.keyboard.type(" Typed after returning.");
-    await a.waitForTimeout(1_000);
-    await expect(editorA).not.toContainText("Typed after returning.");
-    // A reload while the restore is unanswered: its request never reached
-    // the server, but the record did reach storage, so the note stays held.
-    const stored = await recorded(a);
-    assert.equal(stored.length, 1, "the restore is recorded");
-    deskA.gate.discard("history:restore");
-    deskA.gate.hold("history:restore");
-    await a.reload();
-    await expect(editorA).toContainText("R3 marker.", { timeout: 20_000 });
-    await expect(editorA).toHaveAttribute("contenteditable", "false");
-    await expect(a.locator(".save-status")).toHaveText(/^Restoring a version/);
-    // Once connected, the same request is sent again to reconcile.
-    await expect
-      .poll(() => deskA.gate.held("history:restore"), { timeout: 20_000 })
-      .toBe(1);
-    const [again] = deskA.gate.heldArgs("history:restore");
-    assert.deepEqual(again, sent, "reconciling sends the same request");
-    await shot(a, "desktop-restore-reconciling");
-    deskA.gate.release("history:restore");
-    await expect(a.locator(".toast")).toContainText(
-      "Restored the version from Today",
-      { timeout: 20_000 },
-    );
-    await expect(editorA).toHaveAttribute("contenteditable", "true", {
-      timeout: 20_000,
-    });
-    await expect(editorA).not.toContainText("R3 marker.");
-    assert.equal(await restoreCount(), before + 1, "applied once");
-    assert.deepEqual(await recorded(a), [], "the record is cleared");
-    step(
-      "review R3-1: switching notes keeps the restore's note read-only; after a reload the hold stays until the same request is reconciled",
-    );
-
-    // An answer the client cannot use: the note stays held, says so, and
-    // Check again resolves it.
-    await openHistory();
-    // The version with the marker, so the restore visibly changes the note.
-    await rows.nth(1).click();
-    await expect(versionText).toContainText("R3 marker.", { timeout: 20_000 });
-    deskA.gate.failNext("history:restore");
-    await sendRestore();
-    await expect(
-      history.getByText(/did not reach the server, so it is not confirmed/),
-    ).toBeVisible({ timeout: 20_000 });
-    await closeHistory();
-    await expect(a.locator(".save-status")).toHaveText(
-      "Restoring a version — not confirmed yet",
-    );
-    await expect(editorA).toHaveAttribute("contenteditable", "false");
-    assert.equal(await restoreCount(), before + 1, "nothing applied yet");
-    assert.equal((await recorded(a)).length, 1, "still recorded");
-    await a.getByRole("button", { name: "Check again" }).click();
-    await expect
-      .poll(() => restoreCount(), { timeout: 20_000 })
-      .toBe(before + 2);
-    await expect(editorA).toContainText("R3 marker.", { timeout: 20_000 });
-    await expect(editorA).toHaveAttribute("contenteditable", "true", {
-      timeout: 20_000,
-    });
-    assert.deepEqual(await recorded(a), []);
-    step(
-      "review R3-1: an unconfirmed restore holds the note, says so, and Check again resolves it",
-    );
-  }
-
-  if (wanted("r3-1-replay")) {
-    // The restore reaches the server but its answer is lost: after a reload,
-    // reconciling gets the first result back from the server's receipt; it
-    // is not applied twice.
-    await typeAtEnd(a, editorA, " Replay marker.");
-    await saved(a);
-    const before = await restoreCount();
-    await openHistory();
-    await rows.nth(1).click();
-    await expect(versionText).not.toContainText("Replay marker.", {
-      timeout: 20_000,
-    });
-    deskA.gate.holdAnswers("history:restore");
-    await sendRestore();
-    await expect
-      .poll(() => restoreCount(), { timeout: 20_000 })
-      .toBe(before + 1);
-    await expect.poll(() => deskA.gate.heldAnswers("history:restore")).toBe(1);
-    await expect(history).toBeVisible();
-    deskA.gate.dropAnswers("history:restore");
-    deskA.gate.hold("history:restore");
-    await a.reload();
-    await expect(editorA).toHaveAttribute("contenteditable", "false", {
-      timeout: 20_000,
-    });
-    await expect
-      .poll(() => deskA.gate.held("history:restore"), { timeout: 20_000 })
-      .toBe(1);
-    deskA.gate.release("history:restore");
-    await expect(a.locator(".toast")).toContainText(
-      "Restored the version from Today",
-      { timeout: 20_000 },
-    );
-    await expect(editorA).toHaveAttribute("contenteditable", "true", {
-      timeout: 20_000,
-    });
-    assert.equal(await restoreCount(), before + 1, "applied exactly once");
-    assert.deepEqual(await recorded(a), []);
-    await expect(editorA).not.toContainText("Replay marker.");
-    // Editing resumes and saves.
-    await typeAtEnd(a, editorA, " Resumed.");
-    await saved(a);
-    step(
-      "review R3-1: a restore whose answer was lost is reconciled from the server's receipt, applied once",
-    );
-  }
-
-  if (wanted("r4-4")) {
-    // Review round 4, R4-4: a restore that has applied keeps each window's
-    // editor held until that window's own copy has received it. A second
-    // window of Ada's browser gets its own route, so its updates can be held.
-    const a2 = await deskA.newPage();
-    watch(a2, "Ada window 2");
-    const gate2 = await convexGate(a2);
-    await a2.goto(`${app}/notes/${noteId}`);
-    const editorA2 = a2.getByRole("textbox", { name: "Note content" });
-    await expect(editorA2).toHaveAttribute("contenteditable", "true", {
-      timeout: 20_000,
-    });
-    // (a) The restore's steps reach the second window late.
-    await typeAtEnd(a, editorA, " Four marker.");
-    await saved(a);
-    await expect(editorA2).toContainText("Four marker.", { timeout: 20_000 });
-    gate2.holdIncoming();
-    await openHistory();
-    await rows.nth(1).click();
-    await expect(versionText).not.toContainText("Four marker.", {
-      timeout: 20_000,
-    });
-    await sendRestore();
-    await expect(history).toBeHidden({ timeout: 20_000 });
-    await expect(a2.locator(".save-status")).toHaveText(
-      "Restoring a version — editing resumes when it arrives",
-      { timeout: 20_000 },
-    );
-    await expect(editorA2).toHaveAttribute("contenteditable", "false");
-    await expect(editorA2).toContainText("Four marker.");
-    await editorA2.click();
-    await a2.keyboard.press("Control+End");
-    await a2.keyboard.type(" Too early.");
-    await a2.waitForTimeout(500);
-    await expect(editorA2).not.toContainText("Too early.");
-    assert.ok(gate2.heldIncoming() > 0, "window 2's updates were held");
-    gate2.releaseIncoming();
-    await expect(editorA2).not.toContainText("Four marker.", {
-      timeout: 20_000,
-    });
-    await expect(editorA2).toHaveAttribute("contenteditable", "true", {
-      timeout: 20_000,
-    });
-    await typeAtEnd(a2, editorA2, " After arrival.");
-    await expect(a2.locator(".save-status")).toHaveText("Saved", {
-      timeout: 20_000,
-    });
-    await expect(editorA).toContainText("After arrival.", { timeout: 20_000 });
-    step(
-      "review R4-4: another window holds its editor until its own copy has received the restore",
-    );
-
-    // (b) Answers come late in both windows, independently. The second
-    // window, learning of the unresolved restore, sends the same request
-    // itself (the server answers it from the receipt or applies it once), so
-    // both windows' answers are held: with the restore's steps in, both still
-    // hold the note until an answer says what happened.
-    await typeAtEnd(a, editorA, " Late marker.");
-    await saved(a);
-    await expect(editorA2).toContainText("Late marker.", { timeout: 20_000 });
-    await openHistory();
-    await rows.nth(1).click();
-    await expect(versionText).not.toContainText("Late marker.", {
-      timeout: 20_000,
-    });
-    const restoresBefore = await restoreCount();
-    deskA.gate.holdAnswers("history:restore");
-    gate2.holdAnswers("history:restore");
-    await sendRestore();
-    await expect
-      .poll(() => deskA.gate.heldAnswers("history:restore"), {
-        timeout: 20_000,
-      })
-      .toBe(1);
-    await expect(editorA2).not.toContainText("Late marker.", {
-      timeout: 20_000,
-    });
-    await expect
-      .poll(() => gate2.heldAnswers("history:restore"), { timeout: 20_000 })
-      .toBe(1);
-    await expect(editorA2).toHaveAttribute("contenteditable", "false");
-    await expect(a2.locator(".save-status")).toHaveText(/^Restoring a version/);
-    await expect(editorA).toHaveAttribute("contenteditable", "false");
-    // The first window's answer arrives: both windows have the steps, so
-    // both edit again, though the second's own answer is still held.
-    deskA.gate.releaseAnswers("history:restore");
-    await expect(history).toBeHidden({ timeout: 20_000 });
-    await expect(editorA).toHaveAttribute("contenteditable", "true", {
-      timeout: 20_000,
-    });
-    await expect(editorA2).toHaveAttribute("contenteditable", "true", {
-      timeout: 20_000,
-    });
-    assert.equal(gate2.heldAnswers("history:restore"), 1);
-    gate2.releaseAnswers("history:restore");
-    await typeAtEnd(a2, editorA2, " Both free.");
-    await expect(a2.locator(".save-status")).toHaveText("Saved", {
-      timeout: 20_000,
-    });
-    assert.equal(
-      await restoreCount(),
-      restoresBefore + 1,
-      "one restore, though both windows sent it",
-    );
-    await a2.close();
-    step(
-      "review R4-4: with both windows' answers late, both hold the note even with its steps in; the first answer frees both",
-    );
-  }
-
-  if (wanted("r4-5")) {
-    // Review round 4, R4-5: a restore record this browser cannot read pauses
-    // editing for its account (here even the account is unreadable) until the
-    // person checks again or discards it.
-    await a.evaluate(
-      () =>
-        new Promise((resolve, reject) => {
-          const open = indexedDB.open("palladian-restores", 1);
-          open.onupgradeneeded = () =>
-            open.result.createObjectStore("restores");
-          open.onsuccess = () => {
-            const tx = open.result.transaction("restores", "readwrite");
-            tx.objectStore("restores").put({ damaged: true }, "unreadable");
-            tx.oncomplete = () => {
-              open.result.close();
-              resolve(null);
-            };
-            tx.onerror = () => reject(tx.error);
-          };
-        }),
-    );
-    await a.reload();
-    const unreadable =
-      "Restore records on this device could not be read — editing is paused";
-    await expect(a.locator(".save-status")).toHaveText(unreadable, {
-      timeout: 20_000,
-    });
-    await expect(editorA).toHaveAttribute("contenteditable", "false");
-    await a.getByRole("button", { name: "Check again" }).click();
-    await a.waitForTimeout(500);
-    await expect(a.locator(".save-status")).toHaveText(unreadable);
-    a.once("dialog", (dialog) => void dialog.accept());
-    await a.getByRole("button", { name: "Discard…" }).click();
-    await expect(editorA).toHaveAttribute("contenteditable", "true", {
-      timeout: 20_000,
-    });
-    step(
-      "review R4-5: an unreadable restore record pauses editing until it is checked again or discarded",
-    );
-  }
-
-  if (wanted("tab")) {
-    // Review round 2, R2-4, the known gap (fundamentals, not changed): a
-    // second tab of the same browser journals unsent typing, but this
-    // window's guard learns nothing of it, Restore is allowed, and the other
-    // tab's typing is lost.
-    // A marker the restore will take away, saved from this tab first.
-    await typeAtEnd(a, editorA, " Tab marker.");
-    await saved(a);
-    // The condition the reviewer found: the restoring tab receives nothing
-    // while the other tab journals. The server refreshes a note's summary 2 s
-    // after an edit, and that refresh re-reads this tab's cache (which would
-    // then show the other tab's journal), so let it arrive first.
-    await a.waitForTimeout(5_000);
-    const a2 = await deskA.newPage();
-    watch(a2, "Ada tab 2");
-    await a2.goto(`${app}/notes/${noteId}`);
-    const editorA2 = a2.getByRole("textbox", { name: "Note content" });
-    await expect(editorA2).toHaveAttribute("contenteditable", "true", {
-      timeout: 20_000,
-    });
-    await expect(editorA2).toContainText("Tab marker.", { timeout: 20_000 });
-    deskA.gate.hold("notes:push");
-    await typeAtEnd(a2, editorA2, " Other tab.");
-    await expect(a2.locator(".save-status")).toHaveText("Saving…");
-    await expect(
-      a2.getByRole("button", { name: /^Recipe\b/ }).first(),
-    ).toContainText("Unsaved changes", { timeout: 10_000 });
-    await a.bringToFront();
-    await openHistory();
-    await rows.nth(1).click();
-    await expect(restoreButton).toBeEnabled({ timeout: 20_000 });
-    await expect(waiting).toHaveCount(0);
-    await expect(recipeRow).not.toContainText("Unsaved changes");
-    await restoreButton.click();
-    await history.getByRole("button", { name: "Restore", exact: true }).click();
-    await expect(history).toBeHidden({ timeout: 20_000 });
-    await expect(editorA2).not.toContainText("Tab marker.", {
-      timeout: 20_000,
-    });
-    deskA.gate.release("notes:push");
-    await a2.waitForTimeout(2_000);
-    await expect(editorA2).not.toContainText("Other tab.");
-    const newest = (await convex(a, "query", "history:list", { noteId }))
-      .versions[0];
-    const now = await convex(a, "query", "history:read", {
-      noteId,
-      revision: newest.revision,
-    });
-    assert.ok(!now.markdown.includes("Other tab."), "the other tab's word");
-    await a2.close();
-    step(
-      "known gap, not changed (R2-4): another tab's unsent typing is invisible to this window's guard and lost on restore",
+      "review F2: losing the connection holds Restore as a new note and hides History; both return with the connection",
     );
   }
 
@@ -1301,32 +607,6 @@ try {
     );
   }
 
-  if (wanted("downgrade")) {
-    // Cy loses edit access while his History is open: it closes.
-    const cy = await convex(c, "query", "account:me", {});
-    await c.getByRole("button", { name: "Note history" }).click();
-    const cyHistory = c.getByRole("dialog", { name: "History of Recipe" });
-    await expect(cyHistory.locator(".history-row").first()).toBeVisible({
-      timeout: 20_000,
-    });
-    await convex(a, "mutation", "sharing:setNoteMember", {
-      noteId,
-      principalId: cy.id,
-      role: "read",
-    });
-    await expect(cyHistory).toBeHidden({ timeout: 20_000 });
-    await expect(c.getByRole("button", { name: "Note history" })).toHaveCount(
-      0,
-      { timeout: 20_000 },
-    );
-    await assert.rejects(
-      convex(c, "query", "history:list", { noteId }),
-      /denied/,
-    );
-    await shot(c, "desktop-after-downgrade");
-    step("Cy's open History closes when his access drops to read");
-  }
-
   if (wanted("phone")) {
     // Ada on a phone: History from the "…" sheet is a full-height sheet.
     const phoneContext = await newContext({ ...devices["iPhone 15 Plus"] });
@@ -1390,58 +670,120 @@ try {
       "phone: History from the … sheet fills the screen, one step at a time",
     );
   }
-  if (wanted("signout")) {
-    // Review round 4, R4-5: signing out first settles this account's
-    // unconfirmed restores while the server is reachable.
-    await openNote(a, "Recipe");
+  if (wanted("new-note")) {
+    // After review round 5, Restore makes a new note from the version and
+    // leaves the note itself alone. Cy keeps typing in the original
+    // meanwhile: one word sent, one held unsent on his device.
+    await typeAtEnd(c, editorC, " word1");
+    await saved(c);
+    await expect(editorA).toContainText("word1", { timeout: 20_000 });
+    deskC.gate.hold("notes:push");
+    await typeAtEnd(c, editorC, " word2");
+    await expect(c.locator(".save-status")).toHaveText("Saving…");
+    const original = (await convex(a, "query", "notes:get", { noteId }))
+      .summary;
     await openHistory();
-    await rows.nth(1).click();
-    deskA.gate.failNext("history:restore");
-    await sendRestore();
-    await expect(
-      history.getByText(/did not reach the server, so it is not confirmed/),
-    ).toBeVisible({ timeout: 20_000 });
-    await closeHistory();
-    const [unconfirmed] = await recorded(a);
-    assert.ok(unconfirmed, "an unconfirmed restore is recorded");
-    await a
-      .getByRole("button", { name: "Account and connection settings" })
-      .click();
-    await a.getByRole("button", { name: "Sign out…" }).click();
-    await a.getByRole("button", { name: "Sign out of this device" }).click();
-    await expect(
-      a.getByRole("button", { name: "Sign in", exact: true }),
-    ).toBeVisible({ timeout: 30_000 });
-    // The record was settled before signing out: applied, not left pending.
-    const stored = await a.evaluate(
-      () =>
-        new Promise((resolve, reject) => {
-          const open = indexedDB.open("palladian-restores", 1);
-          open.onsuccess = () => {
-            const read = open.result
-              .transaction("restores")
-              .objectStore("restores")
-              .getAll();
-            read.onsuccess = () => {
-              open.result.close();
-              resolve(read.result);
-            };
-            read.onerror = () => reject(read.error);
-          };
-          open.onerror = () => reject(open.error);
-        }),
+    // The first version: "Recipe" and "First line." only.
+    await rows.last().click();
+    await expect(versionText).toContainText("First line.", { timeout: 20_000 });
+    await expect(versionText).not.toContainText("Ada's first edit.");
+    await newNoteButton.click();
+    await history.getByRole("button", { name: "Create note" }).click();
+    await expect(history).toBeHidden({ timeout: 20_000 });
+    const toast = a.locator(".toast", { hasText: "Restored as a new note" });
+    await expect(toast).toBeVisible();
+    await shot(a, "desktop-restored-as-new-note");
+    await toast.getByRole("button", { name: "Open" }).click();
+    await a.waitForURL(
+      (url) =>
+        url.pathname.startsWith("/notes/") && !url.pathname.endsWith(noteId),
+      { timeout: 20_000 },
     );
-    const settled = stored.find(
-      (entry) => entry.requestId === unconfirmed.requestId,
-    );
-    assert.ok(
-      settled && typeof settled.appliedRevision === "number",
-      "the restore was confirmed before signing out",
-    );
+    const copyId = new URL(a.url()).pathname.split("/").pop();
+    await expect(editorA).toContainText("First line.", { timeout: 20_000 });
+    await expect(editorA).not.toContainText("Ada's first edit.");
+    // In the same notebook, which Ada owns.
+    const copy = (await convex(a, "query", "notes:get", { noteId: copyId }))
+      .summary;
+    assert.equal(copy.notebookId, original.notebookId);
+    // The original is untouched: Cy's unsent word is still on his screen,
+    // and once sent, both his words are in it.
+    await expect(editorC).toContainText("word2");
+    deskC.gate.release("notes:push");
+    await saved(c);
+    await a.goto(`${app}/notes/${noteId}`);
+    await expect(editorA).toContainText("word2", { timeout: 20_000 });
+    await expect(editorA).toContainText("word1");
+    await expect(editorA).toContainText("Ada's first edit.");
+    // Its history has no restore in it.
+    const kinds = (
+      await convex(a, "query", "history:list", { noteId })
+    ).versions.map((version) => version.kind);
+    assert.ok(!kinds.includes("restore"), "the original was not restored");
     step(
-      "review R4-5: signing out first confirms this account's unconfirmed restore",
+      "Restore as a new note: the new note has the version's text in the same notebook; the original, and Cy's typing in it, are untouched",
+    );
+
+    // Cy may edit the note but not add notes to Ada's notebook: his copy
+    // goes to his own default notebook.
+    await c.getByRole("button", { name: "Note history" }).click();
+    const cyHistory = c.getByRole("dialog", { name: "History of Recipe" });
+    await expect(cyHistory.locator(".history-row").first()).toBeVisible({
+      timeout: 20_000,
+    });
+    await cyHistory.locator(".history-row").last().click();
+    await cyHistory
+      .getByRole("button", { name: "Restore as a new note…" })
+      .click();
+    await cyHistory.getByRole("button", { name: "Create note" }).click();
+    await expect(cyHistory).toBeHidden({ timeout: 20_000 });
+    await c
+      .locator(".toast", { hasText: "Restored as a new note" })
+      .getByRole("button", { name: "Open" })
+      .click();
+    await c.waitForURL(
+      (url) =>
+        url.pathname.startsWith("/notes/") && !url.pathname.endsWith(noteId),
+      { timeout: 20_000 },
+    );
+    const cyCopyId = new URL(c.url()).pathname.split("/").pop();
+    const cyCopy = (await convex(c, "query", "notes:get", { noteId: cyCopyId }))
+      .summary;
+    const cy = await convex(c, "query", "account:me", {});
+    assert.equal(cyCopy.notebookId, cy.defaultNotebookId);
+    await c.goto(`${app}/notes/${noteId}`);
+    await expect(editorC).toContainText("word2", { timeout: 20_000 });
+    step(
+      "Restore as a new note by an editor who cannot add notes to the notebook: the copy goes to his default notebook",
     );
   }
+
+  if (wanted("downgrade")) {
+    // Cy loses edit access while his History is open: it closes.
+    const cy = await convex(c, "query", "account:me", {});
+    await c.getByRole("button", { name: "Note history" }).click();
+    const cyHistory = c.getByRole("dialog", { name: "History of Recipe" });
+    await expect(cyHistory.locator(".history-row").first()).toBeVisible({
+      timeout: 20_000,
+    });
+    await convex(a, "mutation", "sharing:setNoteMember", {
+      noteId,
+      principalId: cy.id,
+      role: "read",
+    });
+    await expect(cyHistory).toBeHidden({ timeout: 20_000 });
+    await expect(c.getByRole("button", { name: "Note history" })).toHaveCount(
+      0,
+      { timeout: 20_000 },
+    );
+    await assert.rejects(
+      convex(c, "query", "history:list", { noteId }),
+      /denied/,
+    );
+    await shot(c, "desktop-after-downgrade");
+    step("Cy's open History closes when his access drops to read");
+  }
+
   console.log("All history checks passed.");
 } catch (failure) {
   // Only the step and a redacted, short message: raw failures can carry

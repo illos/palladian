@@ -1,12 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
-  canRestore,
   kindLabels,
   pageChain,
   pageKey,
   previousRevision,
-  restoreHold,
-  restoreOutcomeText,
   versionKey,
   type Version,
   type VersionPageResult,
@@ -36,73 +33,6 @@ describe("versions", () => {
     expect(previousRevision({ kind: "restore", baseRevision: 30 })).toBe(30);
     // Nothing came before creation.
     expect(previousRevision({ kind: "create", baseRevision: 0 })).toBeNull();
-  });
-
-  test("only an earlier state can be restored", () => {
-    expect(canRestore({ revision: 3 }, 8)).toBe(true);
-    expect(canRestore({ revision: 8 }, 8)).toBe(false);
-    expect(canRestore({ revision: 3 }, undefined)).toBe(false);
-  });
-});
-
-describe("restore hold (review round 1, F1 and F2)", () => {
-  const ready = { connected: true, open: null, journaled: false };
-
-  test("restores when the note has nothing unsent here", () => {
-    expect(restoreHold(ready)).toBeNull();
-    expect(
-      restoreHold({ ...ready, open: { kind: "live", status: "saved" } }),
-    ).toBeNull();
-    // Read-only views have no typing of their own.
-    expect(
-      restoreHold({ ...ready, open: { kind: "cached", status: null } }),
-    ).toBeNull();
-  });
-
-  test("waits while the open editor has typing not yet confirmed", () => {
-    for (const status of [
-      "saving",
-      "syncing",
-      "offline",
-      "blocked",
-      null,
-    ] as const)
-      expect(restoreHold({ ...ready, open: { kind: "live", status } })).toBe(
-        "unsaved",
-      );
-    // A local draft view of the note: its changes are only on this device.
-    expect(
-      restoreHold({ ...ready, open: { kind: "draft", status: null } }),
-    ).toBe("unsaved");
-  });
-
-  test("waits while unsent edits are journaled, open or not", () => {
-    expect(restoreHold({ ...ready, journaled: true })).toBe("unsaved");
-    expect(
-      restoreHold({
-        ...ready,
-        journaled: true,
-        open: { kind: "live", status: "saved" },
-      }),
-    ).toBe("unsaved");
-  });
-
-  test("waits for an earlier restore from this browser first (round 3)", () => {
-    expect(restoreHold({ ...ready, pending: true })).toBe("pending");
-    expect(restoreHold({ ...ready, connected: false, pending: true })).toBe(
-      "pending",
-    );
-  });
-
-  test("waits for the connection first", () => {
-    expect(restoreHold({ ...ready, connected: false })).toBe("offline");
-    expect(
-      restoreHold({
-        connected: false,
-        journaled: true,
-        open: { kind: "live", status: "saving" },
-      }),
-    ).toBe("offline");
   });
 });
 
@@ -214,41 +144,5 @@ describe("version pages (review round 1, F4)", () => {
       versions: [],
       end: "loading",
     });
-  });
-});
-
-describe("restore outcome messages (review round 4, R4-6)", () => {
-  test("a refusal of a repeated request does not say the restore did not apply", () => {
-    const refused = { kind: "refused", message: "Note not found." } as const;
-    expect(restoreOutcomeText(refused)).toBe(
-      "The restore did not apply: Note not found.",
-    );
-    expect(restoreOutcomeText(refused, true)).toBe(
-      "Couldn’t confirm whether the restore applied; check the note’s history.",
-    );
-    expect(restoreOutcomeText(refused, true)).not.toMatch(/did not apply/);
-    // A conflict is answered after the receipt: nothing was applied.
-    expect(restoreOutcomeText({ kind: "conflict" }, true)).toBe(
-      "The restore did not apply: the note changed first.",
-    );
-  });
-
-  test("restores this browser could not record say they were not sent", () => {
-    for (const reason of ["unavailable", "full", "failed"] as const)
-      expect(restoreOutcomeText({ kind: "not-recorded", reason })).toMatch(
-        /not sent|nothing was sent|Try again once/,
-      );
-  });
-
-  test("a storage problem holds Restore before anything else", () => {
-    expect(
-      restoreHold({
-        connected: true,
-        recordable: false,
-        pending: true,
-        open: null,
-        journaled: false,
-      }),
-    ).toBe("storage");
   });
 });
