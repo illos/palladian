@@ -126,82 +126,104 @@ Report: `notes-notebooks-round4-astra-review.md`. App-side findings are fixed; t
 | R4-4 — persisted-draft scan misses memory-only work    | Proposal revised (below): broadcast and persist account-scoped destination holds, so every tab fences its own drafts, memory included, and keeps the owner's latest journal while held.                                                                                                                                                                                                                                                                                                                                                                               | Proof tests listed below.                                                                                                                                                                                                                                                                                                                                                |
 | R4-5 — hold lifecycle                                  | Proposal revised (below): partitions, markers, batches, retries, release and late messages specified.                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Proof tests listed below.                                                                                                                                                                                                                                                                                                                                                |
 
+## Review round 5 responses
+
+Report: `notes-notebooks-round5-astra-review.md`. The implemented A5 is accepted apart from R3-1/R3-3, which await the owner; R4-1 and R4-2 are resolved, with no regressions. All three findings concern the unimplemented proposal, which is revised below. No app or backend code changed in this round.
+
+| Finding                              | Response                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R5-1 — lost creation replies         | Each fenced draft is resolved by account and `clientKey` before any release or purge, through one per-draft verdict computed in `notes.create`'s own order (replay, source, destination): `created` (recovered and synced), `createdDenied` (revoked), or a destination verdict for a draft never created (section 1, 4). |
+| R5-2 — denial drops the shared fence | Fences are persisted per destination and are never deleted by a resolution. A `denied` record stays in force for drafts no tab enumerated, and each tab resolves its own drafts, memory included. Records go only with account cleanup (sections 2–4).                                                                    |
+| R5-3 — late messages resurrect holds | Messages carry no state. They only make tabs reread the persisted fences, and every transition is an exact-marker transaction; a missing record is never recreated from a message (section 5).                                                                                                                            |
+
 ## Proposed fundamentals change (needs owner approval)
 
-Not implemented; revised in review round 4. **Goal** (D86, 04-documents.md): once a person loses access to the notebook an ordinary uncreated draft is for, that draft is unreadable, unexportable and unsent in every tab, memory included, while access is unresolved. It is removed only after a fresh, account-bound, authoritative refusal. Otherwise it is released and created as usual: the owner's draft for a notebook they deleted goes to their default notebook, and transient failures keep it held and retried.
+Not implemented; revised in review rounds 4 and 5. **Goal** (D86, 04-documents.md): once a person loses access to the notebook an ordinary uncreated draft is for, that draft is unreadable, unexportable and unsent in every tab, memory included, until the server has decided it. It is removed only on a fresh, account-bound refusal of that draft. A draft whose creation already succeeded is recovered, the owner's draft for a notebook they deleted goes to their default notebook, and failures leave it fenced.
 
 **Until this is approved and made, sign-out export and a second tab can still expose a collaborator's draft after access loss.** This already happens in production through membership removal, independent of A5.
 
-**1. Source of truth: a destination check, not inference.** Add `notes.destinationAccess({ account, notebookIds })` (backend; at most 100 IDs). Like `notes.verifyAccess`, it is a mutation that writes nothing, so the answer always comes from the server, never from a local subscription. It is for people only and returns `{ subject, results: [{ notebookId, access }] }`, with `access` one of:
+"Ordinary draft" below means an uncreated draft (local ID) without `source`. Conflict copies and server notes stay on today's note-ID and source holds and `verifyAccess`, unchanged.
 
-- `writable`: the notebook exists and the caller can add notes;
-- `ownerDeleted`: `deletedNotebooks` names the caller as owner, so `notes.create` files the draft in their default notebook;
-- `denied`: anything else (no edit access, someone else's deletion, unknown). These stay indistinguishable, so the answer reveals nothing.
+**1. Server: one per-draft verdict (`notes.ts`).** Add `notes.creationVerdict({ account, drafts })`, with at most 100 entries of `{ clientKey?, notebookId?, sourceNoteId? }`.
 
-It refuses a mismatched `account` (`conflict`), as `notes.create` does. Why not the alternatives:
+- **Freshness and shape:** like `notes.verifyAccess`, it is a mutation that writes nothing, so the answer comes from the server at that moment, not from a subscription. It is for people only, checks `account` first (`conflict` if it differs), and returns `{ subject, results }`.
+- **One implementation:** `notes.create`'s checks move into one function that both `create` and the verdict call, so the two cannot diverge. Each entry is answered in `create`'s order:
+  1. **Replay** (when `clientKey` is given), by the caller and `clientKey`: `created` with the note ID if the caller can open the note, as `create` would return it; otherwise `createdDenied`, where `create` would answer "Note not found."
+  2. **Source** (when given): `denied` if the caller cannot open it.
+  3. **Destination:** `writable` (the caller can add notes there, or no notebook is named and `create` would pick one); `ownerDeleted` (`deletedNotebooks` names the caller as owner; `create` files the note in their default notebook); `denied` otherwise. A missing notebook, someone else's deletion and no edit access stay indistinguishable.
+- **Reveals nothing new:** every answer concerns the caller's own `clientKey`s, permissions or deletions, and `notes.create` already reports each of these outcomes through its result or errors.
 
-- **A snapshot or a missing `deletedByMe` record:** a snapshot can be older than a new notebook or a re-share, so it cannot deny.
-- **`notes.create`'s refusal:** it creates as a side effect, and its `not_found` also covers replay and source refusals, which are about one note, not the destination.
+**2. Shared state: persisted destination fences (`cache.ts`).** A new table, `destinationFences` (`[accountId+notebookId]`, with `state`, `marker` and `at`), next to `revoked`.
 
-Replay and source precedence stay in `notes.create`, unchanged. A released draft is created through the ordinary path, which checks `account`, then replay, then source, then destination.
+- **States:** `held` (the destination is in doubt), `denied` (the server refused the destination) and `released` (the server allowed it).
+- **How a record starts:** as `held`, in two cases:
+  - a complete snapshot drops a notebook the account had listed. `setNotebooks` compares the old and new list in the same IndexedDB transaction that replaces the list; `live.ts` `applyAccess` calls it before `reconcileAccess`.
+  - creating an ordinary draft is refused (`not_found` or `denied`; section 6).
 
-**2. Holds by destination, in every tab (`cache.ts`).** Today `reconcileAccess` holds rows and conflict copies by note ID and skips ordinary drafts (`cache.ts` ~1407); memory-only work (`recoveryDrafts`, queued `draftQueues` writes, quota-failed first journals, other tabs' drafts) is invisible to it. Change:
+  A one-time upgrade pass also adds `held` for the notebooks of existing drafts missing from the cached list.
 
-- **Where holds live:** a new persisted table, `destinationHolds` (`[accountId+notebookId]`, with `marker` and `at`), next to `revoked`.
-- **When to hold:** when a complete snapshot is applied, every notebook the account's cached list loses becomes a held destination. `live.ts` `applyAccess` calls `setNotebooks` before `reconcileAccess`, so the previous list must be read inside `setNotebooks` (or passed to `reconcileAccess`). This needs no draft scan. The store posts `{ accountId, heldDestinations: [{ notebookId, marker }] }` on the `BroadcastChannel`. A one-time pass on upgrade also holds the notebooks of existing drafts that are not in the cached list, persisted and memory alike.
-- **What a hold covers:** in every tab, any ordinary uncreated draft (local ID, no `source`) whose `notebookId` is held. This includes persisted drafts, `recoveryDrafts` snapshots and queued writes, applied at read time. `list`, `read`/`readDraft`, `settlement` (and so `exportDrafts` and sign-out), `localDrafts` (and so creation) and `isRevoked`-style filters treat such drafts as held. A tab without its own feed learns of the hold from the message, or from the table on its next read.
-- **What a hold does not do:** it never deletes, and journal writes to a held draft continue. The owner's latest typing is therefore kept until release.
-- **Other tabs:** they close an open held draft, as `heldNotes` does today.
-- **Conflict copies and server notes:** unchanged. They stay on the existing `source` / note-ID holds and `verifyAccess`.
+- **Transitions:** only by exact-marker transactions (read, compare `marker`, write a new `marker` and `at`). A record is never recreated because it is missing.
+- **Garbage collection:** only with the account's cache (`deleteAccountData` / `clearAccount`: sign-out, revocation, cleanup). A record is one small row per lost notebook, kept until reauthorization rather than removed early.
+- **Fail closed:** if the fence write fails, `setNotebooks` fails as a whole and the old list stays, which still names the notebook. The tab then blocks export (`settlement`) and creation of the account's ordinary drafts until a later fence write succeeds. It also notifies other tabs (section 5), which do the same until a reread finds the fence.
 
-**3. Resolving holds (`live.ts`).** A resolver runs where `recheckAccess` runs: after each access snapshot, on reconnect, and on a retry timer.
+**3. Applying fences in every tab (`cache.ts`).** An ordinary draft is fenced if its notebook has a `held` or `denied` record, or a `released` record whose current `marker` this tab has not resolved that draft against.
 
-- **Inputs:** held destinations for the signed-in account, in batches of 100. Before each request it captures `captureFence(accountId)` and each hold's `marker`.
-- **Applying an answer:** only if `subject` equals the account, the session generation is unchanged, the fence's epoch is current, and the hold's stored marker still equals the one captured. A stale answer can never release or purge a newer hold.
-- **`writable` or `ownerDeleted`:** release. Delete the hold row under its marker, post `{ accountId, releasedDestinations: [{ notebookId, marker }] }`, notify readers (lists refresh), then call `syncDrafts()` so the drafts are created. The owner's draft lands in their default notebook through `notes.create`.
-- **`denied`:** revoke. Call `revokeNotes(accountId, ids)` for every ordinary uncreated draft for that notebook. These are found at that moment in persisted drafts and memory snapshots, and `forgetNotes` covers memory. The existing `revokedNotes` message removes them in other tabs. Then delete the hold.
-- **Transport errors and `conflict`:** keep the hold and retry later. An offline reload keeps holds, because they are persisted, and deletes nothing.
+- **Where it applies:** at read time, in each tab, to everything that tab holds: persisted drafts, its `recoveryDrafts` snapshots, queued `draftQueues` writes and open editors.
+- **What it excludes:** `list`, `read`/`readDraft`, `settlement` (so `exportDrafts` and sign-out), and `localDrafts` and channel creation all skip fenced drafts. Open fenced drafts close.
+- **What it keeps:** journal writes continue and nothing is deleted, so the owner's latest typing is kept.
 
-**4. Messages are ordered by marker.** A tab applies `releasedDestinations` only if its stored hold has that marker. It applies `heldDestinations` only if it has no hold or an older one (`at`). A late message can therefore neither undo a release nor resurrect an old hold.
+**4. Resolution (`live.ts`, where `recheckAccess` runs: after snapshots, on reconnect, on a retry timer; batches of 100).**
 
-**5. Creation refusals (`live.ts`, `createLocalDraft`).** A `not_found`/`denied` refusal while creating an ordinary draft does not purge by itself, because it may concern replay or source. It adds a destination hold for the draft's notebook, which the resolver then answers. Transport errors keep today's retry.
+- **Per draft, in each tab, for the fenced drafts it knows** (persisted, or in its own memory): send `{ clientKey: draft.id, notebookId }`. Apply the answer only if `subject` equals the account, the session generation and the cache epoch are unchanged, and the fence's `marker` is the one read before the request.
+  - `created`: adopt the server ID (`adoptServerId`) and sync. A lost reply is recovered, for example after a move, through a direct grant.
+  - `createdDenied`: revoke the draft (`revokeNotes`), as a denied replay, even when the destination is writable.
+  - `writable` or `ownerDeleted`: never created. Record the resolved `marker` on the draft (in memory for memory-only drafts) once the record is `released`, then create through sync.
+  - `denied`: revoke the draft.
+  - A transport error or `conflict`: keep the draft fenced and retry.
+- **Per destination, one tab, exact-marker transaction:** a destination-only verdict (no `clientKey`) moves `held` to `denied`, and `held` or `denied` to `released` on `writable` or `ownerDeleted`.
+  - A `denied` record is re-asked only when a snapshot lists the notebook again (a re-share, or the owner restoring access). A snapshot alone never lifts it.
+  - A `denied` or `released` record does not unfence any draft. Each draft still needs its own verdict (above), so another tab's unseen draft stays fenced until that tab resolves it, including while that tab is offline.
 
-**6. `logout.ts`: unchanged.** Its export goes through `settlement`, which (2) makes exclude every held or revoked draft, memory included. That exclusion is only true once (2)'s tests below pass.
+**5. Messages are notifications only.** `BroadcastChannel` messages (`{ accountId, fencesChanged }`, or a fence-write failure) carry no state. They make tabs reread `destinationFences` and `revoked` from IndexedDB, as the existing fence handling does. A message never creates, lifts or changes a fence; a late or repeated message only causes a reread.
 
-**Existing tests the change builds on:**
+**6. Creation refusals (`live.ts`, `createLocalDraft` and the channel's create).** A `not_found` or `denied` refusal for an ordinary draft sets its destination fence to `held` and leaves the draft to resolution. It does not purge. Transport errors keep today's retry.
 
-- `tests/unit/review-round6.test.ts`: held work is hidden, not exported and not created until an answer; an unanswered check keeps work held; other tabs close conflict copies whose source is revoked.
-- `tests/browser/notes-foundation.spec.ts`: another tab's revocation removes visible content; logout export confirmation; logout recovery of queued and quota-failed snapshots.
+**7. `logout.ts`: unchanged,** provided `settlement` excludes every fenced or revoked draft, memory included, as the tests below prove.
+
+**Existing tests it builds on:**
+
+- `tests/unit/review-round6.test.ts`: held work is hidden, not exported and not created until an answer; other tabs close copies whose source is revoked.
+- `tests/browser/notes-foundation.spec.ts`: another tab's revocation removes content; logout export and recovery of queued and quota-failed snapshots.
 - The draft-sync retry tests in `review-round2.test.ts`, `review-round3.test.ts`, `review-round5.test.ts` and `review-round7.test.ts`.
 
-**Proof tests, per item:**
+**Proof tests:**
 
-- **(1) Destination check (backend):**
-  - `writable`, `ownerDeleted` and `denied` for owners, members, removed members, others' deletions and unknown IDs;
+- **Verdict (backend):**
+  - for every combination of replay (none, accessible, inaccessible), source and destination (writable, owner-deleted, removed member, read-only, someone else's deletion, unknown), the verdict matches what `notes.create` does with the same input;
   - a mismatched `account` is refused;
-  - 101 IDs are refused, and 100 run within transaction limits.
-- **(1)+(3), R4-3:**
-  - a delayed snapshot that omits a newly created notebook holds, then resolves `writable` and releases without loss;
-  - removal followed by re-sharing before resolution releases;
-  - removal answered `denied` purges;
-  - the owner creating while a snapshot races releases;
-  - a lost creation reply is settled by replay after release;
-  - a successful owner fallback lands in the default notebook;
-  - a `deletedByMe`-style negative never purges.
-- **(2), R4-4 and R3-3:**
-  - two tabs, the second without a feed: its open draft closes and its memory-only draft is held;
-  - a delayed first journal write and a quota-failed first write are both held;
-  - pending editor typing is kept, not exported, and created after release;
-  - sign-out export excludes held drafts (R3-1);
-  - owner recovery after a hold.
-- **(3)–(4), R4-5:**
-  - an offline reload keeps holds and deletes nothing;
+  - 100 entries run within transaction limits and 101 are refused.
+- **R5-1:**
+  - a lost reply, then the note moved to another notebook and kept through a direct grant while the original notebook is denied: recovered as `created`, synced, never purged;
+  - a lost reply whose note is now inaccessible, in a writable destination: revoked, never released.
+- **R5-2:**
+  - hold, then denial, while tab B has a quota-failed or queued draft for that notebook: B's draft stays out of `list`, export and creation after tab A's resolution;
+  - B revokes it only on its own verdict, and keeps it fenced while offline.
+- **R5-3:**
+  - delayed messages after a release, and after a reload, change nothing;
+  - a missing record is never recreated from a message.
+- **Rejections:** an answer is ignored after a change of account, session generation, cache epoch or `marker`.
+- **Fail closed:** a failed fence write keeps the old list and blocks export and creation in this tab and, after the notification, in other tabs.
+- **From round 4:**
+  - a delayed snapshot that omits a new notebook resolves `writable` without loss;
+  - removal then re-share before resolution releases;
+  - the owner's fallback lands in the default notebook;
+  - an offline reload keeps fences and deletes nothing;
   - transient failures recover later;
-  - a stale answer, with its marker since replaced, changes nothing;
-  - a late `heldDestinations` message cannot undo a release, and a late release cannot undo a newer hold;
-  - 150 held destinations resolve in two batches;
-  - local IDs are never sent to `verifyAccess`.
-- **(5):** a refusal on creation adds a hold rather than purging; a transport error keeps today's retry.
+  - more than 100 drafts resolve in batches;
+  - local IDs never reach `verifyAccess`;
+  - two tabs, the second without a feed: its open draft closes;
+  - sign-out export excludes fenced drafts (R3-1);
+  - owner recovery after a hold.
 
 ## Found during this work (not changed)
 
@@ -239,4 +261,4 @@ After review round 4, on this branch's final commit (on `b39fed7`; the counts in
 
 After the rebase (`61d4b45`, on `b39fed7`): backend 211, app 20 + 292, browser 118 passed, `test:offline` 2 passed. After round 3 (`a37ee32`, on `8bd5439`): backend 142, app 20 + 132, browser 82 passed, `test:offline` 2 passed. After round 2 (`6ad0f1d`, on `8bd5439`): backend 140, app 20 + 130, browser 78 passed, `test:offline` 2 passed. Before round 1 (`b017c45`, on `3af8da4`): backend 126, app 20 + 125, browser 62 passed, `test:offline` 2 passed, both typechecks passed. After round 1 (`ffa8c8c`, on `3af8da4`): backend 133, app 20 + 127, browser 66 passed, `test:offline` 2 passed.
 
-Pending: independent review of round 4; the owner's decision on the proposed fundamentals change (R2-1, R3-1, R3-3); and the owner's iPhone check of the long press on a notebook in the navigation sheet.
+Pending: independent review of round 5's proposal revision; the owner's decision on the proposed fundamentals change (R2-1, R3-1, R3-3); and the owner's iPhone check of the long press on a notebook in the navigation sheet.
