@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./attachments": "./src/attachments.ts",
     "./document": "./src/document.ts",
     "./ids": "./src/ids.ts",
     "./projection": "./src/projection.ts",

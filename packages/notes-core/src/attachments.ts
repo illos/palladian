@@ -91,6 +91,15 @@ function widthKey(src: unknown, width: unknown) {
   return `${String(src)}\u0000${String(width)}`;
 }
 
+/** Whether `existing` already uses this image width (same source and width). */
+export function knownImageWidth(
+  existing: FileFeatures,
+  src: unknown,
+  width: unknown,
+): boolean {
+  return existing.widths.has(widthKey(src, width));
+}
+
 export function fileFeatures(
   content: ProseMirrorNode | Fragment | null,
 ): FileFeatures {

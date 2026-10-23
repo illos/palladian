@@ -7,8 +7,9 @@ import {
   usesFileFeatures,
 } from "@palladian/notes-core";
 import type { Node as ProseMirrorNode } from "prosemirror-model";
-import { Slice } from "prosemirror-model";
+import { Fragment, Slice } from "prosemirror-model";
 import { collab } from "prosemirror-collab";
+import { history, undo } from "prosemirror-history";
 import {
   EditorState,
   TextSelection,
@@ -30,7 +31,7 @@ import {
   pasteMarkdown,
   safeSlice,
 } from "../../src/editor-clipboard";
-import { setFileWrites } from "../../src/file-capability";
+import { fileHistoryGate, setFileWrites } from "../../src/file-capability";
 
 /**
  * Review round 4 of B1+B2 (R4-1): while the server does not accept file
@@ -106,7 +107,11 @@ function server(start: ProseMirrorNode, gated: boolean) {
 }
 
 /** An editor on the note, bound to a real channel. */
-async function open(start: ProseMirrorNode, transport: NoteTransport) {
+async function open(
+  start: ProseMirrorNode,
+  transport: NoteTransport,
+  { gate = true }: { gate?: boolean } = {},
+) {
   const store = new NotesStore("files-gate-" + crypto.randomUUID());
   await store.allowAccount(
     "account",
@@ -129,7 +134,11 @@ async function open(start: ProseMirrorNode, transport: NoteTransport) {
     editable: true,
     state: EditorState.create({
       doc: start,
-      plugins: [collab({ version: 0, clientID: "me" })],
+      plugins: [
+        collab({ version: 0, clientID: "me" }),
+        history(),
+        ...(gate ? [fileHistoryGate()] : []),
+      ],
       selection: TextSelection.atEnd(start),
     }),
     dispatch(tr: Transaction) {
@@ -269,5 +278,132 @@ describe("R4-1: pasted file features stay out while files are off", () => {
         notesSchema.topNodeType.create(null, safeSlice(slice).content),
       ),
     ).toBe(true);
+  });
+});
+
+describe("R4-1: what the note already has stays usable while files are off", () => {
+  const ALBUM = [
+    "Album",
+    `![photo](attachment:${OBJECT}){width=320}`,
+    `[report.pdf](attachment:${OBJECT}){type=application/pdf size=3}`,
+    "![web](https://example.com/w.png){width=200}",
+    "Text",
+  ].join("\n\n");
+
+  const features = (doc: ProseMirrorNode) => {
+    const found: string[] = [];
+    doc.descendants((node) => {
+      if (node.type.name === "file") found.push(`file ${node.attrs.name}`);
+      if (node.type.name === "image")
+        found.push(`image ${node.attrs.src} ${node.attrs.width}`);
+      return true;
+    });
+    return found.sort();
+  };
+
+  test("copying or moving the note's own attachments keeps them; the server accepts", async () => {
+    await loadMarkdown();
+    const start = markdownToDoc(ALBUM);
+    const { state, transport } = server(start, true);
+    const { view, channel, statuses, store } = await open(start, transport);
+    try {
+      await flush();
+      // A copy of the note's own blocks, pasted at the end (HTML or drop).
+      const own = safeSlice(
+        start.slice(start.child(0).nodeSize, start.content.size),
+        view as unknown as EditorView,
+      );
+      view.dispatch(view.state.tr.replaceSelection(own));
+      // Moving the sized image to the end: one transaction, as a drop is.
+      const doc = view.state.doc;
+      const from = doc.child(0).nodeSize;
+      const image = doc.child(1);
+      const moved = safeSlice(
+        new Slice(Fragment.from(image), 0, 0),
+        view as unknown as EditorView,
+      );
+      const tr = view.state.tr.delete(from, from + image.nodeSize);
+      tr.insert(tr.doc.content.size, moved.content);
+      view.dispatch(tr);
+      await flush();
+      expect(state.refused).toBe(0);
+      expect(statuses.some((s) => s.kind === "blocked")).toBe(false);
+      expect(state.doc.eq(view.state.doc)).toBe(true);
+      // Everything is still an attachment, a file block or a sized image.
+      expect(features(state.doc)).toEqual(
+        [...features(start), ...features(start)].sort(),
+      );
+      // Another object, or a new width, is still filtered.
+      const other = safeSlice(
+        new Slice(
+          markdownToDoc(
+            "![x](attachment:" +
+              "b".repeat(32) +
+              ")\n\n![web](https://example.com/w.png){width=999}",
+          ).content,
+          0,
+          0,
+        ),
+        view as unknown as EditorView,
+      );
+      expect(
+        usesFileFeatures(notesSchema.topNodeType.create(null, other.content)),
+      ).toBe(false);
+      channel.close();
+    } finally {
+      store.close();
+    }
+  });
+
+  test("undo cannot bring back a removed attachment once removed on the server; typing continues", async () => {
+    const start = markdownToDoc(ALBUM);
+    const { state, transport } = server(start, true);
+    const { view, channel, statuses, store } = await open(start, transport);
+    try {
+      await flush();
+      // Remove the photo and the file block; the server has the removal.
+      const from = start.child(0).nodeSize;
+      const to = from + start.child(1).nodeSize + start.child(2).nodeSize;
+      view.dispatch(view.state.tr.delete(from, to));
+      await flush();
+      expect(state.doc.childCount).toBe(start.childCount - 2);
+      // Undo would bring them back: it does nothing while files are off.
+      undo(view.state, (tr) => view.dispatch(tr));
+      expect(view.state.doc.eq(state.doc)).toBe(true);
+      view.dispatch(view.state.tr.insertText(" typed"));
+      await flush();
+      expect(state.refused).toBe(0);
+      expect(statuses.some((s) => s.kind === "blocked")).toBe(false);
+      expect(state.doc.textContent).toContain("Text typed");
+      // With files on, undo works again.
+      setFileWrites(true);
+      undo(view.state, (tr) => view.dispatch(tr));
+      undo(view.state, (tr) => view.dispatch(tr));
+      expect(features(view.state.doc)).toEqual(features(start));
+      channel.close();
+    } finally {
+      store.close();
+    }
+  });
+
+  test("without the history gate, the same undo is refused and the note blocks", async () => {
+    const start = markdownToDoc(ALBUM);
+    const { state, transport } = server(start, true);
+    const { view, channel, statuses, store } = await open(start, transport, {
+      gate: false,
+    });
+    try {
+      await flush();
+      const from = start.child(0).nodeSize;
+      view.dispatch(view.state.tr.delete(from, from + start.child(1).nodeSize));
+      await flush();
+      undo(view.state, (tr) => view.dispatch(tr));
+      await flush();
+      expect(state.refused).toBe(1);
+      expect(statuses.some((s) => s.kind === "blocked")).toBe(true);
+      channel.close();
+    } finally {
+      store.close();
+    }
   });
 });

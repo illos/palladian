@@ -1,4 +1,9 @@
 import {
+  fileFeatures,
+  knownImageWidth,
+  type FileFeatures,
+} from "@palladian/notes-core/attachments";
+import {
   assertSafeFragment,
   attachmentObjectId,
   notesSchema,
@@ -204,7 +209,11 @@ function splitLines(fragment: Fragment): Fragment {
  * paste. A leading or trailing paragraph stays open, so an inline snippet
  * merges into the current line (Deltos's `markdownTextToSlice`).
  */
-export function markdownSlice(text: string, markdown: MarkdownCodec) {
+export function markdownSlice(
+  text: string,
+  markdown: MarkdownCodec,
+  view?: EditorView,
+) {
   let fragment: Fragment;
   try {
     fragment = markdown.parseMarkdownFragment(text);
@@ -219,6 +228,7 @@ export function markdownSlice(text: string, markdown: MarkdownCodec) {
       fragment.firstChild!.type === paragraph ? 1 : 0,
       fragment.lastChild!.type === paragraph ? 1 : 0,
     ),
+    view,
   );
 }
 
@@ -277,27 +287,38 @@ function withinLimits(fragment: Fragment): Fragment {
 }
 
 /**
- * Pasted content without file features, while the server does not accept
- * them (file-capability.ts): a file block becomes its name, an image of an
- * uploaded object its description (or nothing), and an image keeps no width.
- * The server would refuse them and stop the note from saving.
+ * Pasted content without file features the note does not already have,
+ * while the server does not accept new ones (file-capability.ts): a file
+ * block becomes its name, an image of an uploaded object its description (or
+ * nothing), and an image keeps no width. The server would refuse them and
+ * stop the note from saving. What the note already has stays, so moving or
+ * copying an attachment within the note keeps it.
  */
-function withoutFileFeatures(fragment: Fragment): Fragment {
+function withoutFileFeatures(
+  fragment: Fragment,
+  existing: FileFeatures,
+): Fragment {
   const nodes: ProseMirrorNode[] = [];
   const text = (value: string) =>
     paragraph.create(null, value ? notesSchema.text(value) : null);
   fragment.forEach((node) => {
     if (node.type.name === "file") {
-      nodes.push(text(String(node.attrs.name ?? "")));
+      nodes.push(
+        existing.objects.has(String(node.attrs.objectId))
+          ? node
+          : text(String(node.attrs.name ?? "")),
+      );
       return;
     }
     if (node.type.name === "image") {
-      if (attachmentObjectId(node.attrs.src) !== null) {
+      const objectId = attachmentObjectId(node.attrs.src);
+      if (objectId !== null && !existing.objects.has(objectId)) {
         const alt = String(node.attrs.alt ?? "").trim();
         if (alt) nodes.push(text(alt));
       } else
         nodes.push(
-          node.attrs.width === null
+          node.attrs.width === null ||
+            knownImageWidth(existing, node.attrs.src, node.attrs.width)
             ? node
             : node.type.create(
                 { ...node.attrs, width: null },
@@ -311,7 +332,7 @@ function withoutFileFeatures(fragment: Fragment): Fragment {
       nodes.push(node);
       return;
     }
-    const content = withoutFileFeatures(node.content);
+    const content = withoutFileFeatures(node.content, existing);
     nodes.push(
       node.type.createAndFill(node.attrs, content, node.marks) ??
         text(content.textBetween(0, content.size, " ", " ")),
@@ -321,12 +342,19 @@ function withoutFileFeatures(fragment: Fragment): Fragment {
 }
 
 /**
- * The editor's `transformPasted`, also used for Markdown: pasted content
- * kept within the server's limits; anything still refused pastes as text.
+ * The editor's `transformPasted` (paste and drop), also used for Markdown:
+ * pasted content kept within the server's limits, and, while files are off,
+ * without file features new to the note in `view`; anything still refused
+ * pastes as text.
  */
-export function safeSlice(slice: Slice): Slice {
+export function safeSlice(slice: Slice, view?: EditorView): Slice {
   const content = withinLimits(
-    fileWritesEnabled() ? slice.content : withoutFileFeatures(slice.content),
+    fileWritesEnabled()
+      ? slice.content
+      : withoutFileFeatures(
+          slice.content,
+          fileFeatures(view?.state.doc ?? null),
+        ),
   );
   try {
     assertSafeFragment(content);
@@ -374,7 +402,7 @@ export function pasteMarkdown(
   // Palladian's own copies (`data-pm-slice`) and rich HTML keep their structure.
   if (html && (html.includes("data-pm-slice") || !isPlainSlice(slice)))
     return false;
-  const parsed = markdownSlice(text, codec);
+  const parsed = markdownSlice(text, codec, view);
   if (!parsed) return false;
   view.dispatch(
     view.state.tr

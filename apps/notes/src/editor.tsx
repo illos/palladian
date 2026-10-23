@@ -76,6 +76,7 @@ import {
   serializeClipboardText,
 } from "./editor-clipboard";
 import { runSlash, slashChoices, slashKey, slashPalette } from "./editor-slash";
+import { fileHistoryGate } from "./file-capability";
 
 export { notesSchema };
 export function validateDocument(document: string) {
@@ -609,6 +610,7 @@ function plugins(
       : []),
     blockIdPlugin((tr) => tr.getMeta("rebased") !== undefined),
     history(),
+    fileHistoryGate(),
     slashPalette({ enabled: hooks.slashEnabled, openLink: hooks.openLink }),
     linkUi,
     titlePlaceholder,
