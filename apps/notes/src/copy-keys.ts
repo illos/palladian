@@ -185,8 +185,10 @@ export async function restoreCopy<P>(copy: RestoreCopy<P>): Promise<void> {
     keys.failed(account, noteId, revision, copy.describe(failure), copy.toast);
     copy.changed();
   };
-  if (!copy.connected || !copy.current())
-    return failed(new Error("Not connected."));
+  // A restore started in a session that has ended shows nothing (R9-1);
+  // only the current session is told it is offline.
+  if (!copy.current()) return;
+  if (!copy.connected) return failed(new Error("Not connected."));
   const key = keys.start(account, noteId, revision);
   if (!key) return;
   copy.changed();

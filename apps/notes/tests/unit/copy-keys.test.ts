@@ -228,3 +228,62 @@ describe("a restore's failure outlives the panel that started it", () => {
     expect(toasts).toEqual([]);
   });
 });
+
+// Review round 9 (R9-1): a restore invoked after its session ended (A's
+// callback, run once B has signed in) shows nothing and sends nothing; only
+// the current session is told it is offline.
+describe("a restore that starts outside its session", () => {
+  function startRestore(
+    copies: CopyKeys,
+    current: () => boolean,
+    connected: boolean,
+    toasts: string[],
+  ) {
+    let sent = 0;
+    const done = restoreCopy({
+      keys: copies,
+      account: "account-a",
+      noteId: "note-1",
+      revision: 3,
+      current,
+      connected,
+      prepare: async () => ({}),
+      dispatch: async () => {
+        sent += 1;
+        return "copy-id";
+      },
+      open: () => {},
+      made: () => {},
+      describe: (failure) => copyFailureMessage(transportError(failure)),
+      toast: (message) => toasts.push(message),
+      changed: () => {},
+    });
+    return { done, sent: () => sent };
+  }
+
+  test("after A → B, A's restore shows B nothing and sends nothing", async () => {
+    const copies = new CopyKeys();
+    const ada = device("account-a");
+    const current = ada.ticket();
+    ada.switchTo("account-b");
+    const toasts: string[] = [];
+    for (const connected of [true, false]) {
+      const copy = startRestore(copies, current, connected, toasts);
+      await copy.done;
+      expect(copy.sent()).toBe(0);
+    }
+    expect(toasts).toEqual([]);
+    expect(copies.notice("account-a", "note-1", 3)).toBeNull();
+    expect(copies.state("account-a", "note-1", 3)).toBeNull();
+  });
+
+  test("offline in the same session still says so", async () => {
+    const copies = new CopyKeys();
+    const ada = device("account-a");
+    const toasts: string[] = [];
+    const copy = startRestore(copies, ada.ticket(), false, toasts);
+    await copy.done;
+    expect(copy.sent()).toBe(0);
+    expect(toasts).toHaveLength(1);
+  });
+});
