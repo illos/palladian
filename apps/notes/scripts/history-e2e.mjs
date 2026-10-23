@@ -5,10 +5,13 @@
 // restoring while another signed-in person is typing in the note (a refused
 // restore first, then both converge; what happens to their words is checked
 // word by word), and that a read-only collaborator, or an editor whose access
-// drops to read, never reaches History. Review round 1 adds: Restore waits for
-// this window's own unsent typing (F1) and for the connection (F2), and a
-// History panel opened from a row with a pending journal stays open (F3).
-// Prints no secrets. Disposable @example.test accounts only.
+// drops to read, never reaches History. The review rounds add: Restore waits
+// for this window's own unsent typing and for the connection; a restore's
+// note stays read-only while it is in flight, across note switches, reloads
+// and other windows, until its outcome is known and each window's editor has
+// received it; unconfirmed restores are reconciled (also at sign-out) and
+// applied once; unreadable records pause editing; and the known other-tab
+// gap is pinned. Prints no secrets. Disposable @example.test accounts only.
 //
 // Typing is held unsent, a restore is held in flight, and a connection is
 // dropped deterministically by routing each page's Convex WebSocket through
@@ -19,7 +22,8 @@
 // the backend checkout, CONVEX_SITE_URL and CONVEX_CLOUD_URL the deployment's
 // URLs. SCREENSHOT_DIR, if set, receives pictures of the panel.
 // HISTORY_E2E_STEPS (comma-separated: list, compare, f3, f1, f2, restore,
-// paging, reader, downgrade, phone) runs only those steps after the setup.
+// r2-1, r3-1, r3-1-replay, r4-4, r4-5, tab, paging, reader, downgrade, phone,
+// signout) runs only those steps after the setup.
 // HISTORY_E2E_DEBUG logs page errors, failed requests and reloads.
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
@@ -104,12 +108,22 @@ function protocol(message) {
  * failure the client cannot interpret (as a lost answer), or drop the
  * connection and refuse new ones.
  */
+/**
+ * Set when the development deployment's `history.restore` predates its
+ * `account` precondition (review round 4): the gate then removes `account`
+ * from restore requests, which that deployment would otherwise reject as an
+ * unknown argument. The precondition itself is tested in the backend.
+ */
+let stripRestoreAccount = false;
+
 async function convexGate(context) {
   const holding = new Set();
   const failing = new Set();
   const holdingAnswers = new Set();
   let held = [];
   let heldAnswers = [];
+  let holdingIncoming = false;
+  let heldIncoming = [];
   const links = new Set();
   let refusing = false;
   await context.routeWebSocket(/\/api\/[^/]+\/sync$/, (ws) => {
@@ -121,9 +135,20 @@ async function convexGate(context) {
       links.delete(link);
       server.close();
     });
-    ws.onMessage((message) => {
+    ws.onMessage((original) => {
+      let message = original;
       const data = protocol(message);
       const path = data?.type === "Mutation" ? data.udfPath : null;
+      const args = data?.args ? structuredClone(data.args) : undefined;
+      if (
+        path === "history:restore" &&
+        stripRestoreAccount &&
+        data.args?.[0] &&
+        "account" in data.args[0]
+      ) {
+        delete data.args[0].account;
+        message = JSON.stringify(data);
+      }
       if (path && failing.has(path)) {
         failing.delete(path);
         // As if the answer were lost: the client learns nothing it can use.
@@ -141,7 +166,7 @@ async function convexGate(context) {
       if (path && holdingAnswers.has(path))
         link.watched.set(data.requestId, path);
       if (path && holding.has(path))
-        held.push({ path, args: data.args, send: () => server.send(message) });
+        held.push({ path, args, send: () => server.send(message) });
       else server.send(message);
     });
     server.onMessage((message) => {
@@ -150,7 +175,15 @@ async function convexGate(context) {
         data?.type === "MutationResponse" &&
         link.watched.has(data.requestId)
       ) {
-        heldAnswers.push(link.watched.get(data.requestId));
+        heldAnswers.push({
+          path: link.watched.get(data.requestId),
+          send: () => ws.send(message),
+        });
+        return;
+      }
+      // Query updates (a note's steps among them), when they are held.
+      if (holdingIncoming && data?.type === "Transition") {
+        heldIncoming.push(() => ws.send(message));
         return;
       }
       ws.send(message);
@@ -185,12 +218,30 @@ async function convexGate(context) {
       holdingAnswers.add(path);
     },
     heldAnswers(path) {
-      return heldAnswers.filter((item) => item === path).length;
+      return heldAnswers.filter((item) => item.path === path).length;
     },
     /** Stops keeping answers; the ones kept are never delivered. */
     dropAnswers(path) {
       holdingAnswers.delete(path);
-      heldAnswers = heldAnswers.filter((item) => item !== path);
+      heldAnswers = heldAnswers.filter((item) => item.path !== path);
+    },
+    /** Delivers the answers kept, in order, and stops keeping them. */
+    releaseAnswers(path) {
+      holdingAnswers.delete(path);
+      for (const item of heldAnswers) if (item.path === path) item.send();
+      heldAnswers = heldAnswers.filter((item) => item.path !== path);
+    },
+    /** Keeps query updates (including a note's steps) from the page. */
+    holdIncoming() {
+      holdingIncoming = true;
+    },
+    heldIncoming() {
+      return heldIncoming.length;
+    },
+    releaseIncoming() {
+      holdingIncoming = false;
+      for (const send of heldIncoming) send();
+      heldIncoming = [];
     },
     disconnect() {
       refusing = true;
@@ -351,6 +402,21 @@ try {
   site = target.site;
   cloud = target.cloud;
   step(`everything points at the development deployment ${target.name}`);
+  // Does that deployment's history.restore take the account precondition yet?
+  const spec = spawnSync("npx", ["convex", "function-spec"], {
+    cwd: backend,
+    encoding: "utf8",
+    timeout: 120_000,
+  });
+  const restoreSpec = JSON.parse(spec.stdout || "{}").functions?.find(
+    (fn) => fn.identifier === "history.js:restore",
+  );
+  assert.ok(restoreSpec, "the deployment has history.restore");
+  stripRestoreAccount = !("account" in (restoreSpec.args?.value ?? {}));
+  if (stripRestoreAccount)
+    step(
+      "note: this deployment's history.restore predates the account precondition, so the gate removes `account` from restore requests (the precondition is tested in the backend)",
+    );
 
   begin("setup");
   // Ada owns the note; Cy may edit it; Bo may only read it.
@@ -758,12 +824,27 @@ try {
     (
       await convex(a, "query", "history:list", { noteId, limit: 100 })
     ).versions.filter((version) => version.kind === "restore").length;
-  /** The unresolved restores this browser has recorded. */
+  /** The restores this browser has recorded and not resolved. */
   const recorded = (page) =>
-    page.evaluate(() =>
-      JSON.parse(
-        localStorage.getItem("palladian.notes.pending-restores.v1") ?? "[]",
-      ),
+    page.evaluate(
+      () =>
+        new Promise((resolve, reject) => {
+          const open = indexedDB.open("palladian-restores", 1);
+          open.onupgradeneeded = () =>
+            open.result.createObjectStore("restores");
+          open.onsuccess = () => {
+            const read = open.result
+              .transaction("restores")
+              .objectStore("restores")
+              .getAll();
+            read.onsuccess = () => {
+              open.result.close();
+              resolve(read.result.filter((r) => r.appliedRevision == null));
+            };
+            read.onerror = () => reject(read.error);
+          };
+          open.onerror = () => reject(open.error);
+        }),
     );
   const sendRestore = async () => {
     await restoreButton.click();
@@ -915,6 +996,157 @@ try {
     await saved(a);
     step(
       "review R3-1: a restore whose answer was lost is reconciled from the server's receipt, applied once",
+    );
+  }
+
+  if (wanted("r4-4")) {
+    // Review round 4, R4-4: a restore that has applied keeps each window's
+    // editor held until that window's own copy has received it. A second
+    // window of Ada's browser gets its own route, so its updates can be held.
+    const a2 = await deskA.newPage();
+    watch(a2, "Ada window 2");
+    const gate2 = await convexGate(a2);
+    await a2.goto(`${app}/notes/${noteId}`);
+    const editorA2 = a2.getByRole("textbox", { name: "Note content" });
+    await expect(editorA2).toHaveAttribute("contenteditable", "true", {
+      timeout: 20_000,
+    });
+    // (a) The restore's steps reach the second window late.
+    await typeAtEnd(a, editorA, " Four marker.");
+    await saved(a);
+    await expect(editorA2).toContainText("Four marker.", { timeout: 20_000 });
+    gate2.holdIncoming();
+    await openHistory();
+    await rows.nth(1).click();
+    await expect(versionText).not.toContainText("Four marker.", {
+      timeout: 20_000,
+    });
+    await sendRestore();
+    await expect(history).toBeHidden({ timeout: 20_000 });
+    await expect(a2.locator(".save-status")).toHaveText(
+      "Restoring a version — editing resumes when it arrives",
+      { timeout: 20_000 },
+    );
+    await expect(editorA2).toHaveAttribute("contenteditable", "false");
+    await expect(editorA2).toContainText("Four marker.");
+    await editorA2.click();
+    await a2.keyboard.press("Control+End");
+    await a2.keyboard.type(" Too early.");
+    await a2.waitForTimeout(500);
+    await expect(editorA2).not.toContainText("Too early.");
+    assert.ok(gate2.heldIncoming() > 0, "window 2's updates were held");
+    gate2.releaseIncoming();
+    await expect(editorA2).not.toContainText("Four marker.", {
+      timeout: 20_000,
+    });
+    await expect(editorA2).toHaveAttribute("contenteditable", "true", {
+      timeout: 20_000,
+    });
+    await typeAtEnd(a2, editorA2, " After arrival.");
+    await expect(a2.locator(".save-status")).toHaveText("Saved", {
+      timeout: 20_000,
+    });
+    await expect(editorA).toContainText("After arrival.", { timeout: 20_000 });
+    step(
+      "review R4-4: another window holds its editor until its own copy has received the restore",
+    );
+
+    // (b) Answers come late in both windows, independently. The second
+    // window, learning of the unresolved restore, sends the same request
+    // itself (the server answers it from the receipt or applies it once), so
+    // both windows' answers are held: with the restore's steps in, both still
+    // hold the note until an answer says what happened.
+    await typeAtEnd(a, editorA, " Late marker.");
+    await saved(a);
+    await expect(editorA2).toContainText("Late marker.", { timeout: 20_000 });
+    await openHistory();
+    await rows.nth(1).click();
+    await expect(versionText).not.toContainText("Late marker.", {
+      timeout: 20_000,
+    });
+    const restoresBefore = await restoreCount();
+    deskA.gate.holdAnswers("history:restore");
+    gate2.holdAnswers("history:restore");
+    await sendRestore();
+    await expect
+      .poll(() => deskA.gate.heldAnswers("history:restore"), {
+        timeout: 20_000,
+      })
+      .toBe(1);
+    await expect(editorA2).not.toContainText("Late marker.", {
+      timeout: 20_000,
+    });
+    await expect
+      .poll(() => gate2.heldAnswers("history:restore"), { timeout: 20_000 })
+      .toBe(1);
+    await expect(editorA2).toHaveAttribute("contenteditable", "false");
+    await expect(a2.locator(".save-status")).toHaveText(/^Restoring a version/);
+    await expect(editorA).toHaveAttribute("contenteditable", "false");
+    // The first window's answer arrives: both windows have the steps, so
+    // both edit again, though the second's own answer is still held.
+    deskA.gate.releaseAnswers("history:restore");
+    await expect(history).toBeHidden({ timeout: 20_000 });
+    await expect(editorA).toHaveAttribute("contenteditable", "true", {
+      timeout: 20_000,
+    });
+    await expect(editorA2).toHaveAttribute("contenteditable", "true", {
+      timeout: 20_000,
+    });
+    assert.equal(gate2.heldAnswers("history:restore"), 1);
+    gate2.releaseAnswers("history:restore");
+    await typeAtEnd(a2, editorA2, " Both free.");
+    await expect(a2.locator(".save-status")).toHaveText("Saved", {
+      timeout: 20_000,
+    });
+    assert.equal(
+      await restoreCount(),
+      restoresBefore + 1,
+      "one restore, though both windows sent it",
+    );
+    await a2.close();
+    step(
+      "review R4-4: with both windows' answers late, both hold the note even with its steps in; the first answer frees both",
+    );
+  }
+
+  if (wanted("r4-5")) {
+    // Review round 4, R4-5: a restore record this browser cannot read pauses
+    // editing for its account (here even the account is unreadable) until the
+    // person checks again or discards it.
+    await a.evaluate(
+      () =>
+        new Promise((resolve, reject) => {
+          const open = indexedDB.open("palladian-restores", 1);
+          open.onupgradeneeded = () =>
+            open.result.createObjectStore("restores");
+          open.onsuccess = () => {
+            const tx = open.result.transaction("restores", "readwrite");
+            tx.objectStore("restores").put({ damaged: true }, "unreadable");
+            tx.oncomplete = () => {
+              open.result.close();
+              resolve(null);
+            };
+            tx.onerror = () => reject(tx.error);
+          };
+        }),
+    );
+    await a.reload();
+    const unreadable =
+      "Restore records on this device could not be read — editing is paused";
+    await expect(a.locator(".save-status")).toHaveText(unreadable, {
+      timeout: 20_000,
+    });
+    await expect(editorA).toHaveAttribute("contenteditable", "false");
+    await a.getByRole("button", { name: "Check again" }).click();
+    await a.waitForTimeout(500);
+    await expect(a.locator(".save-status")).toHaveText(unreadable);
+    a.once("dialog", (dialog) => void dialog.accept());
+    await a.getByRole("button", { name: "Discard…" }).click();
+    await expect(editorA).toHaveAttribute("contenteditable", "true", {
+      timeout: 20_000,
+    });
+    step(
+      "review R4-5: an unreadable restore record pauses editing until it is checked again or discarded",
     );
   }
 
@@ -1156,6 +1388,58 @@ try {
     await expect(phoneHistory).toBeHidden();
     step(
       "phone: History from the … sheet fills the screen, one step at a time",
+    );
+  }
+  if (wanted("signout")) {
+    // Review round 4, R4-5: signing out first settles this account's
+    // unconfirmed restores while the server is reachable.
+    await openNote(a, "Recipe");
+    await openHistory();
+    await rows.nth(1).click();
+    deskA.gate.failNext("history:restore");
+    await sendRestore();
+    await expect(
+      history.getByText(/did not reach the server, so it is not confirmed/),
+    ).toBeVisible({ timeout: 20_000 });
+    await closeHistory();
+    const [unconfirmed] = await recorded(a);
+    assert.ok(unconfirmed, "an unconfirmed restore is recorded");
+    await a
+      .getByRole("button", { name: "Account and connection settings" })
+      .click();
+    await a.getByRole("button", { name: "Sign out…" }).click();
+    await a.getByRole("button", { name: "Sign out of this device" }).click();
+    await expect(
+      a.getByRole("button", { name: "Sign in", exact: true }),
+    ).toBeVisible({ timeout: 30_000 });
+    // The record was settled before signing out: applied, not left pending.
+    const stored = await a.evaluate(
+      () =>
+        new Promise((resolve, reject) => {
+          const open = indexedDB.open("palladian-restores", 1);
+          open.onsuccess = () => {
+            const read = open.result
+              .transaction("restores")
+              .objectStore("restores")
+              .getAll();
+            read.onsuccess = () => {
+              open.result.close();
+              resolve(read.result);
+            };
+            read.onerror = () => reject(read.error);
+          };
+          open.onerror = () => reject(open.error);
+        }),
+    );
+    const settled = stored.find(
+      (entry) => entry.requestId === unconfirmed.requestId,
+    );
+    assert.ok(
+      settled && typeof settled.appliedRevision === "number",
+      "the restore was confirmed before signing out",
+    );
+    step(
+      "review R4-5: signing out first confirms this account's unconfirmed restore",
     );
   }
   console.log("All history checks passed.");

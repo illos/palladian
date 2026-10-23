@@ -6,6 +6,7 @@ import {
   pageKey,
   previousRevision,
   restoreHold,
+  restoreOutcomeText,
   versionKey,
   type Version,
   type VersionPageResult,
@@ -213,5 +214,41 @@ describe("version pages (review round 1, F4)", () => {
       versions: [],
       end: "loading",
     });
+  });
+});
+
+describe("restore outcome messages (review round 4, R4-6)", () => {
+  test("a refusal of a repeated request does not say the restore did not apply", () => {
+    const refused = { kind: "refused", message: "Note not found." } as const;
+    expect(restoreOutcomeText(refused)).toBe(
+      "The restore did not apply: Note not found.",
+    );
+    expect(restoreOutcomeText(refused, true)).toBe(
+      "Couldn’t confirm whether the restore applied; check the note’s history.",
+    );
+    expect(restoreOutcomeText(refused, true)).not.toMatch(/did not apply/);
+    // A conflict is answered after the receipt: nothing was applied.
+    expect(restoreOutcomeText({ kind: "conflict" }, true)).toBe(
+      "The restore did not apply: the note changed first.",
+    );
+  });
+
+  test("restores this browser could not record say they were not sent", () => {
+    for (const reason of ["unavailable", "full", "failed"] as const)
+      expect(restoreOutcomeText({ kind: "not-recorded", reason })).toMatch(
+        /not sent|nothing was sent|Try again once/,
+      );
+  });
+
+  test("a storage problem holds Restore before anything else", () => {
+    expect(
+      restoreHold({
+        connected: true,
+        recordable: false,
+        pending: true,
+        open: null,
+        journaled: false,
+      }),
+    ).toBe("storage");
   });
 });

@@ -113,10 +113,19 @@ export const restore = mutation({
     revision: v.number(),
     expectedRevision: v.number(),
     requestId: v.optional(v.string()),
+    /**
+     * The account the app recorded the restore in (the Better Auth user ID).
+     * A request that reaches the server under another sign-in, e.g. one
+     * queued before the person switched accounts, is refused. Only an
+     * equality check against the caller; it grants nothing. Agents omit it.
+     */
+    account: v.optional(v.string()),
   },
   returns: v.object({ revision: v.number(), replayed: v.boolean() }),
   handler: async (ctx, args) => {
     const actor = await requirePrincipal(ctx);
+    if (args.account !== undefined && actor.authUserId !== args.account)
+      fail("conflict", "This restore was requested in another account.");
     const { note } = await loadNote(ctx, actor, args.noteId, "edit");
     const digest = await digestOf([
       "restore",

@@ -21,6 +21,7 @@ import {
   pageChain,
   pageKey,
   previousRevision,
+  restoreOutcomeText,
   versionKey,
   type RestoreHold,
   type RestoreOutcome,
@@ -51,6 +52,8 @@ const holdNotices: Record<
   Exclude<NonNullable<RestoreHold>, "pending">,
   string
 > = {
+  storage:
+    "Restoring needs this browser to record the restore first, and its restore records are not available or could not be read.",
   unsaved: "Waiting for your changes in this window to save…",
   offline: "Not connected. Restore when the connection is back.",
 };
@@ -576,6 +579,8 @@ function RestoreControls({
         "The restore did not reach the server, so it is not confirmed yet. The note stays read-only here until it is.",
       );
     } else if (outcome.kind === "refused") setNotice(outcome.message);
+    else if (outcome.kind === "not-recorded")
+      setNotice(restoreOutcomeText(outcome));
   }
 
   if (!current) return null;

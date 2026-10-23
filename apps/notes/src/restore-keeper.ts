@@ -1,24 +1,25 @@
+import type { RecordStore, CorruptEntry } from "./restore-store";
 import type { RestoreOutcome } from "./versions";
 
 /**
- * Restores this browser has sent and not yet seen answered (review round 3,
- * R3-1). A restore replaces the whole note, so while one is unresolved its
- * note must not be edited anywhere in this browser: typing made meanwhile
- * would be rebased away when the replacement arrives. The record is written
- * before the request is sent and removed only once the outcome is known
- * (restored, refused because the note changed, or refused for another
- * reason). It survives closing History, opening other notes, reloading and
- * other windows of this browser, which read the same storage.
+ * Restores this browser has sent (review rounds 3 and 4). A restore replaces
+ * the whole note, so typing made while one is unresolved would be rebased
+ * away when the replacement arrives. Each restore is therefore recorded
+ * durably before it is sent (`restore-store.ts`), and while its record exists
+ * the note is held read-only in every window of this browser.
  *
- * An unresolved record is reconciled by sending the same request again, with
- * the same request ID and arguments. `history.restore` answers that from its
- * receipt if the first request was applied (the server returns its result
- * without applying it twice); otherwise it applies the restore now if the
- * note has not changed since, or refuses with a conflict. Either way the
- * outcome is known and the record goes.
+ * A record is pending until the server's answer says what happened. On
+ * success it becomes applied, with the revision the restore produced, and
+ * stays for APPLIED_HOLD_MS: each window keeps its editor of the note held
+ * until that editor has received that revision, so no window types onto text
+ * the replacement has yet to reach. A refusal removes it. Without an answer it
+ * stays pending, and is reconciled by sending exactly the same request again:
+ * `history.restore` answers a repeated request ID from its receipt instead of
+ * applying it twice.
  *
- * The records live in localStorage under an app-owned key, not in the notes
- * cache. They hold IDs and revisions only, never note text.
+ * Records hold IDs and revisions only, never note text (a minimal safety
+ * record; see the implementation report on D28). They belong to one account
+ * and are only ever sent, or replayed, while that account is signed in.
  */
 export interface PendingRestore {
   accountId: string;
@@ -32,56 +33,110 @@ export interface PendingRestore {
   versionEndedAt: number;
   /** When the restore was first sent. */
   since: number;
+  /** Once the server has applied it: the revision it produced, and when. */
+  appliedRevision?: number;
+  appliedAt?: number;
 }
 
-export const PENDING_RESTORES_KEY = "palladian.notes.pending-restores.v1";
-
-/** The part of the Storage interface the keeper uses. */
-export interface KeeperStorage {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-}
+/** At most this many records; more restores are refused, none evicted. */
+export const RESTORE_RECORD_LIMIT = 20;
+/** How long an applied restore keeps editors held until they receive it. */
+export const APPLIED_HOLD_MS = 10 * 60_000;
 
 /** Sends one restore request; resolves with its outcome. */
 export type SendRestore = (record: PendingRestore) => Promise<RestoreOutcome>;
 
 export interface KeeperState {
-  pending: readonly PendingRestore[];
+  /** "unavailable": this browser cannot record restores, so none may start. */
+  status: "loading" | "ready" | "unavailable";
+  records: readonly PendingRestore[];
+  corrupt: readonly CorruptEntry[];
   /** Requests this window is waiting on, by request ID: when each was sent. */
   inFlight: ReadonlyMap<string, number>;
 }
 
-function isRecord(value: unknown): value is PendingRestore {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as Record<string, unknown>;
-  return (
-    typeof record.accountId === "string" &&
-    typeof record.noteId === "string" &&
-    typeof record.requestId === "string" &&
-    record.requestId.length > 0 &&
-    Number.isSafeInteger(record.revision) &&
-    Number.isSafeInteger(record.expectedRevision) &&
-    typeof record.versionEndedAt === "number" &&
-    typeof record.since === "number"
+/** Why a note's editor is held, if it is. */
+export type NoteHold =
+  | { reason: "loading" }
+  | { reason: "unreadable" }
+  | { reason: "sending" | "unconfirmed" | "arriving"; record: PendingRestore };
+
+/**
+ * Whether this window must hold the editor of `noteId` read-only, given the
+ * revision its editor has incorporated (null if it has no live editor).
+ */
+export function noteHold(
+  state: KeeperState,
+  accountId: string,
+  noteId: string,
+  editorRevision: number | null,
+  now: number,
+): NoteHold | null {
+  if (state.status === "loading") return { reason: "loading" };
+  // Unreadable records could hold any note of their account (or of anyone's,
+  // if not even the account can be read).
+  if (
+    state.corrupt.some(
+      (entry) => entry.accountId === null || entry.accountId === accountId,
+    )
+  )
+    return { reason: "unreadable" };
+  for (const record of state.records) {
+    if (record.accountId !== accountId || record.noteId !== noteId) continue;
+    if (record.appliedRevision === undefined)
+      return {
+        reason: state.inFlight.has(record.requestId)
+          ? "sending"
+          : "unconfirmed",
+        record,
+      };
+    if (
+      now - (record.appliedAt ?? 0) < APPLIED_HOLD_MS &&
+      (editorRevision === null || editorRevision < record.appliedRevision)
+    )
+      return { reason: "arriving", record };
+  }
+  return null;
+}
+
+/** The unresolved (not yet applied) restore of a note, if there is one. */
+export function pendingRestore(
+  state: KeeperState,
+  accountId: string,
+  noteId: string,
+): PendingRestore | undefined {
+  return state.records.find(
+    (record) =>
+      record.accountId === accountId &&
+      record.noteId === noteId &&
+      record.appliedRevision === undefined,
   );
 }
 
 export class RestoreKeeper {
-  private state: KeeperState;
+  private state: KeeperState = {
+    status: "loading",
+    records: [],
+    corrupt: [],
+    inFlight: new Map(),
+  };
   private readonly listeners = new Set<() => void>();
   /** Requests in flight in this window, so one is never sent twice at once. */
   private readonly running = new Map<string, Promise<RestoreOutcome>>();
-  /** What storage holds, or this window's copy when storage fails. */
-  private memory: PendingRestore[] = [];
+  private readonly sentAt = new Map<string, number>();
+  private reading = 0;
 
+  /**
+   * `notify` tells this browser's other windows to reload (a
+   * BroadcastChannel in the app); `store` is null if this browser cannot
+   * record restores.
+   */
   constructor(
-    private readonly storage: KeeperStorage | null,
+    private readonly store: RecordStore | null,
     private readonly send: SendRestore,
+    private readonly notify: () => void = () => {},
     private readonly now: () => number = Date.now,
-  ) {
-    this.memory = this.read();
-    this.state = { pending: this.memory, inFlight: new Map() };
-  }
+  ) {}
 
   getState = () => this.state;
 
@@ -90,25 +145,40 @@ export class RestoreKeeper {
     return () => void this.listeners.delete(listener);
   };
 
-  /** Another window changed the records (a `storage` event for the key). */
-  reload() {
-    this.memory = this.read();
-    this.publish();
+  /**
+   * Reads the records from storage. In-memory state only ever comes from a
+   * successful read, so a failed write cannot erase another record here.
+   */
+  async reload(): Promise<void> {
+    if (!this.store) return this.set({ status: "unavailable" });
+    const read = ++this.reading;
+    try {
+      const { records, corrupt } = await this.store.list();
+      if (read === this.reading)
+        this.set({ status: "ready", records, corrupt });
+    } catch {
+      if (read === this.reading && this.state.status === "loading")
+        this.set({ status: "unavailable" });
+    }
   }
 
-  /** The unresolved restore of this note by this account, if there is one. */
-  holding(accountId: string, noteId: string): PendingRestore | undefined {
-    return this.state.pending.find(
-      (record) => record.accountId === accountId && record.noteId === noteId,
-    );
-  }
-
-  /** Records a new restore, then sends it. */
-  restore(record: PendingRestore): Promise<RestoreOutcome> {
-    this.change((list) => [
-      ...list.filter((other) => other.requestId !== record.requestId),
-      record,
-    ]);
+  /**
+   * Records a new restore durably, then sends it. Refuses without sending if
+   * the record cannot be written and read back, or the store is full.
+   */
+  async restore(record: PendingRestore): Promise<RestoreOutcome> {
+    if (!this.store || this.state.status !== "ready")
+      return { kind: "not-recorded", reason: "unavailable" };
+    let added: "added" | "full";
+    try {
+      added = await this.store.add(record, RESTORE_RECORD_LIMIT);
+    } catch {
+      await this.reload();
+      return { kind: "not-recorded", reason: "failed" };
+    }
+    if (added === "full") return { kind: "not-recorded", reason: "full" };
+    await this.reload();
+    this.notify();
     return this.run(record);
   }
 
@@ -120,20 +190,52 @@ export class RestoreKeeper {
     return this.run(record);
   }
 
+  /** Removes applied records whose hold has run out. */
+  async expire(): Promise<void> {
+    if (!this.store) return;
+    const old = this.state.records.filter(
+      (record) =>
+        record.appliedAt !== undefined &&
+        this.now() - record.appliedAt >= APPLIED_HOLD_MS,
+    );
+    if (!old.length) return;
+    try {
+      await this.store.remove(old.map((record) => record.requestId));
+      this.notify();
+    } finally {
+      await this.reload();
+    }
+  }
+
+  /** Removes unreadable entries, after the person confirmed it. */
+  async discardUnreadable(): Promise<void> {
+    if (!this.store || !this.state.corrupt.length) return;
+    try {
+      await this.store.remove(this.state.corrupt.map((entry) => entry.key));
+      this.notify();
+    } finally {
+      await this.reload();
+    }
+  }
+
   private run(record: PendingRestore): Promise<RestoreOutcome> {
     const running = this.running.get(record.requestId);
     if (running) return running;
+    this.sentAt.set(record.requestId, this.now());
     // Registered before the request starts, so it is in flight from now on.
     const promise = Promise.resolve()
       .then(() => this.send(record))
       .catch((): RestoreOutcome => ({ kind: "unanswered" }))
-      .then((outcome) => {
+      .then(async (outcome) => {
+        try {
+          await this.settle(record, outcome);
+        } catch {
+          // Storage refused the change: the record stays as it was, and is
+          // reconciled again later.
+        }
         this.running.delete(record.requestId);
-        if (outcome.kind === "unanswered") this.publish();
-        else
-          this.change((list) =>
-            list.filter((other) => other.requestId !== record.requestId),
-          );
+        this.sentAt.delete(record.requestId);
+        await this.reload();
         return outcome;
       });
     this.running.set(record.requestId, promise);
@@ -141,34 +243,65 @@ export class RestoreKeeper {
     return promise;
   }
 
-  private read(): PendingRestore[] {
-    if (!this.storage) return this.memory;
-    try {
-      const value: unknown = JSON.parse(
-        this.storage.getItem(PENDING_RESTORES_KEY) ?? "[]",
+  private async settle(record: PendingRestore, outcome: RestoreOutcome) {
+    if (!this.store) return;
+    if (outcome.kind === "restored") {
+      await this.store.markApplied(
+        record.requestId,
+        outcome.revision,
+        this.now(),
       );
-      return Array.isArray(value) ? value.filter(isRecord) : [];
-    } catch {
-      return this.memory;
+      this.notify();
+    } else if (outcome.kind === "conflict" || outcome.kind === "refused") {
+      await this.store.remove([record.requestId]);
+      this.notify();
     }
   }
 
-  /** Read, change and write the records, so other windows' records stay. */
-  private change(update: (list: PendingRestore[]) => PendingRestore[]) {
-    this.memory = update(this.read());
-    try {
-      this.storage?.setItem(PENDING_RESTORES_KEY, JSON.stringify(this.memory));
-    } catch {
-      // Storage refused: the hold still applies in this window.
-    }
+  private set(change: Partial<Omit<KeeperState, "inFlight">>) {
+    this.state = { ...this.state, ...change };
     this.publish();
   }
 
   private publish() {
-    const inFlight = new Map<string, number>();
-    for (const requestId of this.running.keys())
-      inFlight.set(requestId, this.state.inFlight.get(requestId) ?? this.now());
-    this.state = { pending: [...this.memory], inFlight };
+    this.state = {
+      ...this.state,
+      inFlight: new Map(
+        [...this.running.keys()].map((id) => [
+          id,
+          this.sentAt.get(id) ?? this.now(),
+        ]),
+      ),
+    };
     for (const listener of this.listeners) listener();
   }
+}
+
+/**
+ * Sends a recorded restore only for the account it was recorded in and only
+ * within one session (review round 4, R4-3): checked before loading the
+ * sender, again right before the request goes out, and when its answer
+ * arrives. An answer that arrives under another session says nothing about
+ * this account's restore, so it counts as unanswered: the record stays and is
+ * checked again when that account is signed in. (The request also names its
+ * account, which the server checks.)
+ */
+export async function sendInSession(
+  record: PendingRestore,
+  session: {
+    /** The account signed in now. */
+    account: () => string | null;
+    /** Captures the session now; the result says whether it still holds. */
+    ticket: () => () => boolean;
+  },
+  load: () => Promise<SendRestore | null>,
+): Promise<RestoreOutcome> {
+  const unanswered: RestoreOutcome = { kind: "unanswered" };
+  const ticket = session.ticket();
+  const ours = () => session.account() === record.accountId && ticket();
+  if (!ours()) return unanswered;
+  const send = await load();
+  if (!send || !ours()) return unanswered;
+  const outcome = await send(record);
+  return ours() ? outcome : unanswered;
 }

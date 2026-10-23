@@ -6,22 +6,24 @@ import type { PendingRestore } from "./restore-keeper";
 import type { RestoreOutcome } from "./versions";
 
 /**
- * Sends one restore request (review round 3, R3-1), loaded on first use so
- * the notes list does not wait for the backend API. A first restore and a
- * reconciliation send exactly the same request.
+ * Sends one restore request, loaded on first use so the notes list does not
+ * wait for the backend API. A first restore and a reconciliation send exactly
+ * the same request. It names the account it was recorded in: the server
+ * refuses it under any other sign-in (review round 4, R4-3).
  */
 export async function sendRestore(
   client: ConvexReactClient,
   record: PendingRestore,
 ): Promise<RestoreOutcome> {
   try {
-    await client.mutation(api.history.restore, {
+    const result = await client.mutation(api.history.restore, {
       noteId: record.noteId as Id<"notes">,
       revision: record.revision,
       expectedRevision: record.expectedRevision,
       requestId: record.requestId,
+      account: record.accountId,
     });
-    return { kind: "restored" };
+    return { kind: "restored", revision: result.revision };
   } catch (failure) {
     const error = transportError(failure);
     // No answer, or no answer that says what happened: ask again later.

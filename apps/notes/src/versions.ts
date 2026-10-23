@@ -70,7 +70,7 @@ export interface RestoreRequest {
  * cache notifications, and other devices are out of reach: their unsent
  * typing is still replaced (a known gap in collaboration, outside History).
  */
-export type RestoreHold = "pending" | "offline" | "unsaved" | null;
+export type RestoreHold = "storage" | "pending" | "offline" | "unsaved" | null;
 
 export function restoreHold(state: {
   connected: boolean;
@@ -79,6 +79,8 @@ export function restoreHold(state: {
    * no other restore starts until its outcome is known.
    */
   pending?: boolean;
+  /** This browser can record restores (see `RestoreKeeper`). */
+  recordable?: boolean;
   /** The note as open in this window, if it is, with its editor's save status. */
   open: {
     kind: "cached" | "draft" | "live" | "reader";
@@ -87,6 +89,7 @@ export function restoreHold(state: {
   /** Unsent edits to the note are journaled on this device. */
   journaled: boolean;
 }): RestoreHold {
+  if (state.recordable === false) return "storage";
   if (state.pending) return "pending";
   if (!state.connected) return "offline";
   if (state.journaled) return "unsaved";
@@ -99,16 +102,25 @@ export function restoreHold(state: {
 
 /** How a restore request ended. */
 export type RestoreOutcome =
-  | { kind: "restored" }
+  /** Applied (now or, for a repeated request, earlier), producing `revision`. */
+  | { kind: "restored"; revision: number }
   /** The note changed first; nothing was restored. */
   | { kind: "conflict" }
-  /** The request failed without an answer; repeating it is safe. */
+  /** No usable answer; repeating the same request is safe. */
   | { kind: "unanswered" }
-  | { kind: "refused"; message: string };
+  /** Refused now, for this reason. */
+  | { kind: "refused"; message: string }
+  /** Never sent: this browser could not record it first. */
+  | { kind: "not-recorded"; reason: "unavailable" | "full" | "failed" };
 
-/** What a toast says about a restore that did not apply, once History is closed. */
+/**
+ * What to say about a restore that was not confirmed as applied. `replay`:
+ * the answer is to a repeated request, so a refusal now (lost access, a
+ * deleted note) says nothing about whether the first one applied.
+ */
 export function restoreOutcomeText(
   outcome: Exclude<RestoreOutcome, { kind: "restored" }>,
+  replay = false,
 ): string {
   switch (outcome.kind) {
     case "conflict":
@@ -116,7 +128,15 @@ export function restoreOutcomeText(
     case "unanswered":
       return "The restore is not confirmed yet. The note stays read-only here until it is; use Check again.";
     case "refused":
-      return `The restore did not apply: ${outcome.message}`;
+      return replay
+        ? "Couldn’t confirm whether the restore applied; check the note’s history."
+        : `The restore did not apply: ${outcome.message}`;
+    case "not-recorded":
+      return outcome.reason === "full"
+        ? "Too many restores are waiting to be confirmed on this device. Try again once they are."
+        : outcome.reason === "unavailable"
+          ? "Restoring needs this browser’s storage, which is not available here, so nothing was sent."
+          : "The restore could not be recorded on this device, so it was not sent.";
   }
 }
 
