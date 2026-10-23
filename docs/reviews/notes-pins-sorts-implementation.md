@@ -135,6 +135,17 @@ Report: `notes-pins-sorts-round5-astra-review.md`. The verdict was ACCEPTED (rea
 - **Partial reorders (R5-1).** A reorder that needs several batches is not atomic. If one batch is refused, the others still apply, and once the overlay is dropped the synced arrangement shows that partial order. The next drag re-spaces as needed. This is accepted for personal ordering metadata. A unit test now records the behaviour.
 - **Tests for the write contract (R5-2).** `tests/unit/arrangement-writes.test.ts` checks three things: a reorder's batches are all handed to Convex at once, in order, each naming the account; a later write does not wait for an earlier unanswered one; and the reorder returns the highest version. The duplicate-ordering backend test now arranges its notebooks explicitly, so the stale row's notebook always sorts first. Before, it depended on generated IDs.
 
+## Release
+
+Released 2026-10-23 from `main` `8e73101`.
+
+- **Convex production (`adamant-hound-861`):** deployed first. The push added tables and indexes and deleted none.
+- **Worker `palladian`:** version `9bea56d2`, at 100% from 12:14 UTC. After the known "No access" message on the routes call, the Cloudflare API confirmed the custom domain `notes.parabolic.studio` and the cron `23 4 * * *`.
+- **Function spec:** the production Convex function spec lists `arrangement.mine`, `setPin`, `setOrder`, `setPositions` and `forgetStale`.
+- **Checks against production:** `live-e2e.mjs` passed every check, and `apps/notes-edge/scripts/browser-e2e.mjs` passed. `arrange-e2e.mjs` runs against dev only; it passed there on the final code.
+
+Still pending: the owner's iPhone checks of the full right swipe to pin, and of dragging by the handle while the list scrolls.
+
 ## Found during this work (not changed)
 
 - Retention purge (`lifecycle.purgeExpired`) handles 100 notes in one transaction and deletes their note grants inline; with many grants per note it can exceed Convex's write limit (review R2-7). This predates A6 and is left to the lifecycle owner.
