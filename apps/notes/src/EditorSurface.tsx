@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { isPlainDocument, textDocument } from "./document";
 import type { NoteEditor } from "./editor";
 import type { EditorBinding } from "./binding";
+import type { AttachmentContext } from "./attachments";
 
 let editorModule: Promise<typeof import("./editor")> | undefined;
 export function EditorSurface({
@@ -11,6 +12,7 @@ export function EditorSurface({
   editable,
   onChange,
   binding,
+  attachments,
 }: {
   document: string;
   editedLabel?: string;
@@ -18,6 +20,7 @@ export function EditorSurface({
   editable: boolean;
   onChange: (document: string, text: string) => void;
   binding?: EditorBinding | undefined;
+  attachments?: AttachmentContext | undefined;
 }) {
   const [Editor, setEditor] = useState<typeof NoteEditor | null>(null);
   const [plainText, setPlainText] = useState(text);
@@ -98,6 +101,7 @@ export function EditorSurface({
           editable={editable}
           onChange={onChange}
           binding={binding}
+          attachments={attachments}
         />
       ) : plainEditable ? (
         <div className="editor-host">

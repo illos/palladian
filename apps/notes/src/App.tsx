@@ -71,6 +71,8 @@ import {
 } from "./Settings";
 import type { ChannelStatus, NoteChannel } from "./channel";
 import { watchFileCapability } from "./file-capability";
+import { attachmentCache } from "./attachment-cache";
+import { liveAttachmentService } from "./attachments";
 import { watchNotebookCapability } from "./notebook-capability";
 import { liveStateSource, type LiveBox } from "./liveBox";
 import type { SearchHit } from "./live";
@@ -373,6 +375,31 @@ export function App({
     if (!live || !liveReady) return;
     return watchFileCapability(live.client);
   }, [live, liveReady]);
+
+  // Attachment bytes stay only for the account the app may show (B3, D28):
+  // signing out, a revoked session and switching accounts delete them, as
+  // does any clear of the account's notes, in this tab or another.
+  useEffect(() => {
+    void attachmentCache
+      .retain(permitted ? accountId : null)
+      .catch(() => undefined);
+  }, [permitted, accountId]);
+  useEffect(
+    () =>
+      store.subscribe((event) => {
+        if (event.invalidated && event.accountId)
+          void attachmentCache.forget(event.accountId).catch(() => undefined);
+      }),
+    [store],
+  );
+  /** Uploads and attachment reads for the signed-in account (B3). */
+  const attachmentService = useMemo(
+    () =>
+      live && liveReady && accountId
+        ? liveAttachmentService(live, accountId)
+        : null,
+    [live, liveReady, accountId],
+  );
 
   // Whether owners may delete notebooks here (NOTEBOOK_DELETE_ENABLED;
   // shipped off). While off, the notebook menu has no Delete at all.
@@ -2486,6 +2513,11 @@ export function App({
                 text={currentOpen.text}
                 editable={editable}
                 binding={currentOpen.channel ?? undefined}
+                attachments={{
+                  accountId: currentOpen.accountId,
+                  noteId: isLocalNoteId(currentOpen.id) ? null : currentOpen.id,
+                  service: attachmentService,
+                }}
                 onChange={(document, text) => {
                   if (currentOpen.kind === "draft")
                     void persistDraft(currentOpen, document, text);

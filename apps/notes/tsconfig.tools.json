@@ -9,6 +9,7 @@
     "playwright*.config.ts",
     "../../tests/browser/notes-*.spec.ts",
     "vitest.config.ts",
-    "tests/unit/**/*.ts"
+    "tests/unit/**/*.ts",
+    "src/build.d.ts"
   ]
 }

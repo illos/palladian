@@ -5,7 +5,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { parseStoredDoc } from "@palladian/notes-core/document";
 import { assignBlockIds, blockIdPlugin } from "@palladian/notes-core/ids";
 import { isSafeHref, notesSchema } from "@palladian/notes-core/schema";
@@ -78,7 +78,15 @@ import {
   serializeClipboardText,
 } from "./editor-clipboard";
 import { runSlash, slashChoices, slashKey, slashPalette } from "./editor-slash";
-import { FILE_UNDO_MESSAGE, fileHistoryGate } from "./file-capability";
+import {
+  FILE_UNDO_MESSAGE,
+  fileHistoryGate,
+  fileWritesEnabled,
+  onFileWritesChange,
+} from "./file-capability";
+import { attachmentCache } from "./attachment-cache";
+import type { AttachmentContext } from "./attachments";
+import { AttachmentRuntime, type LightboxImage } from "./editor-attachments";
 
 export { notesSchema };
 export function validateDocument(document: string) {
@@ -607,6 +615,7 @@ type EditorHooks = {
 function plugins(
   binding: EditorBinding | undefined,
   hooks: EditorHooks,
+  attachments: AttachmentRuntime,
 ): Plugin[] {
   const list = [
     ...(binding
@@ -615,6 +624,7 @@ function plugins(
     blockIdPlugin((tr) => tr.getMeta("rebased") !== undefined),
     history(),
     fileHistoryGate(() => hooks.notify(FILE_UNDO_MESSAGE)),
+    attachments.plugin(),
     slashPalette({ enabled: hooks.slashEnabled, openLink: hooks.openLink }),
     linkUi,
     titlePlaceholder,
@@ -640,18 +650,69 @@ function linkElement(view: EditorView, event: MouseEvent) {
   return anchor && view.dom.contains(anchor) ? anchor : null;
 }
 
+/** An image shown full screen; closes with Escape, the backdrop or ×. */
+function ImageLightbox({
+  image,
+  onClose,
+}: {
+  image: LightboxImage | null;
+  onClose: () => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const element = dialog.current;
+    if (!element) return;
+    if (image && !element.open) element.showModal();
+    if (!image && element.open) element.close();
+  }, [image]);
+  return createPortal(
+    <dialog
+      ref={dialog}
+      className="image-lightbox"
+      aria-label={image?.alt ? `Picture: ${image.alt}` : "Picture"}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      onClick={(event) => {
+        // The backdrop and the space around the picture close it (on click,
+        // not pointerdown: Deltos GOTCHA-0018).
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      {image && (
+        <>
+          <img src={image.src} alt={image.alt} />
+          <button
+            type="button"
+            className="lightbox-close"
+            aria-label="Close picture"
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </>
+      )}
+    </dialog>,
+    window.document.body,
+  );
+}
+
 export function NoteEditor({
   document,
   editedLabel,
   editable,
   onChange,
   binding,
+  attachments,
 }: {
   document: string;
   editedLabel?: string | undefined;
   editable: boolean;
   onChange: (document: string, text: string) => void;
   binding?: EditorBinding | undefined;
+  /** The open note's attachments; without them pictures show from the cache only. */
+  attachments?: AttachmentContext | undefined;
 }) {
   const [toolbarState, setToolbarState] = useState<EditorState | null>(null);
   const [mobileGroup, setMobileGroup] = useState<ToolGroup | null>(null);
@@ -668,6 +729,12 @@ export function NoteEditor({
   const view = useRef<EditorView | null>(null);
   const callback = useRef(onChange);
   callback.current = onChange;
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+  const runtime = useRef<AttachmentRuntime | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [lightbox, setLightbox] = useState<LightboxImage | null>(null);
+  const [filesOn, setFilesOn] = useState(fileWritesEnabled);
   /** Show the link form for the selection or the link under the caret. */
   const openLinkForm = (editor: EditorView) => {
     const draft = linkDraftFor(editor.state);
@@ -700,25 +767,42 @@ export function NoteEditor({
     // A note with text opens with the caret at its end.
     const end = doc.textContent ? endSelection(doc) : null;
     const wide = window.matchMedia("(min-width: 761px)");
+    const files = new AttachmentRuntime({
+      context: () => attachmentsRef.current,
+      collaborative: !!binding,
+      cache: attachmentCache,
+      notify: setNotice,
+      openImage: setLightbox,
+    });
+    runtime.current = files;
     const editor: EditorView = new EditorView(host.current, {
       state: EditorState.create({
         schema: notesSchema,
         doc,
-        plugins: plugins(binding, {
-          openLink: (target) => openLink.current(target),
-          slashEnabled: () => wide.matches,
-          notify: setNotice,
-        }),
+        plugins: plugins(
+          binding,
+          {
+            openLink: (target) => openLink.current(target),
+            slashEnabled: () => wide.matches,
+            notify: setNotice,
+          },
+          files,
+        ),
         ...(end ? { selection: end } : {}),
       }),
       editable: () => editable,
-      nodeViews: { task_item: taskView },
+      nodeViews: { task_item: taskView, ...files.nodeViews() },
       attributes: {
         "aria-label": "Note content",
         role: "textbox",
         "aria-multiline": "true",
       },
-      handlePaste: pasteMarkdown,
+      // Files pasted or dropped upload while files are on (B3); otherwise
+      // pasting works as it did.
+      handlePaste: (target, event, slice) =>
+        files.pasteFiles(target, event) || pasteMarkdown(target, event, slice),
+      handleDrop: (target, event, _slice, moved) =>
+        files.dropFiles(target, event, moved),
       transformPastedHTML: sanitizePastedHtml,
       transformPasted: safeSlice,
       clipboardTextSerializer: serializeClipboardText,
@@ -800,9 +884,12 @@ export function NoteEditor({
     void loadMarkdown().catch(() => undefined);
     return () => {
       detach?.();
+      // Unfinished uploads are cancelled with the editor (B3).
       editor.destroy();
       view.current = null;
+      runtime.current = null;
       setLinkForm(null);
+      setLightbox(null);
     };
     // A new note or binding mounts a new editor. Readiness updates keep selection.
   }, [document, binding]);
@@ -810,6 +897,17 @@ export function NoteEditor({
     view.current?.setProps({ editable: () => editable });
     if (view.current) setToolbarState(view.current.state);
   }, [editable]);
+  // The note reached the server, or the connection came or went.
+  useEffect(() => {
+    runtime.current?.refresh();
+  }, [attachments?.accountId, attachments?.noteId, attachments?.service]);
+  useEffect(
+    () => onFileWritesChange(() => setFilesOn(fileWritesEnabled())),
+    [],
+  );
+  /** "+ File", paste and drop of files: a live note, editable, files on. */
+  const canAttach = editable && !!binding && !!attachments?.service && filesOn;
+  const pickFiles = () => fileInput.current?.click();
   useEffect(() => {
     // Tapping the blank area below the text puts the caret at the end.
     const editor = view.current;
@@ -993,6 +1091,22 @@ export function NoteEditor({
   };
   const slash = toolbarState ? slashKey.getState(toolbarState) : null;
   const choices = slash && toolbarState ? slashChoices(toolbarState) : [];
+  // No `accept` or `capture` on the picker, so iOS keeps all its sources
+  // (Deltos DEC-0008).
+  const addFileButton = (
+    <button
+      type="button"
+      className="editor-tool add-file"
+      aria-label="Add file"
+      title="Add file"
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={pickFiles}
+    >
+      <span className="add-file-label" aria-hidden="true">
+        + File
+      </span>
+    </button>
+  );
   return (
     <>
       <div
@@ -1010,10 +1124,31 @@ export function NoteEditor({
             {toolGroups[group].map(renderTool)}
           </div>
         ))}
+        {canAttach && (
+          <div className="editor-tool-group" role="group" aria-label="Insert">
+            {addFileButton}
+          </div>
+        )}
         <div className="editor-history" role="group" aria-label="Edit history">
           {historyTools.map(renderTool)}
         </div>
       </div>
+      {canAttach && (
+        <input
+          ref={fileInput}
+          className="file-picker-input"
+          type="file"
+          multiple
+          tabIndex={-1}
+          aria-hidden="true"
+          onChange={(event) => {
+            const chosen = Array.from(event.target.files ?? []);
+            event.target.value = "";
+            runtime.current?.pick(chosen);
+          }}
+        />
+      )}
+      <ImageLightbox image={lightbox} onClose={() => setLightbox(null)} />
       <div className="editor-host" ref={surface}>
         {editedLabel && <p className="edited-date">{editedLabel}</p>}
         <div ref={host} />
@@ -1196,6 +1331,7 @@ export function NoteEditor({
               <span className="mobile-tool-label">{group}</span>
             </button>
           ))}
+          {canAttach && addFileButton}
           <div
             className="editor-history"
             role="group"

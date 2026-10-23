@@ -8,6 +8,12 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
  */
 
 const OBJECT = "k57a1b2c3d4e5f6g7h8j9k0m1n2p3q4r";
+/**
+ * An attachment image in the editor. Since B3 a node view draws it (the
+ * picture loads through the Worker), so it is found by its source rather
+ * than by an <img> showing `attachment:`.
+ */
+const ATTACHMENT_IMAGE = '.note-image[data-src^="attachment:"]';
 
 async function newNote(page: Page) {
   await page.goto("/?fixture=seed&session=stall");
@@ -70,7 +76,7 @@ test("with files off, pasted Markdown and HTML keep no file features; typing con
   await expect(editor.locator("img")).toHaveCount(1);
   await expect(editor.locator("img")).not.toHaveAttribute("width");
   await expect(editor.locator("[data-object-id]")).toHaveCount(0);
-  await expect(editor.locator('img[src^="attachment:"]')).toHaveCount(0);
+  await expect(editor.locator(ATTACHMENT_IMAGE)).toHaveCount(0);
 
   // A Palladian copy (HTML) of a file block and a sized attachment image.
   await editor.press("End");
@@ -81,7 +87,7 @@ test("with files off, pasted Markdown and HTML keep no file features; typing con
   await expect(editor).toContainText("copied.pdf");
   await expect(editor).toContainText("copied photo");
   await expect(editor.locator("[data-object-id]")).toHaveCount(0);
-  await expect(editor.locator('img[src^="attachment:"]')).toHaveCount(0);
+  await expect(editor.locator(ATTACHMENT_IMAGE)).toHaveCount(0);
 
   // Typing carries on.
   await editor.press("End");
@@ -140,7 +146,7 @@ async function withAttachments(page: Page) {
     ].join("\n\n"),
   });
   await expect(editor.locator("[data-object-id]")).toHaveCount(1);
-  await expect(editor.locator('img[src^="attachment:"]')).toHaveCount(1);
+  await expect(editor.locator(ATTACHMENT_IMAGE)).toHaveCount(1);
   await expect(editor.locator('img[width="300"]')).toHaveCount(1);
   return editor;
 }
@@ -178,9 +184,9 @@ test("R5-2: with files off, cutting an attachment is refused with a message; del
     "Files can't be moved this way yet. Copy, or drag within the note, instead.",
   );
   // An attachment image too.
-  await selectNode(editor.locator('img[src^="attachment:"]'));
+  await selectNode(editor.locator(ATTACHMENT_IMAGE));
   expect((await clip(editor, "cut")).prevented).toBe(true);
-  await expect(editor.locator('img[src^="attachment:"]')).toHaveCount(1);
+  await expect(editor.locator(ATTACHMENT_IMAGE)).toHaveCount(1);
   // Deleting is deliberate and works; undoing it would bring the file back.
   await selectNode(fileBlock);
   await editor.press("Backspace");
@@ -191,11 +197,15 @@ test("R5-2: with files off, cutting an attachment is refused with a message; del
     "Undo can't bring back removed files or image sizes yet.",
   );
   await expect(fileBlock).toHaveCount(0);
-  // Typing carries on (in the title, clear of the message).
+  // Typing carries on (in the title, clear of the message). Deleting the
+  // file left the image after it selected; typing before ProseMirror reads
+  // the click's caret would replace that image instead (as in pasteAtEnd).
   await editor.locator("p").first().click();
+  await expect(editor.locator(".ProseMirror-selectednode")).toHaveCount(0);
   await editor.press("End");
   await editor.pressSequentially(" typed");
   await expect(editor).toContainText("Album typed");
+  await expect(editor.locator("p").first()).toHaveText("Album typed");
 });
 
 test("R5-2: with files off, copy then paste keeps the note's own attachment", async ({

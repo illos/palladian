@@ -38,6 +38,15 @@ export default defineConfig(({ mode }) => {
     envDir: fileURLToPath(new URL("../..", import.meta.url)),
     plugins: [react(), offlineShell()],
     build: { target: ["chrome111", "firefox114", "safari16.4"] },
-    server: { host: "127.0.0.1", port: 5178, strictPort: true },
+    server: {
+      host: "127.0.0.1",
+      port: 5178,
+      strictPort: true,
+      // Attachment bytes come from the Worker's /files routes (B1), which
+      // runs separately in development (apps/notes-edge README).
+      proxy: {
+        "/files": process.env.NOTES_FILES_ORIGIN ?? "http://localhost:8787",
+      },
+    },
   };
 });

@@ -17,6 +17,7 @@ import { Plugin } from "prosemirror-state";
  * note from saving.
  */
 let writes = false;
+const listeners = new Set<() => void>();
 
 export function fileWritesEnabled(): boolean {
   return writes;
@@ -24,7 +25,15 @@ export function fileWritesEnabled(): boolean {
 
 /** For tests, and for the watcher below. */
 export function setFileWrites(value: boolean) {
+  if (writes === value) return;
   writes = value;
+  for (const listener of listeners) listener();
+}
+
+/** Call `listener` whenever files are turned on or off (B3: "+ File", resizing). */
+export function onFileWritesChange(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => void listeners.delete(listener);
 }
 
 /** Follow `files.capabilities` for the signed-in account; stop turns files off. */
@@ -37,13 +46,13 @@ export function watchFileCapability(client: ConvexReactClient): () => void {
     } catch {
       value = undefined;
     }
-    writes = value?.writes === true;
+    setFileWrites(value?.writes === true);
   };
   const stop = watch.onUpdate(read);
   read();
   return () => {
     stop();
-    writes = false;
+    setFileWrites(false);
   };
 }
 

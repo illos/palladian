@@ -12,6 +12,7 @@ export default defineConfig({
     "notes-files-gate.spec.ts",
     "notes-history.spec.ts",
     "notes-notebooks.spec.ts",
+    "notes-attachments.spec.ts",
   ],
   fullyParallel: true,
   reporter: "list",
