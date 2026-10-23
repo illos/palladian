@@ -178,6 +178,24 @@ Checks after the fix: typecheck (notes and tools) passes; 20 Node and 282 Vitest
 
 The A3 browser tests that timed out under host load in rounds 7 and 8 (the link form and paste) are recorded as follow-ups for A3. They do not involve History.
 
+## Release
+
+Released 2026-10-23 from `main` `371437e`, after acceptance in review round 9:
+
+- Convex production `adamant-hound-861` was deployed with this branch's one backend change, the optional `account` on `notes.create`. No index was deleted. Afterwards, the production function spec lists `account` among `notes.create`'s arguments.
+- Worker `palladian` version `936720e3`, at 100% from 20:42 UTC. The custom domain and the cron `23 4 * * *` were confirmed through the Cloudflare API, after the known "No access" message on the routes call.
+
+Before merging, these passed against dev Convex on `371437e`:
+
+- `history-e2e.mjs`: all 14 steps passed.
+- `actions-e2e.mjs`: all steps passed.
+- `live-e2e.mjs`: all checks passed.
+- `arrange-e2e.mjs`: all steps passed.
+
+After deploying, `live-e2e.mjs` and `apps/notes-edge/scripts/browser-e2e.mjs` passed against production. WebKit and the real-iPhone check are still pending.
+
+Earlier, during round 6, a mis-specified command in the coordinator's brief deployed that round's backend to production before review. It was rolled back to `main` `6e1b50d` the same day, and production `live-e2e.mjs` passed. Dev pushes now use `npx convex dev --once`; `npx convex deploy` always targets production.
+
 ## Found during this work (not changed)
 
 - **A whole-note replacement discards unsent typing on every other device and tab** (the reason in-place Restore was withdrawn). `history.restore` commits one step that replaces the whole document, and so does an agent's `edit_note` with `replace_all` (`notes-core` `edits.ts`, `replaceRange(tr, 0, doc.content.size, …)`); MCP `restore_revision` calls `history.restore`, and `replace_block` or `delete_block` do the same within one block. A device or tab with typing not yet confirmed when such a step arrives rebases its unconfirmed steps over it; those inside the replaced range map to nothing and are dropped, from the editor and its journal, and they were never on the server, so they are not in History either. Until round 4 the e2e showed this deterministically with in-place Restore (a held, unsent word gone and in no revision). This is collaboration behaviour in the fundamentals (`channel.ts`, the cache's notifications and prosemirror-collab rebasing), raised with the owner. The app's History no longer replaces anything; agents still can.

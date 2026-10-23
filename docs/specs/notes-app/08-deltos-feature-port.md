@@ -259,7 +259,7 @@ None of this changes the shared schema in `packages/notes-core`.
 
 ### A4. History (M)
 
-Implemented 2026-10-22, with Restore as a new note (in-place Restore withdrawn after review round 5), in review (`docs/reviews/notes-history-implementation.md`).
+Implemented 2026-10-22, with Restore as a new note (in-place Restore withdrawn after review round 5). Accepted after nine independent review rounds and released to production on 2026-10-23; the iPhone check is pending (`docs/reviews/notes-history-implementation.md`). In-place Restore can return once fundamentals issue 4 (another device's unsent typing) is fixed.
 
 Deltos reference: `components/HistoryPanel.tsx`, for the UI only. Deltos kept per-device snapshots; Palladian has server revisions, so `lib/historyCapture.ts` does not port.
 
