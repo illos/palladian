@@ -278,17 +278,21 @@ const nodes: Record<string, NodeSpec> = {
           if (typeof dom === "string") return false;
           const src = dom.getAttribute("src");
           if (!isSafeImageSource(src)) return false;
-          // A width is kept only for Palladian's own images (copy and paste
-          // between notes); web pages' <img width> sizes are layout, not a
-          // choice, and would need files enabled (review round 3).
+          // A width is kept only for Palladian's own images (copy and paste,
+          // marked by `data-width`, review round 5; or an `attachment:`
+          // image); web pages' <img width> sizes are layout, not a choice,
+          // and would need files enabled (review round 3). The editor's
+          // paste filter then drops widths files do not allow yet.
+          const own = Number(dom.getAttribute("data-width"));
           const width = Number(dom.getAttribute("width"));
           return {
             id: readId(dom),
             src,
             alt: dom.getAttribute("alt"),
             title: dom.getAttribute("title"),
-            width:
-              attachmentObjectId(src) !== null && isImageWidth(width)
+            width: isImageWidth(own)
+              ? own
+              : attachmentObjectId(src) !== null && isImageWidth(width)
                 ? width
                 : null,
           };
@@ -304,7 +308,10 @@ const nodes: Record<string, NodeSpec> = {
         alt: node.attrs.alt,
         title: node.attrs.title,
         ...(isImageWidth(node.attrs.width)
-          ? { width: String(node.attrs.width) }
+          ? {
+              width: String(node.attrs.width),
+              "data-width": String(node.attrs.width),
+            }
           : {}),
       },
     ],

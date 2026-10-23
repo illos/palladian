@@ -12,12 +12,13 @@ import { collab } from "prosemirror-collab";
 import { history, undo } from "prosemirror-history";
 import {
   EditorState,
+  NodeSelection,
   TextSelection,
   type Transaction,
 } from "prosemirror-state";
 import { Step } from "prosemirror-transform";
 import type { EditorView } from "prosemirror-view";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { NotesStore } from "../../src/cache";
 import {
   NoteChannel,
@@ -29,6 +30,7 @@ import {
 import {
   loadMarkdown,
   pasteMarkdown,
+  refuseFileCut,
   safeSlice,
 } from "../../src/editor-clipboard";
 import { fileHistoryGate, setFileWrites } from "../../src/file-capability";
@@ -119,6 +121,8 @@ async function open(
     () => true,
   );
   const statuses: ChannelStatus[] = [];
+  /** Undos the history gate refused (the editor shows a message for each). */
+  const undoRefusals: number[] = [];
   const channel = new NoteChannel({
     store,
     accountId: "account",
@@ -137,7 +141,7 @@ async function open(
       plugins: [
         collab({ version: 0, clientID: "me" }),
         history(),
-        ...(gate ? [fileHistoryGate()] : []),
+        ...(gate ? [fileHistoryGate(() => undoRefusals.push(1))] : []),
       ],
       selection: TextSelection.atEnd(start),
     }),
@@ -148,7 +152,7 @@ async function open(
   };
   channel.attach(view as unknown as EditorView);
   channel.connect(transport);
-  return { view, channel, statuses, store };
+  return { view, channel, statuses, store, undoRefusals };
 }
 
 function pasteText(view: unknown, text: string) {
@@ -358,7 +362,10 @@ describe("R4-1: what the note already has stays usable while files are off", () 
   test("undo cannot bring back a removed attachment once removed on the server; typing continues", async () => {
     const start = markdownToDoc(ALBUM);
     const { state, transport } = server(start, true);
-    const { view, channel, statuses, store } = await open(start, transport);
+    const { view, channel, statuses, store, undoRefusals } = await open(
+      start,
+      transport,
+    );
     try {
       await flush();
       // Remove the photo and the file block; the server has the removal.
@@ -367,9 +374,11 @@ describe("R4-1: what the note already has stays usable while files are off", () 
       view.dispatch(view.state.tr.delete(from, to));
       await flush();
       expect(state.doc.childCount).toBe(start.childCount - 2);
-      // Undo would bring them back: it does nothing while files are off.
+      // Undo would bring them back: it does nothing while files are off,
+      // and says so (round 5).
       undo(view.state, (tr) => view.dispatch(tr));
       expect(view.state.doc.eq(state.doc)).toBe(true);
+      expect(undoRefusals).toHaveLength(1);
       view.dispatch(view.state.tr.insertText(" typed"));
       await flush();
       expect(state.refused).toBe(0);
@@ -401,6 +410,162 @@ describe("R4-1: what the note already has stays usable while files are off", () 
       await flush();
       expect(state.refused).toBe(1);
       expect(statuses.some((s) => s.kind === "blocked")).toBe(true);
+      channel.close();
+    } finally {
+      store.close();
+    }
+  });
+});
+
+describe("R5-2: while files are off, a cut that pasting could not restore is refused", () => {
+  const NOTE = [
+    "Note",
+    `![photo](attachment:${OBJECT})`,
+    `[report.pdf](attachment:${OBJECT}){type=application/pdf size=3}`,
+    "Text",
+  ].join("\n\n");
+
+  /** The file block's position: the third block. */
+  const filePos = (doc: ProseMirrorNode) =>
+    doc.child(0).nodeSize + doc.child(1).nodeSize;
+
+  const cutEvent = () =>
+    ({ preventDefault: vi.fn() }) as unknown as Event & {
+      preventDefault: ReturnType<typeof vi.fn>;
+    };
+
+  test("a cut is refused and the document is unchanged; copy then paste still works", async () => {
+    const start = markdownToDoc(NOTE);
+    const { state, transport } = server(start, true);
+    const { view, channel, statuses, store } = await open(start, transport);
+    try {
+      await flush();
+      const pos = filePos(view.state.doc);
+      view.dispatch(
+        view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos)),
+      );
+      const before = view.state.doc;
+      const event = cutEvent();
+      expect(refuseFileCut(view as unknown as EditorView, event)).toBe(true);
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(view.state.doc.eq(before)).toBe(true);
+      // The photo too, and a range of text and both.
+      for (const [from, to] of [
+        [before.child(0).nodeSize, pos],
+        [1, before.content.size - 1],
+      ] as const) {
+        view.dispatch(
+          view.state.tr.setSelection(
+            from + before.nodeAt(from)!.nodeSize === to
+              ? NodeSelection.create(view.state.doc, from)
+              : TextSelection.create(view.state.doc, from, to),
+          ),
+        );
+        expect(refuseFileCut(view as unknown as EditorView, cutEvent())).toBe(
+          true,
+        );
+      }
+      // Text alone cuts as usual.
+      view.dispatch(
+        view.state.tr.setSelection(TextSelection.create(view.state.doc, 1, 3)),
+      );
+      const text = cutEvent();
+      expect(refuseFileCut(view as unknown as EditorView, text)).toBe(false);
+      expect(text.preventDefault).not.toHaveBeenCalled();
+      // Copy, then paste at the end: the file block stays a file block.
+      view.dispatch(
+        view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos)),
+      );
+      const copied = view.state.selection.content();
+      view.dispatch(
+        view.state.tr.setSelection(TextSelection.atEnd(view.state.doc)),
+      );
+      view.dispatch(
+        view.state.tr.replaceSelection(
+          safeSlice(copied, view as unknown as EditorView),
+        ),
+      );
+      await flush();
+      let files = 0;
+      state.doc.descendants((node) => {
+        if (node.type.name === "file") files++;
+        return true;
+      });
+      expect(files).toBe(2);
+      expect(state.refused).toBe(0);
+      expect(statuses.some((s) => s.kind === "blocked")).toBe(false);
+      channel.close();
+    } finally {
+      store.close();
+    }
+  });
+
+  test("deleting still works; undoing it shows the message, the note keeps saving", async () => {
+    const start = markdownToDoc(NOTE);
+    const { state, transport } = server(start, true);
+    const { view, channel, statuses, store, undoRefusals } = await open(
+      start,
+      transport,
+    );
+    try {
+      await flush();
+      view.dispatch(
+        view.state.tr.setSelection(
+          NodeSelection.create(view.state.doc, filePos(view.state.doc)),
+        ),
+      );
+      view.dispatch(view.state.tr.deleteSelection());
+      await flush();
+      // The server acknowledged the deletion.
+      expect(state.doc.childCount).toBe(start.childCount - 1);
+      undo(view.state, (tr) => view.dispatch(tr));
+      expect(undoRefusals).toHaveLength(1);
+      expect(view.state.doc.eq(state.doc)).toBe(true);
+      expect(state.refused).toBe(0);
+      expect(statuses.some((s) => s.kind === "blocked")).toBe(false);
+      channel.close();
+    } finally {
+      store.close();
+    }
+  });
+
+  test("with files on, cut and paste keep the attachment", async () => {
+    setFileWrites(true);
+    const start = markdownToDoc(NOTE);
+    const { state, transport } = server(start, false);
+    const { view, channel, statuses, store } = await open(start, transport);
+    try {
+      await flush();
+      view.dispatch(
+        view.state.tr.setSelection(
+          NodeSelection.create(view.state.doc, filePos(view.state.doc)),
+        ),
+      );
+      expect(refuseFileCut(view as unknown as EditorView, cutEvent())).toBe(
+        false,
+      );
+      // ProseMirror's cut: the slice goes to the clipboard, the selection is
+      // deleted; the server acknowledges it before the paste.
+      const cut = view.state.selection.content();
+      view.dispatch(view.state.tr.deleteSelection());
+      await flush();
+      expect(state.doc.childCount).toBe(start.childCount - 1);
+      view.dispatch(
+        view.state.tr.setSelection(TextSelection.atEnd(view.state.doc)),
+      );
+      view.dispatch(
+        view.state.tr.replaceSelection(
+          safeSlice(cut, view as unknown as EditorView),
+        ),
+      );
+      await flush();
+      const files: ProseMirrorNode[] = [];
+      state.doc.descendants((node) => {
+        if (node.type.name === "file") files.push(node);
+        return true;
+      });
+      expect(files.map((node) => node.attrs.objectId)).toEqual([OBJECT]);
+      expect(statuses.some((s) => s.kind === "blocked")).toBe(false);
       channel.close();
     } finally {
       store.close();

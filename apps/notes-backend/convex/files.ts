@@ -172,9 +172,12 @@ async function resolveTarget(
 }
 
 /**
- * What this deployment accepts from the app (review round 4): whether new
- * content may use files (FILES_WRITES_ENABLED). The app keeps file features
- * out of pasted content until this says yes. Signed out: no.
+ * Whether new content may use files on this deployment (FILES_WRITES_ENABLED,
+ * review round 4). Readable by any signed-in principal, people and agents
+ * alike; signed out: no. It reveals one switch and nothing else. The app
+ * keeps file features out of paste, cut and undo until this says yes. Agents
+ * do not need it: the server refuses what it does not accept, with a message
+ * `attach_file` and the edit tools pass on.
  */
 export const capabilities = query({
   args: {},

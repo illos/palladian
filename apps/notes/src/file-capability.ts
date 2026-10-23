@@ -47,20 +47,26 @@ export function watchFileCapability(client: ConvexReactClient): () => void {
   };
 }
 
+export const FILE_UNDO_MESSAGE =
+  "Undo can't bring back removed files or image sizes yet.";
+
 /**
  * While files are off, undo and redo do not bring back file features the
  * note no longer has (an attachment or image width removed earlier): the
- * server would refuse the step. Such an undo does nothing. The note as it is
- * now is the measure, because a removal may reach the server before the undo.
+ * server would refuse the step. Such an undo does nothing and `refused` is
+ * called, so the editor can say why (review round 5). The note as it is now
+ * is the measure, because a removal may reach the server before the undo.
  */
-export function fileHistoryGate(): Plugin {
+export function fileHistoryGate(refused?: () => void): Plugin {
   return new Plugin({
     filterTransaction(tr, state) {
       if (writes || !isHistoryTransaction(tr)) return true;
       const existing = fileFeatures(state.doc);
-      return tr.steps.every(
+      const allowed = tr.steps.every(
         (step, index) => !stepAddsFileFeatures(step, tr.docs[index]!, existing),
       );
+      if (!allowed) refused?.();
+      return allowed;
     },
   });
 }

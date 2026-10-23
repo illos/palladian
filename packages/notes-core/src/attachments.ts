@@ -79,11 +79,17 @@ export function stepUsesFileFeatures(step: Step): boolean {
   return false;
 }
 
-/** The file features a document already has (round 4: the gate allows these). */
+/**
+ * The file features a document already has, by kind (rounds 4 and 5: the
+ * gate allows these). An object shown as an image does not make a file block
+ * for it known, or the reverse: clients before B2 open the one, not the other.
+ */
 export interface FileFeatures {
-  /** Objects it references. */
-  objects: Set<string>;
-  /** Image widths it uses, keyed by source and width. */
+  /** Objects shown as file blocks. */
+  files: Set<string>;
+  /** Objects shown as images (`attachment:` sources). */
+  images: Set<string>;
+  /** Image widths, keyed by source and width. */
   widths: Set<string>;
 }
 
@@ -103,21 +109,39 @@ export function knownImageWidth(
 export function fileFeatures(
   content: ProseMirrorNode | Fragment | null,
 ): FileFeatures {
-  const features: FileFeatures = { objects: new Set(), widths: new Set() };
-  if (!content) return features;
-  for (const objectId of attachmentIds(content)) features.objects.add(objectId);
+  const features: FileFeatures = {
+    files: new Set(),
+    images: new Set(),
+    widths: new Set(),
+  };
+  if (content) mergeFileFeatures(features, content);
+  return features;
+}
+
+/** Add the file features of `content` to `features`. */
+export function mergeFileFeatures(
+  features: FileFeatures,
+  content: ProseMirrorNode | Fragment,
+): FileFeatures {
   content.descendants((node) => {
-    if (node.type.name === "image" && node.attrs.width !== null)
-      features.widths.add(widthKey(node.attrs.src, node.attrs.width));
+    if (node.type.name === "file")
+      features.files.add(String(node.attrs.objectId));
+    else if (node.type.name === "image") {
+      const objectId = attachmentObjectId(node.attrs.src);
+      if (objectId !== null) features.images.add(objectId);
+      if (node.attrs.width !== null)
+        features.widths.add(widthKey(node.attrs.src, node.attrs.width));
+    }
     return !node.isTextblock;
   });
   return features;
 }
 
 /**
- * Whether content has file features `existing` lacks: an object it does not
- * reference, or an image width it does not use. Keeping an identical file
- * block or sized image is not new.
+ * Whether content has file features `existing` lacks: a file block or an
+ * image for an object not already shown that way, or an image width not
+ * already used for that source. Keeping an identical file block or sized
+ * image is not new.
  */
 export function addsFileFeatures(
   content: ProseMirrorNode | Fragment,
@@ -127,11 +151,11 @@ export function addsFileFeatures(
   content.descendants((node) => {
     if (found) return false;
     if (node.type.name === "file")
-      found = !existing.objects.has(String(node.attrs.objectId));
+      found = !existing.files.has(String(node.attrs.objectId));
     else if (node.type.name === "image") {
       const objectId = attachmentObjectId(node.attrs.src);
       found =
-        (objectId !== null && !existing.objects.has(objectId)) ||
+        (objectId !== null && !existing.images.has(objectId)) ||
         (node.attrs.width !== null &&
           !existing.widths.has(widthKey(node.attrs.src, node.attrs.width)));
     }
@@ -152,7 +176,7 @@ export function stepAddsFileFeatures(
     const node = doc.nodeAt(step.pos);
     if (step.attr === "src") {
       const objectId = attachmentObjectId(step.value);
-      if (objectId !== null && !existing.objects.has(objectId)) return true;
+      if (objectId !== null && !existing.images.has(objectId)) return true;
       const width = node?.attrs.width ?? null;
       return (
         width !== null && !existing.widths.has(widthKey(step.value, width))
@@ -164,7 +188,7 @@ export function stepAddsFileFeatures(
         !existing.widths.has(widthKey(node?.attrs.src, step.value))
       );
     if (step.attr === "objectId")
-      return !existing.objects.has(String(step.value));
+      return !existing.files.has(String(step.value));
   }
   return false;
 }

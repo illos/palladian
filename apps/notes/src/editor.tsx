@@ -69,14 +69,16 @@ import {
   unlinkAtEdge,
 } from "./editor-links";
 import {
+  FILE_CUT_MESSAGE,
   loadMarkdown,
   pasteMarkdown,
+  refuseFileCut,
   safeSlice,
   sanitizePastedHtml,
   serializeClipboardText,
 } from "./editor-clipboard";
 import { runSlash, slashChoices, slashKey, slashPalette } from "./editor-slash";
-import { fileHistoryGate } from "./file-capability";
+import { FILE_UNDO_MESSAGE, fileHistoryGate } from "./file-capability";
 
 export { notesSchema };
 export function validateDocument(document: string) {
@@ -598,6 +600,8 @@ export const titlePlaceholder = new Plugin({
 type EditorHooks = {
   openLink: (view: EditorView) => void;
   slashEnabled: () => boolean;
+  /** Show a short note below the text. */
+  notify: (message: string) => void;
 };
 
 function plugins(
@@ -610,7 +614,7 @@ function plugins(
       : []),
     blockIdPlugin((tr) => tr.getMeta("rebased") !== undefined),
     history(),
-    fileHistoryGate(),
+    fileHistoryGate(() => hooks.notify(FILE_UNDO_MESSAGE)),
     slashPalette({ enabled: hooks.slashEnabled, openLink: hooks.openLink }),
     linkUi,
     titlePlaceholder,
@@ -652,8 +656,11 @@ export function NoteEditor({
   const [toolbarState, setToolbarState] = useState<EditorState | null>(null);
   const [mobileGroup, setMobileGroup] = useState<ToolGroup | null>(null);
   const [linkForm, setLinkForm] = useState<LinkForm | null>(null);
-  /** A short note after the link form closed on its own. */
-  const [linkNotice, setLinkNotice] = useState<string | null>(null);
+  /**
+   * A short note: the link form closed on its own, or a file edit is not
+   * possible while files are off (review round 5).
+   */
+  const [notice, setNotice] = useState<string | null>(null);
   const host = useRef<HTMLDivElement>(null);
   const surface = useRef<HTMLDivElement>(null);
   const linkText = useRef<HTMLInputElement>(null);
@@ -675,7 +682,7 @@ export function NoteEditor({
     );
     // Render now so focus moves within the tap or key press (iOS keyboard).
     flushSync(() => {
-      setLinkNotice(null);
+      setNotice(null);
       setLinkForm({
         text: draft.text,
         href: draft.href,
@@ -700,6 +707,7 @@ export function NoteEditor({
         plugins: plugins(binding, {
           openLink: (target) => openLink.current(target),
           slashEnabled: () => wide.matches,
+          notify: setNotice,
         }),
         ...(end ? { selection: end } : {}),
       }),
@@ -715,6 +723,13 @@ export function NoteEditor({
       transformPasted: safeSlice,
       clipboardTextSerializer: serializeClipboardText,
       handleDOMEvents: {
+        cut(target, event) {
+          // While files are off, a cut that pasting could not restore is
+          // refused (review round 5).
+          if (!refuseFileCut(target, event)) return false;
+          setNotice(FILE_CUT_MESSAGE);
+          return true;
+        },
         click(target, event) {
           const anchor = linkElement(target, event);
           if (!anchor) return false;
@@ -929,7 +944,7 @@ export function NoteEditor({
       // A collaborator moved the text into code or across lines: leave it.
       setLinkForm(null);
       closeLinkUi(editor);
-      setLinkNotice("The text can no longer be linked.");
+      setNotice("The text can no longer be linked.");
       editor.focus();
       return;
     }
@@ -965,10 +980,10 @@ export function NoteEditor({
     editor.focus();
   };
   useEffect(() => {
-    if (!linkNotice) return;
-    const timer = window.setTimeout(() => setLinkNotice(null), 4000);
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 4000);
     return () => window.clearTimeout(timer);
-  }, [linkNotice]);
+  }, [notice]);
   const cancelLinkForm = () => {
     const editor = view.current;
     setLinkForm(null);
@@ -1047,9 +1062,9 @@ export function NoteEditor({
             </button>
           </div>
         )}
-        {linkNotice && (
+        {notice && (
           <p className="link-notice" role="status">
-            {linkNotice}
+            {notice}
           </p>
         )}
         {formTarget && linkForm && (

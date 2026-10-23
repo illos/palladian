@@ -1,6 +1,7 @@
 import {
   fileFeatures,
   knownImageWidth,
+  usesFileFeatures,
   type FileFeatures,
 } from "@palladian/notes-core/attachments";
 import {
@@ -304,7 +305,7 @@ function withoutFileFeatures(
   fragment.forEach((node) => {
     if (node.type.name === "file") {
       nodes.push(
-        existing.objects.has(String(node.attrs.objectId))
+        existing.files.has(String(node.attrs.objectId))
           ? node
           : text(String(node.attrs.name ?? "")),
       );
@@ -312,7 +313,7 @@ function withoutFileFeatures(
     }
     if (node.type.name === "image") {
       const objectId = attachmentObjectId(node.attrs.src);
-      if (objectId !== null && !existing.objects.has(objectId)) {
+      if (objectId !== null && !existing.images.has(objectId)) {
         const alt = String(node.attrs.alt ?? "").trim();
         if (alt) nodes.push(text(alt));
       } else
@@ -368,6 +369,25 @@ export function safeSlice(slice: Slice, view?: EditorView): Slice {
       );
     return new Slice(Fragment.fromArray(lines), 1, 1);
   }
+}
+
+export const FILE_CUT_MESSAGE =
+  "Files can't be moved this way yet. Copy, or drag within the note, instead.";
+
+/**
+ * The editor's cut, while files are off (review round 5): a selection with a
+ * file block, an attachment image or an image width is not cut, because
+ * pasting it back could not restore them. Once cut, the note no longer has
+ * them, so the paste filter (`safeSlice`) and the server would not accept
+ * them again. Copy, dragging within the note, and deleting still work.
+ * Returns true when the cut was refused (the caller shows FILE_CUT_MESSAGE).
+ */
+export function refuseFileCut(view: EditorView, event: Event): boolean {
+  const { selection } = view.state;
+  if (fileWritesEnabled() || !view.editable || selection.empty) return false;
+  if (!usesFileFeatures(selection.content().content)) return false;
+  event.preventDefault();
+  return true;
 }
 
 /** A pasted slice with nothing but unformatted paragraphs, e.g. from a code editor. */

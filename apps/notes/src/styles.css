@@ -2057,7 +2057,8 @@ ul.member-list {
     padding: 8px 16px;
   }
 }
-/* A short note when the link form closed by itself. */
+/* A short note from the editor: the link form closed by itself, or a file
+   edit that is not possible while files are off. */
 .link-notice {
   position: fixed;
   z-index: 20;

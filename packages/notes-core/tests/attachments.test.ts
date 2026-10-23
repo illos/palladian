@@ -742,3 +742,95 @@ test("R4-2: only file features a note does not already have count as new", async
   ).steps[0]!;
   assert.equal(stepAddsFileFeatures(replaceAll, current, existing), false);
 });
+
+// Review round 5 (docs/reviews/notes-files-backend-round5-astra-review.md).
+
+test("R5-1: file features compare by kind: an image never makes a file block known", async () => {
+  const {
+    fileFeatures,
+    mergeFileFeatures,
+    addsFileFeatures,
+    stepAddsFileFeatures,
+  } = await import("../src/index.ts");
+  // An image of A, as stored before B2 (no width).
+  const withImage = stored(
+    doc(
+      node.paragraph!.create({ id: "p1" }, notesSchema.text("Text")),
+      node.image!.create({ id: "i1", src: `attachment:${A}` }),
+    ),
+  );
+  const images = fileFeatures(withImage);
+  assert.deepEqual([...images.images], [A]);
+  assert.deepEqual([...images.files], []);
+  assert.equal(addsFileFeatures(doc(file({ objectId: A })), images), true);
+  assert.equal(
+    addsFileFeatures(
+      doc(node.image!.create({ src: `attachment:${A}` })),
+      images,
+    ),
+    false,
+  );
+  // A file block for A: an image of A is new.
+  const withFile = stored(doc(file({ id: "f1", objectId: A })));
+  const files = fileFeatures(withFile);
+  assert.equal(
+    addsFileFeatures(
+      doc(node.image!.create({ src: `attachment:${A}` })),
+      files,
+    ),
+    true,
+  );
+  assert.equal(addsFileFeatures(doc(file({ objectId: A })), files), false);
+  // Attribute steps: an image pointed at A needs A as an image, a file block
+  // pointed at A needs A as a file block.
+  const both = stored(
+    doc(
+      node.image!.create({ id: "i1", src: "https://example.com/a.png" }),
+      file({ id: "f1", objectId: B }),
+    ),
+  );
+  const imageToA = new AttrStep(0, "src", `attachment:${A}`);
+  const fileToA = new AttrStep(both.child(0).nodeSize, "objectId", A);
+  assert.equal(stepAddsFileFeatures(imageToA, both, files), true);
+  assert.equal(stepAddsFileFeatures(imageToA, both, images), false);
+  assert.equal(stepAddsFileFeatures(fileToA, both, images), true);
+  assert.equal(stepAddsFileFeatures(fileToA, both, files), false);
+  // Merging sources keeps the kinds apart.
+  const merged = mergeFileFeatures(fileFeatures(withImage), withFile);
+  assert.deepEqual([...merged.images], [A]);
+  assert.deepEqual([...merged.files], [A]);
+});
+
+test("R5-3: the app's own images keep their width through HTML, any source", () => {
+  const spec = notesSchema.nodes.image!.spec;
+  const getAttrs = spec.parseDOM![0]!.getAttrs!;
+  const element = (attrs: Record<string, string>) =>
+    ({
+      getAttribute: (name: string) => attrs[name] ?? null,
+    }) as unknown as HTMLElement;
+  for (const src of ["https://example.com/a.png", `attachment:${A}`]) {
+    const image = node.image!.create({ id: "i1", src, alt: "x", width: 300 });
+    const rendered = spec.toDOM!(image) as [string, Record<string, string>];
+    assert.equal(rendered[1]["data-width"], "300");
+    const parsed = getAttrs(element(rendered[1])) as { width: number | null };
+    assert.equal(parsed.width, 300, src);
+  }
+  // Without the marker, web pages' widths are still layout, not a choice.
+  assert.equal(
+    (
+      getAttrs(element({ src: "https://example.com/a.png", width: "300" })) as {
+        width: number | null;
+      }
+    ).width,
+    null,
+  );
+  // An invalid marker is ignored.
+  assert.equal(
+    (
+      getAttrs(
+        element({ src: "https://example.com/a.png", "data-width": "5" }),
+      ) as { width: number | null }
+    ).width,
+    null,
+  );
+});

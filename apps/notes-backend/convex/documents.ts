@@ -12,6 +12,7 @@ import {
   plainText,
   addsFileFeatures,
   fileFeatures,
+  mergeFileFeatures,
   stepAddsFileFeatures,
   stepAttachmentIds,
   UnsafeDocumentError,
@@ -112,9 +113,7 @@ async function sourceFeatures(
       .withIndex("by_note", (q) => q.eq("noteId", source))
       .unique();
     if (!content) continue;
-    const found = fileFeatures(parseStoredDoc(content.doc));
-    for (const objectId of found.objects) features.objects.add(objectId);
-    for (const width of found.widths) features.widths.add(width);
+    mergeFileFeatures(features, parseStoredDoc(content.doc));
   }
   return features;
 }
@@ -229,8 +228,9 @@ export async function commitSteps(
   const union = new Set(attachmentIds(before));
   const baseline = union.size;
   // Until files are enabled, no step may bring in file features the note
-  // does not already have (rounds 3 and 4): keeping an identical file block
-  // or sized image is fine, adding one is not.
+  // does not already have (rounds 3 to 5): keeping an identical file block
+  // or sized image is fine, adding one is not, and an object shown as an
+  // image does not allow a file block for it (or the reverse).
   const existing = filesWritesEnabled() ? null : fileFeatures(before);
   // Checkpoints land on every interval boundary, even inside a large batch, so
   // any revision is rebuilt from at most one interval of steps.

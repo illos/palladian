@@ -70,6 +70,7 @@ export {
   stepUsesFileFeatures,
   fileFeatures,
   knownImageWidth,
+  mergeFileFeatures,
   addsFileFeatures,
   stepAddsFileFeatures,
 } from "./attachments.ts";

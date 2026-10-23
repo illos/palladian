@@ -15,7 +15,9 @@
 //   EXPECT_FILES_DISABLED=1: the deployment has FILES_WRITES_ENABLED off;
 //     the script checks that file writes are refused and reads still work,
 //     then stops (review round 3). With FLIP_GATE=1 it also switches the
-//     variable (ending on) and checks files.capabilities follows at once.
+//     variable (ending on), checks files.capabilities follows at once, and
+//     that a note written while files were on still edits once they are off,
+//     without an image's object allowing a file block (rounds 4 and 5).
 //
 // Prints only non-secret progress. Creates disposable accounts each run.
 import { execFile } from "node:child_process";
@@ -287,7 +289,7 @@ async function gateOff() {
     const capability = async () =>
       (await ada.client.query(api.files.capabilities, {})).writes;
     assert((await capability()) === false, "capabilities: off");
-    for (const value of ["true", "false", "true"]) {
+    const flip = async (value) => {
       await run(
         "npx",
         ["convex", "env", "set", "FILES_WRITES_ENABLED", value],
@@ -300,7 +302,70 @@ async function gateOff() {
         (await capability()) === (value === "true"),
         `capabilities follow FILES_WRITES_ENABLED=${value}`,
       );
-    }
+    };
+    // While on, a note gains an attachment image, a file block and a
+    // sized web image (the objects need not exist for the gate).
+    await flip("true");
+    const imageId = "k57a1b2c3d4e5f6g7h8j9k0m1n2p3q4r";
+    const fileId = "m57a1b2c3d4e5f6g7h8j9k0m1n2p3q4r";
+    const album = [
+      "Album",
+      "Some text.",
+      `![photo](attachment:${imageId})`,
+      `[report.pdf](attachment:${fileId}){type=application/pdf size=3}`,
+      "![web](https://example.com/w.png){width=200}",
+    ].join("\n\n");
+    const kept = await ada.client.mutation(api.notes.createFromMarkdown, {
+      markdown: album,
+    });
+    await flip("false");
+    // Turned off again: editing around them works (rollback, round 4) ...
+    await ada.client.mutation(api.notes.edit, {
+      noteId: kept.noteId,
+      edits: [
+        { type: "replace_text", old_text: "Some text.", new_text: "Edited." },
+      ],
+    });
+    const current = await ada.client.query(api.notes.content, {
+      noteId: kept.noteId,
+    });
+    await ada.client.mutation(api.notes.edit, {
+      noteId: kept.noteId,
+      expectedRevision: current.revision,
+      edits: [
+        {
+          type: "replace_all",
+          markdown: album.replace("Some text.", "Edited again."),
+        },
+      ],
+    });
+    // ... but an image's object does not allow a file block for it, nor a
+    // file block's object an image of it (round 5).
+    await expectError(
+      ada.client.mutation(api.notes.edit, {
+        noteId: kept.noteId,
+        edits: [
+          {
+            type: "append",
+            markdown: `[photo.pdf](attachment:${imageId}){type=application/pdf size=3}`,
+          },
+        ],
+      }),
+      refused,
+      "a file block for an image's object is refused",
+    );
+    await expectError(
+      ada.client.mutation(api.notes.edit, {
+        noteId: kept.noteId,
+        edits: [{ type: "append", markdown: `![x](attachment:${fileId})` }],
+      }),
+      refused,
+      "an image of a file block's object is refused",
+    );
+    log(
+      "with files turned off again, edits keep existing attachments; an image's object allows no file block, and the reverse",
+    );
+    await flip("true");
     log("files.capabilities followed the switch at once, off → on → off → on");
   }
   log("PASS (files off)");
