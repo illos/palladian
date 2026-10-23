@@ -149,6 +149,14 @@ Report: `notes-notebooks-round6-astra-review.md`, a design review of the proposa
 
 The reviewer also asked for proof of marker, account and epoch changes during asynchronous adoption or revocation, with each per-draft commit atomically validating its captured fence, and for large-document replay batches.
 
+## Review round 7 responses
+
+Report: `notes-notebooks-round7-astra-review.md` (verbatim). **Accepted for release with Delete off.** This acceptance does not cover turning Delete on, and it does not resolve R3-1/R3-3.
+
+| Finding | Response |
+| --- | --- |
+| R7-1 — an open deletion dialog survives disabling the capability | Deferred, and recorded as a step to take before Delete is turned on. It needs the capability turned on and then off while the dialog is open. Production ships with Delete off and the backend refuses the submission, so it cannot arise there. Before enabling Delete, close the idle dialog, or disable its submit button, when the capability stops being true, and keep progress and error handling for a batch that was interrupted. |
+
 ## Shipping with Delete off
 
 Notebook deletion is the only part of A5 that widens the D86 gap described in R3-1/R3-3. Deleting a notebook removes a collaborator's access, and their offline drafts for it can still be exported at sign-out or read in another tab. A5 therefore ships with deletion off, the way files shipped behind `FILES_WRITES_ENABLED`:
