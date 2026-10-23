@@ -1,10 +1,8 @@
 import {
-  attachmentIds,
   FILE_NAME_LIMIT,
   isFileName,
   isMimeType,
   isSafeImageSource,
-  parseStoredDoc,
 } from "@palladian/notes-core";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -33,7 +31,6 @@ import { hashToken, newToken } from "./invitations";
 import { DEFAULT_RETENTION_DAYS } from "./lifecycle";
 import {
   MAX_NOTE_OBJECTS,
-  NoteRoles,
   objectKey,
   REF_BATCH,
   refFor,
@@ -81,11 +78,14 @@ export const MAX_PENDING_UPLOADS = 20;
  */
 export const UPLOAD_LEASE_MS = 15 * MINUTE_MS;
 /**
- * How long after its lease an admitted write could still complete (the R2
- * write itself, clock differences). Byte deletion waits this long too, so no
- * write can land after its deletion was swept.
+ * How long after an upload's lease its bytes' deletion keeps being repeated.
+ * The Worker refuses to start a write after the lease and deletes a late one
+ * itself; this covers a write that still lands later, for any reason (a
+ * slow R2 write, clock differences, a Worker that died before cleaning up).
  */
-export const WRITE_SETTLE_MS = 10 * MINUTE_MS;
+export const TOMBSTONE_MS = 7 * DAY_MS;
+/** A tombstone is due again this long after each confirmed pass. */
+export const TOMBSTONE_PASS_MS = 12 * 60 * MINUTE_MS;
 /** Tickets kept per object (each retried request adds one). */
 const MAX_TICKETS = 5;
 const SWEEP_BATCH = 100;
@@ -324,7 +324,7 @@ function expired(object: Doc<"objects">, now: number) {
  * File service: admit an upload for this ticket. Answers what the Worker
  * should accept and, while the object is pending, grants a lease: the Worker
  * writes the bytes only before `leaseUntil`, and deleting the object's bytes
- * waits until the lease and WRITE_SETTLE_MS have passed.
+ * keeps being repeated until TOMBSTONE_MS after the lease (a tombstone).
  */
 export const admitUpload = mutation({
   args: { objectId: v.string(), ticket: v.string() },
@@ -557,7 +557,7 @@ export const noteObjects = query({
 });
 
 /**
- * File service: R2 keys to delete now (no admitted write can still land).
+ * File service: R2 keys due for a deletion pass now.
  * A mutation, not a query: which deletions are due depends on the time, and
  * a cached query result would keep answering for an earlier time.
  */
@@ -575,7 +575,7 @@ export const deletionBatch = mutation({
   },
 });
 
-/** File service: these keys are gone from R2. */
+/** File service: these keys were deleted from R2 in this pass. */
 export const confirmDeletions = mutation({
   args: { ids: v.array(v.id("objectDeletions")) },
   returns: v.null(),
@@ -583,23 +583,42 @@ export const confirmDeletions = mutation({
     await requireFilesService(ctx);
     if (args.ids.length > DELETION_BATCH)
       fail("invalid", "Too many deletions in one call.");
-    for (const id of args.ids)
-      if (await ctx.db.get(id)) await ctx.db.delete(id);
+    const now = Date.now();
+    for (const id of args.ids) {
+      const row = await ctx.db.get(id);
+      if (!row) continue;
+      // Retire it once seven days have passed since the lease; until then
+      // the next daily sweep deletes the key again.
+      if (now >= (row.retainUntil ?? 0)) await ctx.db.delete(id);
+      else
+        await ctx.db.patch(id, {
+          passes: (row.passes ?? 0) + 1,
+          lastPassAt: now,
+          notBefore: now + TOMBSTONE_PASS_MS,
+        });
+    }
     return null;
   },
 });
 
 /**
- * Queue an object's bytes for deletion. A tombstone: handed to the Worker
- * only once no upload it admitted can still write (lease plus settle time),
- * and kept until the Worker confirms the deletion.
+ * Queue an object's bytes for deletion as a tombstone: the next sweep
+ * deletes the key, and every daily sweep deletes it again until seven days
+ * after the object's upload lease ended (one pass if it never had one), so
+ * a write that lands after a pass is removed by the next. Residual risk: a
+ * write that completes more than seven days after its lease, from a Worker
+ * that died before its own cleanup, would stay as unreachable bytes.
  */
 async function enqueueDeletion(ctx: MutationCtx, object: Doc<"objects">) {
   const now = Date.now();
   await ctx.db.insert("objectDeletions", {
     key: objectKey(object._id),
     requestedAt: now,
-    notBefore: Math.max(now, (object.leaseUntil ?? 0) + WRITE_SETTLE_MS),
+    notBefore: now,
+    // Never admitted: no write can land, one pass is enough.
+    retainUntil:
+      object.leaseUntil === undefined ? now : object.leaseUntil + TOMBSTONE_MS,
+    passes: 0,
   });
 }
 
@@ -791,71 +810,6 @@ export const purgeExpired = internalMutation({
     return null;
   },
 });
-
-/**
- * Finish an access search a commit could not finish (references.ts): page
- * through every note that references the object, as the actor would see it
- * now. Found: record the reference, current if the note's document still
- * contains it. Exhausted: nothing is recorded. Safe to run late or twice.
- */
-export const verifyReference = internalMutation({
-  args: { checkId: v.id("referenceChecks") },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    const check = await ctx.db.get(args.checkId);
-    if (!check) return null;
-    const done = async () => {
-      await ctx.db.delete(check._id);
-      return null;
-    };
-    const note = await ctx.db.get(check.noteId);
-    const object = await ctx.db.get(check.objectId);
-    const actor = await ctx.db.get(check.actorId);
-    if (!note || !object || !actor || actor.disabledAt !== undefined)
-      return await done();
-    if (actor.controllerId) {
-      const controller = await ctx.db.get(actor.controllerId);
-      if (!controller || controller.disabledAt !== undefined)
-        return await done();
-    }
-    if (await refFor(ctx, note._id, object._id)) return await done();
-    const roles = new NoteRoles(ctx, { ...actor, connectionId: null });
-    const page = await ctx.db
-      .query("objectRefs")
-      .withIndex("by_object_and_current", (q) => q.eq("objectId", object._id))
-      .paginate({ numItems: VERIFY_PAGE, cursor: check.cursor });
-    let found = false;
-    for (const ref of page.page)
-      if (ref.noteId !== note._id && (await roles.grants(ref))) {
-        found = true;
-        break;
-      }
-    if (!found) {
-      if (page.isDone) return await done();
-      await ctx.db.patch(check._id, { cursor: page.continueCursor });
-      await ctx.scheduler.runAfter(0, internal.files.verifyReference, args);
-      return null;
-    }
-    const content = await ctx.db
-      .query("noteContent")
-      .withIndex("by_note", (q) => q.eq("noteId", note._id))
-      .unique();
-    const current =
-      !!content &&
-      attachmentIds(parseStoredDoc(content.doc)).includes(object._id);
-    await ctx.db.insert("objectRefs", {
-      noteId: note._id,
-      objectId: object._id,
-      current,
-      live: current && note.lifecycle === "active",
-    });
-    await settleObject(ctx, object);
-    return await done();
-  },
-});
-
-/** Reference rows one verification step examines. */
-const VERIFY_PAGE = 64;
 
 /**
  * Operator scan, read-only, for review finding F7: image sources that start

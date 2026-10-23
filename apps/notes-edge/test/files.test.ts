@@ -594,3 +594,122 @@ describe("review round 1", () => {
     expect(made).toBe(4);
   });
 });
+
+describe("review round 2", () => {
+  /** Date.now() as the code sees it. */
+  function clock() {
+    const start = Date.now();
+    const state = { offset: 0 };
+    const spy = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => start + state.offset);
+    return { state, restore: () => spy.mockRestore() };
+  }
+  /** The local bucket, but each write completes `delay` ms later. */
+  function slowWrites(state: { offset: number }, delay: number): R2Bucket {
+    const bucket = r2.bucket;
+    return {
+      head: (key: string) => bucket.head(key),
+      get: (key: string) => bucket.get(key),
+      delete: (keys: string | string[]) => bucket.delete(keys),
+      list: (options?: R2ListOptions) => bucket.list(options),
+      put: async (...args: Parameters<R2Bucket["put"]>) => {
+        const result = await bucket.put(...args);
+        state.offset += delay;
+        return result;
+      },
+    } as unknown as R2Bucket;
+  }
+  function putWith(files: R2Bucket, objectId: string, content: string) {
+    return handleFiles(
+      new Request(`${ORIGIN}/files/upload/${objectId}`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${TICKET}` },
+        body: content,
+      }),
+      { ...env, FILES: files },
+      deps,
+    );
+  }
+  const LATE = 15 * 60_000 + 1;
+
+  it("R2-2: a write landing after the lease, for a cancelled object, is removed", async () => {
+    const id = newId();
+    await expecting("late write", "image/png", { status: "gone" });
+    const { state, restore } = clock();
+    try {
+      const response = await putWith(slowWrites(state, LATE), id, "late write");
+      expect(response.status).toBe(410);
+    } finally {
+      restore();
+    }
+    expect(await r2.bucket.head(`objects/${id}`)).toBeNull();
+  });
+
+  it("R2-2: a late write is removed even when finalize does not say why", async () => {
+    const id = newId();
+    await expecting("late denied", "image/png", { status: "denied" });
+    const { state, restore } = clock();
+    try {
+      expect(
+        (await putWith(slowWrites(state, LATE), id, "late denied")).status,
+      ).toBe(404);
+    } finally {
+      restore();
+    }
+    expect(await r2.bucket.head(`objects/${id}`)).toBeNull();
+  });
+
+  it("R2-2: a late write to an object that is ready stays (a concurrent retry finished it)", async () => {
+    const id = newId();
+    await expecting("late but ready");
+    const { state, restore } = clock();
+    try {
+      expect(
+        (await putWith(slowWrites(state, LATE), id, "late but ready")).status,
+      ).toBe(200);
+    } finally {
+      restore();
+    }
+    expect(await r2.bucket.head(`objects/${id}`)).not.toBeNull();
+  });
+
+  it("R2-2: an unknown finalize outcome keeps the bytes; the tombstone sweeps them if needed", async () => {
+    const id = newId();
+    await expecting("late unknown", "image/png", () => {
+      throw new ConvexCallError({ kind: "uncertain", message: "lost" });
+    });
+    const { state, restore } = clock();
+    try {
+      expect(
+        (await putWith(slowWrites(state, LATE), id, "late unknown")).status,
+      ).toBe(503);
+    } finally {
+      restore();
+    }
+    expect(await r2.bucket.head(`objects/${id}`)).not.toBeNull();
+  });
+
+  it("R2-2: a Worker clock behind Convex's still cleans up when finalize refuses", async () => {
+    const id = newId();
+    const hash = await expecting("skewed", "image/png", { status: "gone" });
+    // Convex's lease ends in 15 minutes by its clock; this Worker's clock
+    // runs 20 minutes behind, so the lease looks open when the write ends.
+    service.set(fns.files.admitUpload, () => ({
+      status: "pending",
+      size: bytes("skewed").byteLength,
+      sha256: hash,
+      mimeType: "image/png",
+      leaseUntil: Date.now() + 35 * 60_000,
+    }));
+    const { state, restore } = clock();
+    try {
+      expect(
+        (await putWith(slowWrites(state, 30 * 60_000), id, "skewed")).status,
+      ).toBe(410);
+    } finally {
+      restore();
+    }
+    expect(await r2.bucket.head(`objects/${id}`)).toBeNull();
+  });
+});

@@ -107,16 +107,20 @@ function checkChangedRange(doc: ProseMirrorNode, from: number, to: number) {
 /**
  * Apply one step and validate only what it introduced, so every intermediate
  * revision of a batch is as safe as a validated document (given a safe start).
+ * `legacySources` tolerates image sources from before attachments in the
+ * inserted content; only for content the server rebuilt from a note's own
+ * history (history restore), never for content a client submits.
  */
 export function applySafeStep(
   doc: ProseMirrorNode,
   step: Step,
+  options: { legacySources?: boolean } = {},
 ): ProseMirrorNode {
   if (step instanceof DocAttrStep)
     throw new UnsafeDocumentError("Notes have no document attributes.");
   const replaces =
     step instanceof ReplaceStep || step instanceof ReplaceAroundStep;
-  if (replaces) assertSafeFragment(step.slice.content);
+  if (replaces) assertSafeFragment(step.slice.content, options);
   if (step instanceof AddMarkStep || step instanceof AddNodeMarkStep)
     assertSafeMark(step.mark);
   const result = step.apply(doc);
@@ -132,7 +136,10 @@ export function applySafeStep(
     // The changed attribute is new content; a legacy image source the node
     // already had may stay when another attribute (its width) changes.
     const node = result.doc.nodeAt(step.pos);
-    if (node) assertSafeNode(node, { legacySources: step.attr !== "src" });
+    if (node)
+      assertSafeNode(node, {
+        legacySources: !!options.legacySources || step.attr !== "src",
+      });
   }
   return result.doc;
 }

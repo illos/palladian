@@ -302,6 +302,15 @@ export default defineSchema({
     objectId: v.id("objects"),
     current: v.boolean(),
     live: v.boolean(),
+    /**
+     * How the actor who first referenced it here proved they could use it
+     * (references.ts): they uploaded it, or a named source note or the
+     * bounded search found a note they could read it through.
+     */
+    proof: v.optional(
+      v.union(v.literal("uploader"), v.literal("source"), v.literal("search")),
+    ),
+    proofNoteId: v.optional(v.id("notes")),
   })
     .index("by_note_and_object", ["noteId", "objectId"])
     .index("by_note_and_current_and_live", ["noteId", "current", "live"])
@@ -309,26 +318,19 @@ export default defineSchema({
     .index("by_object_and_current", ["objectId", "current"]),
 
   /**
-   * References a commit could not settle in its own transaction: the actor
-   * may use the object through some note the bounded search did not reach.
-   * files.verifyReference finishes the search in batches.
-   */
-  referenceChecks: defineTable({
-    noteId: v.id("notes"),
-    objectId: v.id("objects"),
-    actorId: v.id("principals"),
-    cursor: v.union(v.string(), v.null()),
-    createdAt: v.number(),
-  }).index("by_note_and_object_and_actor", ["noteId", "objectId", "actorId"]),
-
-  /**
-   * R2 keys whose bytes the Worker still has to delete (retry-safe queue).
-   * Handed out only from `notBefore`, when no admitted upload can still write.
+   * R2 keys whose bytes the Worker has to delete: tombstones. Each is handed
+   * to the Worker's sweep from `notBefore`; after every confirmed pass it is
+   * either retired (from `retainUntil`) or due again half a day later, so a
+   * write that lands after a pass is deleted by the next (review R2-2).
    */
   objectDeletions: defineTable({
     key: v.string(),
     requestedAt: v.number(),
     notBefore: v.optional(v.number()),
+    /** Seven days after the object's upload lease ended; now if it had none. */
+    retainUntil: v.optional(v.number()),
+    passes: v.optional(v.number()),
+    lastPassAt: v.optional(v.number()),
   }).index("by_not_before", ["notBefore"]),
 
   /** Recent account emails, kept briefly to limit sends per subject and overall. */

@@ -152,6 +152,8 @@ export const restore = mutation({
       steps: tr.steps,
       clientId: "restore:" + actor._id,
       kind: "restore",
+      // Server-rebuilt content of this note's own past revision.
+      historical: true,
     });
     if (args.requestId)
       await ctx.db.insert("receipts", {

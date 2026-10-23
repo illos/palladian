@@ -159,6 +159,8 @@ export const createFromMarkdown = mutation({
     notebookId: v.optional(v.id("notebooks")),
     markdown: v.string(),
     requestId: v.optional(v.string()),
+    /** Notes attachments in the Markdown came from; proves access to them. */
+    sourceNoteIds: v.optional(v.array(v.id("notes"))),
   },
   returns: v.object({
     noteId: v.id("notes"),
@@ -195,7 +197,14 @@ export const createFromMarkdown = mutation({
     } catch (error) {
       editFailure(error);
     }
-    const noteId = await createNoteRecord(ctx, { notebook, actor, doc });
+    const noteId = await createNoteRecord(ctx, {
+      notebook,
+      actor,
+      doc,
+      ...(args.sourceNoteIds
+        ? { sources: checkSources(args.sourceNoteIds) }
+        : {}),
+    });
     if (args.requestId)
       await ctx.db.insert("receipts", {
         actorId: actor._id,

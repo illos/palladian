@@ -201,6 +201,58 @@ describe("/mcp", () => {
     await client.close();
   });
 
+  it("passes the notes copied attachments came from (review R2-1)", async () => {
+    handlers.set(fns.notes.edit, () => ({
+      revision: 2,
+      previousRevision: 1,
+      title: "T",
+      replayed: false,
+    }));
+    handlers.set(fns.notes.createFromMarkdown, () => ({
+      noteId: "n2",
+      notebookId: "nb1",
+      title: "T",
+      revision: 0,
+      replayed: false,
+    }));
+    const client = await connect("modern");
+    const edited = await client.callTool({
+      name: "edit_note",
+      arguments: {
+        note_id: "n1",
+        edits: [
+          { type: "append", markdown: "![x](attachment:abcdefghijklmnop)" },
+        ],
+        source_note_ids: ["n9"],
+      },
+    });
+    expect(edited.isError).toBeFalsy();
+    const created = await client.callTool({
+      name: "create_note",
+      arguments: { markdown: "Copy", source_note_ids: ["n9", "n8"] },
+    });
+    expect(created.isError).toBeFalsy();
+    expect(calls.map((c) => c.args)).toContainEqual(
+      expect.objectContaining({ noteId: "n1", sourceNoteIds: ["n9"] }),
+    );
+    expect(calls.map((c) => c.args)).toContainEqual(
+      expect.objectContaining({
+        markdown: "Copy",
+        sourceNoteIds: ["n9", "n8"],
+      }),
+    );
+    const tooMany = await client.callTool({
+      name: "edit_note",
+      arguments: {
+        note_id: "n1",
+        edits: [{ type: "append", markdown: "x" }],
+        source_note_ids: ["a", "b", "c", "d"],
+      },
+    });
+    expect(tooMany.isError).toBe(true);
+    await client.close();
+  });
+
   it("requires expected_revision for replace_all before calling Convex", async () => {
     const client = await connect("modern");
     const result = await client.callTool({

@@ -1,6 +1,7 @@
 import {
   applySafeStep,
   assertSafeDocument,
+  attachmentIds,
   assignBlockIds,
   blockIdProblems,
   deriveSummary,
@@ -18,7 +19,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { fail, type Principal } from "./access";
-import { recordReferences } from "./references";
+import { MAX_NOTE_OBJECTS, recordReferences } from "./references";
 
 /** Collaboration limits; requests beyond them are rejected, not truncated. */
 export const MAX_STEPS_PER_PUSH = 500;
@@ -163,6 +164,12 @@ export async function commitSteps(
     deviceTime?: number;
     /** Notes new attachments were copied from, to prove access to them. */
     sources?: Id<"notes">[];
+    /**
+     * The steps restore content the server rebuilt from this note's own
+     * history (history.restore), which may hold image sources from before
+     * attachments. Never set for steps a client submits.
+     */
+    historical?: boolean;
   },
 ): Promise<{ revision: number; doc: ProseMirrorNode }> {
   if (args.note.lifecycle !== "active")
@@ -173,15 +180,21 @@ export async function commitSteps(
   // Objects any accepted revision of this batch references (each step is a
   // revision), so history references are recorded too.
   const seen = new Set<string>();
+  // Every accepted revision must stay within the attachment limit, so any of
+  // them can be restored. The union bounds each revision's count; only when
+  // it passes the limit is a revision counted exactly.
+  const union = new Set(attachmentIds(before));
+  const baseline = union.size;
   // Checkpoints land on every interval boundary, even inside a large batch, so
   // any revision is rebuilt from at most one interval of steps.
   const checkpoints: { revision: number; doc: ProseMirrorNode }[] = [];
   // Each step is validated for what it introduces, so every revision in the
   // batch, including persisted checkpoints, stays within the safety contract.
-  const apply = (step: Step) => {
+  const apply = (step: Step, historical = false) => {
+    let added: string[] = [];
     try {
-      doc = applySafeStep(doc, step);
-      for (const objectId of stepAttachmentIds(step)) seen.add(objectId);
+      doc = applySafeStep(doc, step, { legacySources: historical });
+      added = stepAttachmentIds(step);
     } catch (error) {
       fail(
         "invalid",
@@ -191,6 +204,18 @@ export async function commitSteps(
             ? error.message
             : "A step could not be applied.",
       );
+    }
+    for (const objectId of added) {
+      seen.add(objectId);
+      union.add(objectId);
+    }
+    if (added.length && union.size > MAX_NOTE_OBJECTS) {
+      const count = attachmentIds(doc).length;
+      if (count > MAX_NOTE_OBJECTS && count > baseline)
+        fail(
+          "too_large",
+          `A note can contain at most ${MAX_NOTE_OBJECTS} attachments, in every revision.`,
+        );
     }
     if (++revision % CHECKPOINT_INTERVAL === 0) {
       // A checkpoint is read back with parseStoredDoc; hold it to the same bar.
@@ -203,7 +228,7 @@ export async function commitSteps(
       checkpoints.push({ revision, doc });
     }
   };
-  for (const step of args.steps) apply(step);
+  for (const step of args.steps) apply(step, !!args.historical);
   // Repair IDs after concurrent splits or pastes; clients receive the fix as steps.
   const repairs = blockIdProblems(doc)
     ? assignBlockIds(new Transform(doc)).steps

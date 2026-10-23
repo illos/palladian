@@ -206,6 +206,13 @@ export async function storeObject(
     logFailure("put", failure);
     return { ok: false, error: "unavailable" };
   }
+  // The write may have completed after the lease (a slow R2 write, clock
+  // differences): its object may have been cancelled and swept meanwhile.
+  const late = Date.now() >= target.leaseUntil;
+  const removeWrite = () =>
+    env.FILES.delete(key).catch((failure: unknown) =>
+      logFailure("cleanup", failure),
+    );
   let done;
   try {
     done = await (
@@ -217,21 +224,20 @@ export async function storeObject(
       sha256,
     });
   } catch (failure) {
-    // Unknown outcome: the object is ready or still pending, and a retry with
-    // the same ticket settles it either way. Keep the bytes: if the object
-    // fails instead, its deletion waits out this write's lease.
+    // Unknown outcome: the object may be ready (this finalize, or another
+    // request's), so the bytes stay. If it fails instead, its deletion
+    // tombstone removes them on a later sweep.
     logFailure("finalize", failure);
     return { ok: false, error: "unavailable" };
   }
+  // Ready: these are its verified bytes, whoever finalized it, late or not.
   if (done.status === "ready") return { ok: true, size: target.size, sha256 };
-  if (done.status === "gone") {
-    // The object will never be ready: remove what this request wrote.
-    await env.FILES.delete(key).catch((failure: unknown) =>
-      logFailure("cleanup", failure),
-    );
-    return { ok: false, error: "expired" };
-  }
-  return { ok: false, error: "not_found" };
+  // The object will never be ready, or the write came after its lease:
+  // remove what this request wrote.
+  if (done.status === "gone" || late) await removeWrite();
+  return done.status === "gone"
+    ? { ok: false, error: "expired" }
+    : { ok: false, error: "not_found" };
 }
 
 async function handleUpload(

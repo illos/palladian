@@ -555,9 +555,12 @@ export function assertSafeDocument(
 }
 
 /** Validate every node in a fragment, such as the content a step inserts. */
-export function assertSafeFragment(fragment: Fragment): void {
+export function assertSafeFragment(
+  fragment: Fragment,
+  options: { legacySources?: boolean } = {},
+): void {
   fragment.descendants((node) => {
-    assertSafeNode(node);
+    assertSafeNode(node, options);
     return true;
   });
 }

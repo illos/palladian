@@ -209,7 +209,12 @@ export const fns = {
     >("notes:readMarkdown"),
     createFromMarkdown: makeFunctionReference<
       "mutation",
-      { notebookId?: Id<"notebooks">; markdown: string; requestId?: string },
+      {
+        notebookId?: Id<"notebooks">;
+        markdown: string;
+        requestId?: string;
+        sourceNoteIds?: Id<"notes">[];
+      },
       {
         noteId: Id<"notes">;
         notebookId: Id<"notebooks">;
@@ -225,6 +230,7 @@ export const fns = {
         edits: NoteEdit[];
         expectedRevision?: number;
         requestId?: string;
+        sourceNoteIds?: Id<"notes">[];
       },
       {
         revision: number;

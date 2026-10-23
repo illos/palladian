@@ -6,8 +6,8 @@ import { Transform } from "prosemirror-transform";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
-import { UPLOAD_LEASE_MS, WRITE_SETTLE_MS } from "../convex/files";
-import { MAX_NOTE_OBJECTS } from "../convex/references";
+import { TOMBSTONE_MS, UPLOAD_LEASE_MS } from "../convex/files";
+import { MAX_NOTE_OBJECTS, SEARCH_BUDGET } from "../convex/references";
 import {
   createNote,
   DAY,
@@ -95,11 +95,9 @@ async function sharedFixture(t: T, hiddenCount: number) {
   return { ada, ben, hidden, visible };
 }
 
-async function pendingChecks(t: T) {
-  return await t.run((ctx) => ctx.db.query("referenceChecks").collect());
-}
-
 describe("F1/F4: authorizing copied attachments stays complete and within limits", () => {
+  // Round 2 replaced the deferred verification of round 1: what the search
+  // budget does not cover stays unproven; naming the source proves it all.
   test("200 attachments readable only through their eighth reference", async () => {
     const t = setup(true);
     const { ada, ben, hidden, visible } = await sharedFixture(t, 7);
@@ -115,11 +113,11 @@ describe("F1/F4: authorizing copied attachments stays complete and within limits
       clientKey: "copy",
       doc: docJson(markdown),
     });
-    // Whatever was not settled in the transaction is verified afterwards.
+    // Within limits; the search proves what its budget covers (eight rows
+    // each), the rest stay unproven, and nothing changes that later.
     await settle(t);
-    expect(await pendingChecks(t)).toEqual([]);
     const granted = await ben.as.query(api.files.noteObjects, { noteId });
-    expect(granted!.length).toBe(MAX_NOTE_OBJECTS);
+    expect(granted!.length).toBe(SEARCH_BUDGET / 8);
     expect(
       (
         await ben.as.query(api.files.authorizeRead, {
@@ -127,7 +125,7 @@ describe("F1/F4: authorizing copied attachments stays complete and within limits
           objectId: ids.at(-1)!,
         })
       ).access,
-    ).toBe("granted");
+    ).toBe("denied");
   }, 60_000);
 
   test("a named source note proves access in the same transaction", async () => {
@@ -146,8 +144,7 @@ describe("F1/F4: authorizing copied attachments stays complete and within limits
       doc: docJson(markdown),
       sourceNoteId: visible,
     });
-    // Recorded at once: nothing waits for verification.
-    expect(await pendingChecks(t)).toEqual([]);
+    // Recorded at once, every one.
     expect(
       (await ben.as.query(api.files.noteObjects, { noteId }))!.length,
     ).toBe(MAX_NOTE_OBJECTS);
@@ -177,7 +174,6 @@ describe("F1/F4: authorizing copied attachments stays complete and within limits
     const [photo] = await referencedObjects(t, ada.id, 1, hidden, other);
     const noteId = await createNote(ben.as, `Mine\n\n${image(photo!)}`);
     await settle(t);
-    expect(await pendingChecks(t)).toEqual([]);
     expect((await refs(t, photo!)).some((r) => r.noteId === noteId)).toBe(
       false,
     );
@@ -212,7 +208,6 @@ describe("F1/F4: authorizing copied attachments stays complete and within limits
       clientId: "c1",
       sourceNoteIds: [visible],
     });
-    expect(await pendingChecks(t)).toEqual([]);
     expect((await refs(t, photo!)).some((r) => r.noteId === noteId)).toBe(true);
   });
 });
@@ -253,8 +248,8 @@ test("worst case: 200 attachments swapped for 200 others in one edit", async () 
   });
   const next = (await ben.as.query(api.notes.content, { noteId }))!;
   // Three readable named sources that do not contain the new objects, so
-  // every check pays for them, falls through to the bounded search and then
-  // to later verification.
+  // every check pays for them and then for the bounded search, which finds
+  // nothing within its budget: the new copies stay unproven.
   const decoys = [
     await createNote(ada.as, "Decoy 1"),
     await createNote(ada.as, "Decoy 2"),
@@ -272,9 +267,17 @@ test("worst case: 200 attachments swapped for 200 others in one edit", async () 
     sourceNoteIds: decoys,
   });
   await settle(t);
-  expect(await pendingChecks(t)).toEqual([]);
-  const objects = (await ben.as.query(api.files.noteObjects, { noteId }))!;
-  expect(new Set(objects.map((o) => o.objectId))).toEqual(new Set(fresh));
+  expect(await ben.as.query(api.files.noteObjects, { noteId })).toEqual([]);
+  // The 200 it replaced became history references.
+  const history = await t.run((ctx) =>
+    ctx.db
+      .query("objectRefs")
+      .withIndex("by_note_and_current_and_live", (q) =>
+        q.eq("noteId", noteId).eq("current", false),
+      )
+      .collect(),
+  );
+  expect(new Set(history.map((r) => r.objectId))).toEqual(new Set(old));
 }, 120_000);
 
 describe("F2: every accepted revision records its references", () => {
@@ -366,7 +369,7 @@ describe("F3: no write can land after its deletion was swept", () => {
     });
   });
 
-  test("cancelling during a lease defers the byte deletion past it", async () => {
+  test("cancelling during a lease: deleted now, and again until seven days after it", async () => {
     const t = setup(true);
     const { ada, granted, admission } = await admitted(t);
     await ada.as.mutation(api.files.cancelUpload, {
@@ -375,14 +378,17 @@ describe("F3: no write can land after its deletion was swept", () => {
     const leaseUntil = (admission as { leaseUntil: number }).leaseUntil;
     const due = () =>
       service(t).mutation(api.files.deletionBatch, { limit: 100 });
-    // Not handed to the sweep while a late write could still land.
-    expect(await due()).toEqual([]);
-    vi.setSystemTime(leaseUntil + WRITE_SETTLE_MS - 1);
-    expect(await due()).toEqual([]);
-    vi.setSystemTime(leaseUntil + WRITE_SETTLE_MS);
-    expect((await due()).map((row) => row.key)).toEqual([
+    // Round 2: the first pass is due at once; the tombstone stays.
+    const first = await due();
+    expect(first.map((row) => row.key)).toEqual([
       `objects/${granted.objectId}`,
     ]);
+    await service(t).mutation(api.files.confirmDeletions, {
+      ids: first.map((row) => row.id),
+    });
+    expect(
+      await t.run((ctx) => ctx.db.query("objectDeletions").collect()),
+    ).toMatchObject([{ passes: 1, retainUntil: leaseUntil + TOMBSTONE_MS }]);
     // A failed object is never admitted again.
     expect(
       await service(t).mutation(api.files.admitUpload, {
@@ -390,14 +396,14 @@ describe("F3: no write can land after its deletion was swept", () => {
         ticket: granted.ticket!,
       }),
     ).toEqual({ status: "gone" });
-    // Removing the failed record keeps the pending deletion.
+    // Removing the failed record keeps the tombstone.
     vi.advanceTimersByTime(2 * DAY);
     await t.mutation(internal.files.expireUploads, {});
     expect(await object(t, granted.objectId)).toBeNull();
     expect(await deletions(t)).toEqual([`objects/${granted.objectId}`]);
   });
 
-  test("purging an object deletes its bytes only after any lease", async () => {
+  test("purging a ready object admitted moments ago keeps a seven-day tombstone", async () => {
     const t = setup(true);
     const { ada, granted, admission } = await admitted(t);
     // Another request finalizes while this admission's write is in flight.
@@ -413,14 +419,13 @@ describe("F3: no write can land after its deletion was swept", () => {
     expect(await object(t, granted.objectId)).toBeNull();
     const leaseUntil = (admission as { leaseUntil: number }).leaseUntil;
     expect(
-      await service(t).mutation(api.files.deletionBatch, { limit: 100 }),
-    ).toEqual([]);
-    vi.setSystemTime(leaseUntil + WRITE_SETTLE_MS);
-    expect(
-      (await service(t).mutation(api.files.deletionBatch, { limit: 100 })).map(
-        (row) => row.key,
-      ),
-    ).toEqual([`objects/${granted.objectId}`]);
+      await t.run((ctx) => ctx.db.query("objectDeletions").collect()),
+    ).toMatchObject([
+      {
+        key: `objects/${granted.objectId}`,
+        retainUntil: leaseUntil + TOMBSTONE_MS,
+      },
+    ]);
   });
 
   test("ready objects need no lease", async () => {

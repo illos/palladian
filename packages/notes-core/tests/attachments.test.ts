@@ -592,3 +592,40 @@ test("F2: stepAttachmentIds names what each step brings in", async () => {
     [[A], [B], [A], [], []],
   );
 });
+
+// Review round 2 (docs/reviews/notes-files-backend-round2-astra-review.md).
+
+test("R2-4: only server-rebuilt history may reinsert a legacy image source", () => {
+  const start = stored(doc(node.paragraph!.create({ id: "p1" })));
+  const legacyImage = notesSchema.nodeFromJSON({
+    type: "image",
+    attrs: { id: "i9", src: " Attachment:Old/ID ", width: null },
+  });
+  const step = new ReplaceStep(
+    start.content.size,
+    start.content.size,
+    new Slice(Fragment.from(legacyImage), 0, 0),
+  );
+  assert.throws(() => applySafeStep(start, step), UnsafeDocumentError);
+  const restored = applySafeStep(start, step, { legacySources: true });
+  assert.equal(restored.lastChild!.attrs.src, " Attachment:Old/ID ");
+  assert.deepEqual(attachmentIds(restored), []);
+  // Still no unsafe sources of any other kind.
+  const script = notesSchema.nodeFromJSON({
+    type: "image",
+    attrs: { id: "i8", src: "javascript:alert(1)" },
+  });
+  assert.throws(
+    () =>
+      applySafeStep(
+        start,
+        new ReplaceStep(
+          start.content.size,
+          start.content.size,
+          new Slice(Fragment.from(script), 0, 0),
+        ),
+        { legacySources: true },
+      ),
+    UnsafeDocumentError,
+  );
+});
