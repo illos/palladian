@@ -60,6 +60,7 @@ import {
   linkBeforeCaret,
   linkDraftFor,
   linkRangeAt,
+  linkable,
   linkUi,
   linkUiKey,
   normalizeHref,
@@ -649,6 +650,8 @@ export function NoteEditor({
   const [toolbarState, setToolbarState] = useState<EditorState | null>(null);
   const [mobileGroup, setMobileGroup] = useState<ToolGroup | null>(null);
   const [linkForm, setLinkForm] = useState<LinkForm | null>(null);
+  /** A short note after the link form closed on its own. */
+  const [linkNotice, setLinkNotice] = useState<string | null>(null);
   const host = useRef<HTMLDivElement>(null);
   const surface = useRef<HTMLDivElement>(null);
   const linkText = useRef<HTMLInputElement>(null);
@@ -669,14 +672,15 @@ export function NoteEditor({
       } satisfies LinkUi),
     );
     // Render now so focus moves within the tap or key press (iOS keyboard).
-    flushSync(() =>
+    flushSync(() => {
+      setLinkNotice(null);
       setLinkForm({
         text: draft.text,
         href: draft.href,
         error: "",
         textEdited: false,
-      }),
-    );
+      });
+    });
     (draft.text ? linkHref : linkText).current?.focus();
   };
   const openLink = useRef(openLinkForm);
@@ -919,6 +923,17 @@ export function NoteEditor({
       });
       return;
     }
+    if (
+      editor.editable &&
+      !linkable(editor.state.doc, target.from, target.to)
+    ) {
+      // A collaborator moved the text into code or across lines: leave it.
+      setLinkForm(null);
+      closeLinkUi(editor);
+      setLinkNotice("The text can no longer be linked.");
+      editor.focus();
+      return;
+    }
     const text = linkForm.text.trim() ? linkForm.text : linkForm.href.trim();
     const tr = editor.editable
       ? applyLink(editor.state, target.from, target.to, text, href, {
@@ -950,6 +965,11 @@ export function NoteEditor({
     setLinkForm(null);
     editor.focus();
   };
+  useEffect(() => {
+    if (!linkNotice) return;
+    const timer = window.setTimeout(() => setLinkNotice(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [linkNotice]);
   const cancelLinkForm = () => {
     const editor = view.current;
     setLinkForm(null);
@@ -1027,6 +1047,11 @@ export function NoteEditor({
               Remove
             </button>
           </div>
+        )}
+        {linkNotice && (
+          <p className="link-notice" role="status">
+            {linkNotice}
+          </p>
         )}
         {formTarget && linkForm && (
           <form

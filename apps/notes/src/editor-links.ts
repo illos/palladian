@@ -99,9 +99,9 @@ export function detectTrailingUrl(text: string) {
   return href ? { index: match.index, url, href } : null;
 }
 
-function hasCode(state: EditorState, from: number, to: number) {
+function hasCode(doc: ProseMirrorNode, from: number, to: number) {
   let found = false;
-  state.doc.nodesBetween(from, to, (node) => {
+  doc.nodesBetween(from, to, (node) => {
     if (node.isInline && node.marks.some((mark) => mark.type.spec.code))
       found = true;
   });
@@ -118,7 +118,7 @@ function linkUrlBefore(
   if (!found) return null;
   const from = blockStart + found.index;
   const to = from + found.url.length;
-  if (state.doc.rangeHasMark(from, to, link) || hasCode(state, from, to))
+  if (state.doc.rangeHasMark(from, to, link) || hasCode(state.doc, from, to))
     return null;
   return state.tr.addMark(from, to, link.create({ href: found.href }));
 }
@@ -231,23 +231,35 @@ export type LinkDraft = {
 };
 
 /**
+ * Whether a link can go on [from, to]: within one block that takes links,
+ * not a code block, and no inline code. The link form checks this when it
+ * opens, before every Apply and after a reload.
+ */
+export function linkable(doc: ProseMirrorNode, from: number, to: number) {
+  if (from < 0 || from > to || to > doc.content.size) return false;
+  const $from = doc.resolve(from);
+  const block = $from.parent;
+  if (!$from.sameParent(doc.resolve(to)) || !block.inlineContent) return false;
+  if (block.type.spec.code || !block.type.allowsMarkType(link)) return false;
+  return from === to
+    ? !$from.marks().some((mark) => mark.type.spec.code)
+    : !hasCode(doc, from, to);
+}
+
+/**
  * What the link form starts with: the link under the caret or selection, or
  * the selected text (as the address too when it is one). Null where a link
- * cannot go: across blocks, in code, or in a read-only position.
+ * cannot go (`linkable`).
  */
 export function linkDraftFor(state: EditorState): LinkDraft | null {
-  const { from, to, empty, $from, $to } = state.selection;
-  if (!$from.sameParent($to) || !$from.parent.inlineContent) return null;
-  if ($from.parent.type.spec.code || !$from.parent.type.allowsMarkType(link))
-    return null;
-  if (
-    empty
-      ? $from.marks().some((m) => m.type.spec.code)
-      : hasCode(state, from, to)
-  )
-    return null;
+  const { from, to, empty } = state.selection;
+  if (!linkable(state.doc, from, to)) return null;
   const existing = linkRangeAt(state.doc, from);
-  if (existing && (empty || (from >= existing.from && to <= existing.to)))
+  if (
+    existing &&
+    (empty || (from >= existing.from && to <= existing.to)) &&
+    linkable(state.doc, existing.from, existing.to)
+  )
     return {
       ...existing,
       text: state.doc.textBetween(existing.from, existing.to),
@@ -265,7 +277,8 @@ export function linkDraftFor(state: EditorState): LinkDraft | null {
  * range still holds exactly what the form was opened on (`original`) and no
  * edit touched it (`touched`); otherwise, as when the text the form was
  * opened on has been deleted, this returns null and the form must be checked
- * again. An empty text shows the address.
+ * again. It also returns null, changing nothing, when the range can no
+ * longer take a link (`linkable`). An empty text shows the address.
  */
 export function applyLink(
   state: EditorState,
@@ -279,6 +292,7 @@ export function applyLink(
     original?: Fragment | undefined;
   } = {},
 ): Transaction | null {
+  if (!linkable(state.doc, from, to)) return null;
   const textEdited = options.textEdited ?? true;
   // The primary guard compares content; `touched` also catches a change
   // that leaves the same content behind.

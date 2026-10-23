@@ -45,6 +45,7 @@ import {
 } from "../../src/editor-commands";
 import {
   applyLink,
+  linkable,
   linkDraftFor,
   linkRangeAt,
   linkUi,
@@ -1538,5 +1539,99 @@ describe("review round 3", () => {
     expect(
       slice.content.textBetween(0, slice.content.size, "\n"),
     ).not.toContain("\ue000");
+  });
+});
+
+describe("review round 4", () => {
+  /** A collaborative editor with the link form open on `word`, as the editor opens it. */
+  function formOn(markdown: string, word: string) {
+    const doc = markdownToDoc(markdown);
+    const from = at(doc, word);
+    const to = from + word.length;
+    const state = EditorState.create({
+      doc,
+      selection: TextSelection.create(doc, from, to),
+      plugins: [collab({ version: 0, clientID: "me" }), linkUi],
+    });
+    return state.apply(
+      state.tr.setMeta(linkUiKey, {
+        mode: "form",
+        from,
+        to,
+        content: doc.slice(from, to).content,
+      }),
+    );
+  }
+  function remote(state: EditorState, change: (tr: Transform) => void) {
+    const tr = new Transform(state.doc);
+    change(tr);
+    const clients = tr.steps.map(() => "them");
+    return state.apply(receiveTransaction(state, tr.steps, clients));
+  }
+  function applyForm(state: EditorState, text: string, textEdited: boolean) {
+    const target = linkUiKey.getState(state)!;
+    return applyLink(state, target.from, target.to, text, "https://e.com", {
+      textEdited,
+      touched: !!target.touched,
+      original: target.content,
+    });
+  }
+  /** The editor's reload after a refused Apply: the form takes the current content. */
+  function reload(state: EditorState) {
+    const target = linkUiKey.getState(state)!;
+    return state.apply(
+      state.tr.setMeta(linkUiKey, {
+        ...target,
+        touched: false,
+        content: state.doc.slice(target.from, target.to).content,
+      }),
+    );
+  }
+
+  test("R4-1: a target a collaborator turned into code is refused and left as it is", () => {
+    const base = formOn("abcdef", "bcde");
+    const state = remote(base, (tr) =>
+      tr.setBlockType(1, 1, nodes.code_block!),
+    );
+    expect(state.doc.firstChild!.type.name).toBe("code_block");
+    expect(applyForm(state, "Greeting", true)).toBeNull();
+    expect(applyForm(state, "bcde", false)).toBeNull();
+    const target = linkUiKey.getState(state)!;
+    expect(linkable(state.doc, target.from, target.to)).toBe(false);
+  });
+
+  test("R4-1: a target split across paragraphs is refused, also after a reload", () => {
+    const base = formOn("abcdef", "bcde");
+    const state = remote(base, (tr) => tr.split(at(base.doc, "def")));
+    expect(state.doc.childCount).toBe(2);
+    expect(applyForm(state, "Greeting", true)).toBeNull();
+    const reloaded = reload(state);
+    expect(applyForm(reloaded, "Greeting", true)).toBeNull();
+    expect(applyForm(reloaded, "bc", false)).toBeNull();
+    const target = linkUiKey.getState(reloaded)!;
+    expect(linkable(reloaded.doc, target.from, target.to)).toBe(false);
+    expect(reloaded.doc.childCount).toBe(2);
+  });
+
+  test("R4-1: the form opens only where a link can go", () => {
+    const code = new Harness(
+      markdownToDoc("```\nabc\n```"),
+      select("abc", "abc"),
+    );
+    expect(linkDraftFor(code.state)).toBeNull();
+    const across = new Harness(paragraphs("One", "Two"), select("One", "Two"));
+    expect(linkDraftFor(across.state)).toBeNull();
+    const inline = new Harness(
+      markdownToDoc("a `code` b"),
+      select("code", "code"),
+    );
+    expect(linkDraftFor(inline.state)).toBeNull();
+    const plain = new Harness(
+      paragraphs("plain words"),
+      select("plain", "plain"),
+    );
+    expect(linkDraftFor(plain.state)).not.toBeNull();
+    const doc = plain.state.doc;
+    expect(linkable(doc, at(doc, "plain"), at(doc, "words", 5))).toBe(true);
   });
 });
