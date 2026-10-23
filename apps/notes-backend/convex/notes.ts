@@ -105,6 +105,14 @@ export const create = mutation({
     deviceTime: v.optional(v.number()),
     /** A conflict copy names the note whose content it holds. */
     sourceNoteId: v.optional(v.id("notes")),
+    /**
+     * The account the app made the copy in (the Better Auth user ID), as in
+     * arrangement.ts. A creation that reaches the server under another
+     * sign-in, e.g. one queued before the person switched accounts, is
+     * refused. Only an equality check against the caller; it grants nothing.
+     * Optional: drafts and older clients do not send it.
+     */
+    account: v.optional(v.string()),
   },
   returns: v.object({
     noteId: v.id("notes"),
@@ -113,6 +121,9 @@ export const create = mutation({
   }),
   handler: async (ctx, args) => {
     const actor = await requirePrincipal(ctx);
+    // Before the replay lookup, so another account never gets a copy back.
+    if (args.account !== undefined && actor.authUserId !== args.account)
+      fail("conflict", "This change was made in another account.");
     if (!args.clientKey || args.clientKey.length > 64)
       fail("invalid", "Invalid client key.");
     // A retried creation returns the note it already created, if the caller can

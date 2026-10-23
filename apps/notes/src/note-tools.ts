@@ -11,22 +11,27 @@ import { DOMSerializer } from "prosemirror-model";
  */
 
 /**
- * A copy of the note's current text, as a new note; returns its ID. Naming
- * the original lets the copy keep its attachments (B1: the server checks the
- * copy may use them, and accepts them while files are off only because the
- * original already has them).
+ * A copy of a note's text (now or from its history), as a new note; returns
+ * its ID. Naming the original lets the copy keep its attachments (B1: the
+ * server checks the copy may use them, and accepts them while files are off
+ * only because the original already has them). It names the account it is
+ * made in, which the server checks (History review round 6, R6-1), and a
+ * retry with the same `clientKey` returns the copy already made.
  */
 export async function duplicateNote(
   client: ConvexReactClient,
+  account: string,
   doc: string,
   notebookId: string | undefined,
   sourceNoteId: string,
+  clientKey = "copy-" + crypto.randomUUID(),
 ): Promise<string> {
   const result = await client.mutation(api.notes.create, {
-    clientKey: "copy-" + crypto.randomUUID(),
+    clientKey,
     doc,
     ...(notebookId ? { notebookId: notebookId as Id<"notebooks"> } : {}),
     sourceNoteId: sourceNoteId as Id<"notes">,
+    account,
   });
   return result.noteId;
 }

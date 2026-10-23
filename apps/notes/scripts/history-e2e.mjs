@@ -680,6 +680,10 @@ try {
     deskC.gate.hold("notes:push");
     await typeAtEnd(c, editorC, " word2");
     await expect(c.locator(".save-status")).toHaveText("Saving…");
+    // The gate really holds Cy's push (review round 6, R6-3).
+    await expect
+      .poll(() => deskC.gate.held("notes:push"), { timeout: 10_000 })
+      .toBeGreaterThanOrEqual(1);
     const original = (await convex(a, "query", "notes:get", { noteId }))
       .summary;
     await openHistory();
@@ -706,6 +710,27 @@ try {
     const copy = (await convex(a, "query", "notes:get", { noteId: copyId }))
       .summary;
     assert.equal(copy.notebookId, original.notebookId);
+    // Exactly the version's document (review round 6, R6-3).
+    const versions = (
+      await convex(a, "query", "history:list", { noteId, limit: 100 })
+    ).versions;
+    const firstVersion = await convex(a, "query", "history:read", {
+      noteId,
+      revision: versions[versions.length - 1].revision,
+    });
+    const copied = await convex(a, "query", "notes:content", {
+      noteId: copyId,
+    });
+    assert.deepEqual(
+      JSON.parse(copied.doc),
+      JSON.parse(firstVersion.doc),
+      "the copy is the version's document",
+    );
+    // Copying did not touch the original: Cy's held word is still not on the
+    // server, while his sent one is.
+    const originalNow = await convex(a, "query", "notes:content", { noteId });
+    assert.ok(originalNow.doc.includes("word1"), "word1 is on the server");
+    assert.ok(!originalNow.doc.includes("word2"), "word2 is not, yet");
     // The original is untouched: Cy's unsent word is still on his screen,
     // and once sent, both his words are in it.
     await expect(editorC).toContainText("word2");

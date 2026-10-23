@@ -268,9 +268,16 @@ Deltos reference: `components/HistoryPanel.tsx`, for the UI only. Deltos kept pe
 - **Version view.**
   - Selecting a version renders `history.read` read-only.
   - A diff toggle compares it with the previous version or the current one. This ports Deltos's character diff over plain text.
-- **Restore.** "Restore this version" confirms, then calls `history.restore` with `expectedRevision`. Restore appends a revision; open editors receive it through collaboration.
+- **Restore as a new note.** The app never rewrites the note in place. Replacing the whole document would drop typing another client has not sent yet, so `history.restore` stays server-only (agents) and the app does not call it.
+  - "Restore as a new note…" confirms ("This note stays as it is."), then calls `notes.create` with the version's document, as Duplicate does: a creation key, into the same notebook if the user can edit there, otherwise the default notebook. The original note, its history, sharing and public links are unchanged, and nothing holds its editing. The toast offers Open.
+  - It passes `sourceNoteId`, which proves access to any attachments the version holds (B1). While file writes are off, a version with files or image sizes the note no longer has is refused with a clear message instead.
+  - It passes `account`, the account the restore started in. `notes.create` refuses with `conflict` when the signed-in person is another account, checked before the creation-key replay. The client takes a session ticket when the restore starts, sends nothing if it has changed by the time the copy is ready, and changes the screen (dialog, toast, Open) only if it still holds when the answer arrives. Duplicate follows the same rules.
+  - One creation key per copy operation (account, note, version) is kept in the app until the server answers, across closing and reopening History. A retry without an answer reuses it, so it makes no second note; reopening History on that version shows it as pending. After an answer, a deliberate second restore makes another copy.
+  - Needs a connection.
 - **Acceptance**
-  - Restore works while another client is editing.
+  - Restoring a version while this or another client has unsent typing in the note leaves the note and that typing unchanged, and the new note equals the version's document exactly.
+  - A copy never lands in another account: switching accounts while it is prepared sends nothing and shows nothing, and the server refuses a create that names another account.
+  - A retry after a lost answer makes no second note.
   - A read-only member never reaches history.
 
 ### A5. Notebooks (S, one backend item)
@@ -517,5 +524,5 @@ Each item gets:
 
 - **Fixture mode** (`?fixture=seed`) for list, sheet and gesture layout.
 - **Playwright `notes-mobile-chromium`** with touch emulation for swipe thresholds and the action registry.
-- **Real-service e2e** against the dev Convex deployment for duplicate, Trash, history restore, devices and uploads.
+- **Real-service e2e** against the dev Convex deployment for duplicate, Trash, history (restore as a new note), devices and uploads.
 - **The owner's iPhone** for swipe and long-press feel, the keyboard bar, the file picker and Scan Documents, and the PDF reader.

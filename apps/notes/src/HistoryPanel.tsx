@@ -11,6 +11,7 @@ import { parseStoredDoc } from "@palladian/notes-core/document";
 import { plainText } from "@palladian/notes-core/projection";
 import { notesSchema } from "@palladian/notes-core/schema";
 import { DOMSerializer, type Node as ProseMirrorNode } from "prosemirror-model";
+import type { CopyState } from "./copy-keys";
 import { Icon } from "./Icons";
 import { fileWritesEnabled } from "./file-capability";
 import { timeRange } from "./dates";
@@ -49,8 +50,13 @@ const compareLabels: Record<Compare, string> = {
   current: "vs Current",
 };
 
-/** Creates a new note from a version's stored document (App does this). */
-type RestoreAsNew = (doc: string) => Promise<void>;
+/**
+ * Creates a new note from a version's stored document (App does this, with
+ * one creation key per version until answered: History review round 6).
+ */
+type RestoreAsNew = (doc: string, revision: number) => Promise<void>;
+/** Whether a copy of a version is on its way, or sent without an answer. */
+type CopyStateOf = (revision: number) => CopyState;
 
 type Current = { doc: string; revision: number } | null | undefined;
 
@@ -59,6 +65,7 @@ export default function HistoryPanel({
   noteId,
   title,
   connected,
+  copyState,
   onClose,
   onRestoreAsNew,
 }: {
@@ -67,6 +74,7 @@ export default function HistoryPanel({
   title: string;
   /** Signed in and connected now: creating a note needs the server. */
   connected: boolean;
+  copyState: CopyStateOf;
   onClose: () => void;
   onRestoreAsNew: RestoreAsNew;
 }) {
@@ -76,6 +84,7 @@ export default function HistoryPanel({
         noteId={noteId as Id<"notes">}
         title={title}
         connected={connected}
+        copyState={copyState}
         onClose={onClose}
         onRestoreAsNew={onRestoreAsNew}
       />
@@ -87,12 +96,14 @@ function History({
   noteId,
   title,
   connected,
+  copyState,
   onClose,
   onRestoreAsNew,
 }: {
   noteId: Id<"notes">;
   title: string;
   connected: boolean;
+  copyState: CopyStateOf;
   onClose: () => void;
   onRestoreAsNew: RestoreAsNew;
 }) {
@@ -145,6 +156,7 @@ function History({
               version={selected}
               current={current}
               connected={connected}
+              copy={copyState(selected.revision)}
               onBack={() => setSelected(null)}
               onRestoreAsNew={onRestoreAsNew}
             />
@@ -263,6 +275,7 @@ function VersionView({
   version,
   current,
   connected,
+  copy,
   onBack,
   onRestoreAsNew,
 }: {
@@ -270,6 +283,7 @@ function VersionView({
   version: Version;
   current: Current;
   connected: boolean;
+  copy: CopyState;
   onBack: () => void;
   onRestoreAsNew: RestoreAsNew;
 }) {
@@ -391,7 +405,8 @@ function VersionView({
         doc={shown?.doc ?? null}
         connected={connected}
         needsFiles={needsFiles}
-        onRestoreAsNew={onRestoreAsNew}
+        copy={copy}
+        onRestoreAsNew={(doc) => onRestoreAsNew(doc, version.revision)}
       />
     </>
   );
@@ -447,6 +462,7 @@ function NewNoteControls({
   doc,
   connected,
   needsFiles,
+  copy,
   onRestoreAsNew,
 }: {
   /** The version's stored document, once read. */
@@ -454,22 +470,28 @@ function NewNoteControls({
   connected: boolean;
   /** The version has file content the server cannot copy yet. */
   needsFiles: boolean;
-  onRestoreAsNew: RestoreAsNew;
+  /** A copy of this version on its way, or sent without an answer. */
+  copy: CopyState;
+  onRestoreAsNew: (doc: string) => Promise<void>;
 }) {
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(copy === "sending");
+  const [sending, setBusy] = useState(false);
+  // Also while a copy sent before History was closed is on its way.
+  const busy = sending || copy === "sending";
   const [notice, setNotice] = useState<string | null>(null);
   async function run() {
     if (!doc || busy) return;
     setBusy(true);
     setNotice(null);
     try {
+      // On success App closes History; otherwise the panel stays usable.
       await onRestoreAsNew(doc);
     } catch (failure) {
       const error = transportError(failure);
       setNotice(
         isFilesOffRefusal(error) ? COPY_NEEDS_FILES_MESSAGE : error.message,
       );
+    } finally {
       setBusy(false);
     }
   }
@@ -488,6 +510,12 @@ function NewNoteControls({
       {needsFiles && (
         <p role="status" className="history-legend">
           {COPY_NEEDS_FILES_MESSAGE}
+        </p>
+      )}
+      {copy === "unconfirmed" && !busy && (
+        <p role="status" className="history-legend">
+          The last restore of this version was not confirmed. Restoring it again
+          finishes that one, without making a second note.
         </p>
       )}
       {confirming ? (
