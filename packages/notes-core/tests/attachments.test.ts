@@ -629,3 +629,72 @@ test("R2-4: only server-rebuilt history may reinsert a legacy image source", () 
     UnsafeDocumentError,
   );
 });
+
+// Review round 3 (docs/reviews/notes-files-backend-round3-astra-review.md).
+
+test("R3-3: usesFileFeatures and stepUsesFileFeatures find what the gate holds back", async () => {
+  const { usesFileFeatures, stepUsesFileFeatures } =
+    await import("../src/index.ts");
+  const web = node.image!.create({
+    id: "i1",
+    src: "https://example.com/a.png",
+  });
+  assert.equal(usesFileFeatures(doc(web)), false);
+  assert.equal(usesFileFeatures(doc(node.paragraph!.create())), false);
+  assert.equal(
+    usesFileFeatures(
+      doc(node.image!.create({ src: "https://example.com/a.png", width: 300 })),
+    ),
+    true,
+  );
+  assert.equal(
+    usesFileFeatures(doc(node.image!.create({ src: `attachment:${A}` }))),
+    true,
+  );
+  assert.equal(usesFileFeatures(doc(file({}))), true);
+  assert.equal(
+    usesFileFeatures(markdownToDoc(`> - [a](attachment:${A})`)),
+    true,
+  );
+  const start = stored(doc(web));
+  const steps = new Transform(start)
+    .setNodeAttribute(0, "width", 300)
+    .setNodeAttribute(0, "width", null)
+    .setNodeAttribute(0, "src", `attachment:${A}`)
+    .setNodeAttribute(0, "alt", "x").steps;
+  assert.deepEqual(
+    steps.map((step) => stepUsesFileFeatures(step)),
+    [true, false, true, false],
+  );
+  const insertWeb = new Transform(start).insert(
+    start.content.size,
+    node.image!.create({ src: "https://example.com/b.png" }),
+  ).steps[0]!;
+  assert.equal(stepUsesFileFeatures(insertWeb), false);
+});
+
+test("R3-3: a pasted web image keeps no width; Palladian's own images do", () => {
+  const getAttrs = notesSchema.nodes.image!.spec.parseDOM![0]!.getAttrs!;
+  const element = (attrs: Record<string, string>) =>
+    ({
+      getAttribute: (name: string) => attrs[name] ?? null,
+    }) as unknown as HTMLElement;
+  assert.deepEqual(
+    getAttrs(element({ src: "https://example.com/a.png", width: "300" })),
+    {
+      id: null,
+      src: "https://example.com/a.png",
+      alt: null,
+      title: null,
+      width: null,
+    },
+  );
+  assert.equal(
+    (
+      getAttrs(element({ src: `attachment:${A}`, width: "300" })) as {
+        width: number;
+      }
+    ).width,
+    300,
+  );
+});

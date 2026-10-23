@@ -11,7 +11,9 @@ import {
   parseSubmittedDoc,
   plainText,
   stepAttachmentIds,
+  stepUsesFileFeatures,
   UnsafeDocumentError,
+  usesFileFeatures,
 } from "@palladian/notes-core";
 import type { Node as ProseMirrorNode } from "prosemirror-model";
 import { Step, Transform } from "prosemirror-transform";
@@ -19,6 +21,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { fail, type Principal } from "./access";
+import { FILES_DISABLED_MESSAGE, filesWritesEnabled } from "./config";
 import { MAX_NOTE_OBJECTS, recordReferences } from "./references";
 
 /** Collaboration limits; requests beyond them are rejected, not truncated. */
@@ -96,6 +99,8 @@ export async function createNoteRecord(
     sources?: Id<"notes">[];
   },
 ) {
+  if (!filesWritesEnabled() && usesFileFeatures(args.doc))
+    fail("invalid", FILES_DISABLED_MESSAGE);
   const now = Date.now();
   const json = serializeDoc(args.doc);
   const { title, preview } = deriveSummary(args.doc);
@@ -185,12 +190,16 @@ export async function commitSteps(
   // it passes the limit is a revision counted exactly.
   const union = new Set(attachmentIds(before));
   const baseline = union.size;
+  // Until files are enabled, no step may bring in file features (round 3).
+  const filesOn = filesWritesEnabled();
   // Checkpoints land on every interval boundary, even inside a large batch, so
   // any revision is rebuilt from at most one interval of steps.
   const checkpoints: { revision: number; doc: ProseMirrorNode }[] = [];
   // Each step is validated for what it introduces, so every revision in the
   // batch, including persisted checkpoints, stays within the safety contract.
   const apply = (step: Step, historical = false) => {
+    if (!filesOn && stepUsesFileFeatures(step))
+      fail("invalid", FILES_DISABLED_MESSAGE);
     let added: string[] = [];
     try {
       doc = applySafeStep(doc, step, { legacySources: historical });

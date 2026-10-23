@@ -63,4 +63,9 @@ export {
   FILE_NAME_LIMIT,
   FILE_SIZE_LIMIT,
 } from "./schema.ts";
-export { attachmentIds, stepAttachmentIds } from "./attachments.ts";
+export {
+  attachmentIds,
+  stepAttachmentIds,
+  usesFileFeatures,
+  stepUsesFileFeatures,
+} from "./attachments.ts";

@@ -13,8 +13,8 @@ import { mintServiceJwt } from "./jwt.ts";
  * Uploads: the ticket comes from `files.createUpload`. The Worker asks Convex
  * (as the file service) to admit the upload: it answers the expected size and
  * SHA-256 and grants a write lease. The Worker reads at most that many bytes,
- * checks both, writes `objects/<objectId>` only while the lease lasts
- * (deleting an object's bytes waits for its lease) and finalizes. A retry
+ * checks both, writes `objects/<objectId>` only while the lease lasts and
+ * finalizes. It never deletes bytes; Convex's tombstones do. A retry
  * with the same ticket writes the same key or finds the object ready, so it
  * never makes a second object.
  *
@@ -135,6 +135,7 @@ export type StoreFailure =
   | "size_mismatch"
   | "hash_mismatch"
   | "too_slow"
+  | "disabled"
   | "unavailable";
 export type StoreResult =
   | { ok: true; size: number; sha256: string }
@@ -146,6 +147,7 @@ const STORE_STATUS: Record<StoreFailure, number> = {
   size_mismatch: 422,
   hash_mismatch: 422,
   too_slow: 408,
+  disabled: 403,
   unavailable: 503,
 };
 
@@ -180,6 +182,13 @@ export async function storeObject(
       await service()
     ).mutation(fns.files.admitUpload, { objectId, ticket });
   } catch (failure) {
+    // Files not enabled on this deployment yet (FILES_WRITES_ENABLED).
+    if (
+      failure instanceof ConvexCallError &&
+      failure.failure.kind === "backend" &&
+      failure.failure.code === "invalid"
+    )
+      return { ok: false, error: "disabled" };
     logFailure("admit", failure);
     return { ok: false, error: "unavailable" };
   }
@@ -206,13 +215,6 @@ export async function storeObject(
     logFailure("put", failure);
     return { ok: false, error: "unavailable" };
   }
-  // The write may have completed after the lease (a slow R2 write, clock
-  // differences): its object may have been cancelled and swept meanwhile.
-  const late = Date.now() >= target.leaseUntil;
-  const removeWrite = () =>
-    env.FILES.delete(key).catch((failure: unknown) =>
-      logFailure("cleanup", failure),
-    );
   let done;
   try {
     done = await (
@@ -224,17 +226,14 @@ export async function storeObject(
       sha256,
     });
   } catch (failure) {
-    // Unknown outcome: the object may be ready (this finalize, or another
-    // request's), so the bytes stay. If it fails instead, its deletion
-    // tombstone removes them on a later sweep.
     logFailure("finalize", failure);
     return { ok: false, error: "unavailable" };
   }
-  // Ready: these are its verified bytes, whoever finalized it, late or not.
+  // The Worker never deletes bytes (review R3-1): the key is this object's
+  // own, and every write to it carries the same verified bytes, so a late or
+  // refused write can only rewrite them. If the object never becomes ready,
+  // its deletion tombstone removes them (Convex decides that, nobody else).
   if (done.status === "ready") return { ok: true, size: target.size, sha256 };
-  // The object will never be ready, or the write came after its lease:
-  // remove what this request wrote.
-  if (done.status === "gone" || late) await removeWrite();
   return done.status === "gone"
     ? { ok: false, error: "expired" }
     : { ok: false, error: "not_found" };

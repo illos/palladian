@@ -16,9 +16,9 @@ import { atLeast, fail, noteRole, type Principal, type Role } from "./access";
  * - So a new reference is recorded only when the actor can prove, inside the
  *   accepting transaction, that they may already use the object (review
  *   round 2): they uploaded it; this note referenced it before (undo, history
- *   restore); a named source note (`sources`, at most three) that they can
- *   read currently references it; or a bounded search finds a note through
- *   which they can read it. The proof is stored with the reference, which
+ *   restore); or a named source note (`sources`, at most three) or a
+ *   bounded search finds a note through which they can read it, as
+ *   `authorizeRead` would allow. The proof is stored with the reference, which
  *   then stands on its own: losing access to the source later does not
  *   remove it. Without a proof the reference stays in the document but
  *   grants nothing and keeps nothing alive, now and later; access gained
@@ -49,8 +49,9 @@ export const REF_BATCH = 200;
 type Ctx = QueryCtx | MutationCtx;
 
 /** The R2 key of an object's bytes. */
+export const OBJECT_KEY_PREFIX = "objects/";
 export function objectKey(objectId: Id<"objects">): string {
-  return `objects/${objectId}`;
+  return OBJECT_KEY_PREFIX + objectId;
 }
 
 export async function refFor(
@@ -110,9 +111,9 @@ export type Proof =
 
 /**
  * Whether the actor may use `object` in `noteId`, decided now and only now:
- * they uploaded it; a named source note they can read currently references
- * it; or the bounded search finds a note through which they can read it (as
- * `authorizeRead` would allow). Null when none holds within the bounds: the
+ * they uploaded it; a named source note, or one the bounded search finds,
+ * lets them read it (as `authorizeRead` would: current content with read
+ * access, history with edit access). Null when none holds within the bounds: the
  * reference then grants nothing, now or later.
  */
 async function proveUse(
@@ -125,10 +126,13 @@ async function proveUse(
   budget: { rows: number; objects: number },
 ): Promise<Proof | null> {
   if (object.uploaderId === actor._id) return { proof: "uploader" };
+  // A named source counts as reads do: its current content for anyone who
+  // can read it, its history for those who can edit it (review R3-2).
   for (const source of sources) {
     if (source === noteId || !(await roles.of(source))) continue;
     const ref = await refFor(ctx, source, object._id);
-    if (ref?.current) return { proof: "source", noteId: source };
+    if (ref && (await roles.grants(ref)))
+      return { proof: "source", noteId: source };
   }
   // A fair share of what is left, at least SEARCH_STEP rows: one copied
   // object may use the whole budget, many share it.

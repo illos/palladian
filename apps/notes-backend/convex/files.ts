@@ -25,12 +25,17 @@ import {
   requirePrincipal,
   type Principal,
 } from "./access";
-import { agentIssuer } from "./config";
+import {
+  agentIssuer,
+  FILES_DISABLED_MESSAGE,
+  filesWritesEnabled,
+} from "./config";
 import { digestOf } from "./documents";
 import { hashToken, newToken } from "./invitations";
 import { DEFAULT_RETENTION_DAYS } from "./lifecycle";
 import {
   MAX_NOTE_OBJECTS,
+  OBJECT_KEY_PREFIX,
   objectKey,
   REF_BATCH,
   refFor,
@@ -190,6 +195,7 @@ export const createUpload = mutation({
   }),
   handler: async (ctx, args) => {
     const actor = await requirePrincipal(ctx);
+    if (!filesWritesEnabled()) fail("invalid", FILES_DISABLED_MESSAGE);
     const name = cleanName(args.name);
     const mimeType = cleanMimeType(args.mimeType);
     if (!Number.isSafeInteger(args.size) || args.size < 1)
@@ -346,6 +352,7 @@ export const admitUpload = mutation({
   ),
   handler: async (ctx, args) => {
     await requireFilesService(ctx);
+    if (!filesWritesEnabled()) fail("invalid", FILES_DISABLED_MESSAGE);
     const { object, ticketOk } = await ticketObject(ctx, args);
     if (!object || !ticketOk) return { status: "denied" as const };
     if (object.state === "ready")
@@ -557,7 +564,8 @@ export const noteObjects = query({
 });
 
 /**
- * File service: R2 keys due for a deletion pass now.
+ * File service: R2 keys due for a deletion pass now. The only path by which
+ * any bytes are deleted: the Worker never deletes on its own.
  * A mutation, not a query: which deletions are due depends on the time, and
  * a cached query result would keep answering for an earlier time.
  */
@@ -571,7 +579,19 @@ export const deletionBatch = mutation({
       .query("objectDeletions")
       .withIndex("by_not_before", (q) => q.lte("notBefore", Date.now()))
       .take(limit);
-    return rows.map((row) => ({ id: row._id, key: row.key }));
+    // Bytes are deleted only for an object that, now, in this transaction,
+    // is gone or failed. One that is pending or ready keeps its bytes: its
+    // tombstone retires without a deletion (review R3-1).
+    const due = [];
+    for (const row of rows) {
+      const id = row.key.startsWith(OBJECT_KEY_PREFIX)
+        ? ctx.db.normalizeId("objects", row.key.slice(OBJECT_KEY_PREFIX.length))
+        : null;
+      const object = id ? await ctx.db.get(id) : null;
+      if (object && object.state !== "failed") await ctx.db.delete(row._id);
+      else due.push({ id: row._id, key: row.key });
+    }
+    return due;
   },
 });
 
@@ -605,9 +625,10 @@ export const confirmDeletions = mutation({
  * Queue an object's bytes for deletion as a tombstone: the next sweep
  * deletes the key, and every daily sweep deletes it again until seven days
  * after the object's upload lease ended (one pass if it never had one), so
- * a write that lands after a pass is removed by the next. Residual risk: a
- * write that completes more than seven days after its lease, from a Worker
- * that died before its own cleanup, would stay as unreachable bytes.
+ * a write that lands after a pass is removed by the next. The Worker never
+ * deletes bytes itself, and a pass deletes only for an object that is then
+ * gone or failed (deletionBatch). Residual risk: a write that completes more
+ * than seven days after its lease would stay as unreachable bytes.
  */
 async function enqueueDeletion(ctx: MutationCtx, object: Doc<"objects">) {
   const now = Date.now();

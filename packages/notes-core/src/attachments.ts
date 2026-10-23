@@ -46,3 +46,35 @@ export function stepAttachmentIds(step: Step): string[] {
   }
   return [];
 }
+
+/**
+ * Whether content uses what came with files (B1/B2): a file block, an image
+ * width, or an image showing an uploaded object. Clients built before B2 do
+ * not know file blocks at all, so the backend refuses such new content until
+ * files are enabled (FILES_WRITES_ENABLED, review round 3).
+ */
+export function usesFileFeatures(content: ProseMirrorNode | Fragment): boolean {
+  let found = false;
+  content.descendants((node) => {
+    if (found) return false;
+    if (node.type.name === "file") found = true;
+    else if (node.type.name === "image")
+      found =
+        node.attrs.width !== null ||
+        attachmentObjectId(node.attrs.src) !== null;
+    return !found && !node.isTextblock;
+  });
+  return found;
+}
+
+/** Whether a step brings in content `usesFileFeatures` would flag. */
+export function stepUsesFileFeatures(step: Step): boolean {
+  if (step instanceof ReplaceStep || step instanceof ReplaceAroundStep)
+    return usesFileFeatures(step.slice.content);
+  if (step instanceof AttrStep) {
+    if (step.attr === "width") return step.value !== null;
+    if (step.attr === "src") return attachmentObjectId(step.value) !== null;
+    if (step.attr === "objectId") return true;
+  }
+  return false;
+}

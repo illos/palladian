@@ -278,13 +278,19 @@ const nodes: Record<string, NodeSpec> = {
           if (typeof dom === "string") return false;
           const src = dom.getAttribute("src");
           if (!isSafeImageSource(src)) return false;
+          // A width is kept only for Palladian's own images (copy and paste
+          // between notes); web pages' <img width> sizes are layout, not a
+          // choice, and would need files enabled (review round 3).
           const width = Number(dom.getAttribute("width"));
           return {
             id: readId(dom),
             src,
             alt: dom.getAttribute("alt"),
             title: dom.getAttribute("title"),
-            width: isImageWidth(width) ? width : null,
+            width:
+              attachmentObjectId(src) !== null && isImageWidth(width)
+                ? width
+                : null,
           };
         },
       },

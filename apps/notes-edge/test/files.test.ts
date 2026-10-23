@@ -228,11 +228,12 @@ describe("PUT /files/upload/<objectId>", () => {
     expect((await put("../../etc", "x")).status).toBe(404);
   });
 
-  it("removes what it wrote when the object will never be ready", async () => {
+  it("never deletes bytes itself, even for an object that will never be ready", async () => {
+    // Round 3 (R3-1): Convex's tombstone deletes them, not the Worker.
     const id = newId();
     await expecting("late", "image/png", { status: "gone" });
     expect((await put(id, "late")).status).toBe(410);
-    expect(await r2.bucket.head(`objects/${id}`)).toBeNull();
+    expect(await r2.bucket.head(`objects/${id}`)).not.toBeNull();
   });
 
   it("keeps the bytes when finalizing has an unknown outcome", async () => {
@@ -633,7 +634,9 @@ describe("review round 2", () => {
   }
   const LATE = 15 * 60_000 + 1;
 
-  it("R2-2: a write landing after the lease, for a cancelled object, is removed", async () => {
+  // Round 3 (R3-1) reversed these: the Worker never deletes; bytes of an
+  // object that never becomes ready go through Convex's tombstones.
+  it("R3-1: a write landing after the lease, for a cancelled object, stays for its tombstone", async () => {
     const id = newId();
     await expecting("late write", "image/png", { status: "gone" });
     const { state, restore } = clock();
@@ -643,10 +646,10 @@ describe("review round 2", () => {
     } finally {
       restore();
     }
-    expect(await r2.bucket.head(`objects/${id}`)).toBeNull();
+    expect(await r2.bucket.head(`objects/${id}`)).not.toBeNull();
   });
 
-  it("R2-2: a late write is removed even when finalize does not say why", async () => {
+  it("R3-1: a late write refused for an old ticket stays (the object may be ready)", async () => {
     const id = newId();
     await expecting("late denied", "image/png", { status: "denied" });
     const { state, restore } = clock();
@@ -657,7 +660,7 @@ describe("review round 2", () => {
     } finally {
       restore();
     }
-    expect(await r2.bucket.head(`objects/${id}`)).toBeNull();
+    expect(await r2.bucket.head(`objects/${id}`)).not.toBeNull();
   });
 
   it("R2-2: a late write to an object that is ready stays (a concurrent retry finished it)", async () => {
@@ -690,7 +693,7 @@ describe("review round 2", () => {
     expect(await r2.bucket.head(`objects/${id}`)).not.toBeNull();
   });
 
-  it("R2-2: a Worker clock behind Convex's still cleans up when finalize refuses", async () => {
+  it("R3-1: a Worker clock behind Convex's writes, and leaves cleanup to the tombstone", async () => {
     const id = newId();
     const hash = await expecting("skewed", "image/png", { status: "gone" });
     // Convex's lease ends in 15 minutes by its clock; this Worker's clock
@@ -710,6 +713,23 @@ describe("review round 2", () => {
     } finally {
       restore();
     }
+    expect(await r2.bucket.head(`objects/${id}`)).not.toBeNull();
+  });
+});
+
+describe("review round 3", () => {
+  it("R3-3: uploads are refused while files are not enabled", async () => {
+    service.set(fns.files.admitUpload, () => {
+      throw new ConvexCallError({
+        kind: "backend",
+        code: "invalid",
+        message: "Files and image sizes are not enabled on this server yet.",
+      });
+    });
+    const id = newId();
+    const response = await put(id, "x");
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: "disabled" });
     expect(await r2.bucket.head(`objects/${id}`)).toBeNull();
   });
 });

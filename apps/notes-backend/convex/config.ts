@@ -24,3 +24,17 @@ export function requireAuthSecret(value: string | undefined): string {
 export function agentIssuer(): string | null {
   return process.env.AGENT_JWT_ISSUER || null;
 }
+
+/**
+ * Whether new content may use files (B1/B2): uploads, file blocks, image
+ * widths and images showing uploaded objects. Off unless the deployment sets
+ * FILES_WRITES_ENABLED=true, which the owner does once every device runs an
+ * app build that understands file blocks (review round 3; rollout in
+ * docs/reviews/notes-files-backend-implementation.md). Reads, existing
+ * content and legacy sources are unaffected.
+ */
+export function filesWritesEnabled(): boolean {
+  return process.env.FILES_WRITES_ENABLED === "true";
+}
+export const FILES_DISABLED_MESSAGE =
+  "Files and image sizes are not enabled on this server yet.";

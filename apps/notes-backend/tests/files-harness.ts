@@ -10,6 +10,8 @@ import schema from "../convex/schema";
 
 export const AGENT_ISSUER = "https://agent.test";
 process.env.AGENT_JWT_ISSUER = AGENT_ISSUER;
+// File tests run with files enabled; gate tests turn it off themselves.
+process.env.FILES_WRITES_ENABLED = "true";
 export const DAY = 86_400_000;
 const modules = import.meta.glob([
   "../convex/**/*.ts",
