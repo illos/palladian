@@ -1,11 +1,17 @@
 import { describe, expect, test } from "vitest";
 import type { ConvexReactClient } from "convex/react";
-import { failInSession, inSession } from "../../src/in-session";
+import {
+  copyInSession,
+  inSession,
+  serverAnswered,
+  type CopyScreen,
+} from "../../src/in-session";
 import { duplicateNote } from "../../src/note-tools";
 
-// History review round 6 (R6-1): a copy (Duplicate, Restore as a new note)
-// goes out only for the account and session it started in, and its answer
-// changes the screen only if that session still holds.
+// History review rounds 6 and 7: a copy (Duplicate, Restore as a new note)
+// goes out only for the account and session it started in (R6-1), and every
+// change it makes to the screen afterwards, including a failure and the
+// toast's Open, happens only while that session holds (R7-1, R7-2).
 
 /** A device whose sign-in can switch, with App's session ticket. */
 function device(account: string) {
@@ -25,19 +31,58 @@ function device(account: string) {
 }
 
 /** A client that records the mutations it is asked to send. */
-function client() {
+function client(answer: () => Promise<unknown> = async () => undefined) {
   const sent: Record<string, unknown>[] = [];
   const fake = {
     mutation: async (_ref: unknown, args: Record<string, unknown>) => {
       sent.push(args);
+      await answer();
       return { noteId: "copy-id", revision: 0, replayed: false };
     },
   };
   return { sent, client: fake as unknown as ConvexReactClient };
 }
 
+/** The server's refusal of a copy that names another account. */
+const refusal = Object.assign(
+  new Error("This change was made in another account."),
+  { data: { code: "conflict" } },
+);
+
+/**
+ * App's screen for a copy, recording which account was signed in at each
+ * change: the toast with Open, a failure, and an opened note.
+ */
+function screen(ada: ReturnType<typeof device>) {
+  const shown: { what: string; account: string }[] = [];
+  let open: (() => void) | null = null;
+  const ui: CopyScreen<string> = {
+    made: (id, openCopy) => {
+      shown.push({ what: `made ${id}`, account: ada.now.account });
+      open = openCopy;
+    },
+    failed: (failure) =>
+      shown.push({
+        what: `failed ${(failure as Error).message}`,
+        account: ada.now.account,
+      }),
+  };
+  const opened = (id: string) =>
+    shown.push({ what: `opened ${id}`, account: ada.now.account });
+  return { shown, ui, opened, pressOpen: () => open?.() };
+}
+
+/** Switches the device to B after `ticks` microtasks. */
+function switchAfter(ada: ReturnType<typeof device>, ticks: number) {
+  let chain = Promise.resolve();
+  for (let tick = 0; tick < ticks; tick++) chain = chain.then(() => {});
+  void chain.then(() => ada.switchTo("account-b"));
+}
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 describe("copies within the session they started in", () => {
-  test("an unchanged session sends the copy, naming its account, and completes", async () => {
+  test("an unchanged session sends the copy, naming its account", async () => {
     const ada = device("account-a");
     const { sent, client: convex } = client();
     const made = await inSession(
@@ -46,7 +91,7 @@ describe("copies within the session they started in", () => {
       ({ client }) =>
         duplicateNote(client, "account-a", "{}", "nb-1", "note-1", "key-1"),
     );
-    expect(made).toEqual({ sent: true, result: "copy-id", current: true });
+    expect(made).toEqual({ sent: true, result: "copy-id" });
     expect(sent).toEqual([
       {
         clientKey: "key-1",
@@ -73,30 +118,6 @@ describe("copies within the session they started in", () => {
     );
     expect(made).toEqual({ sent: false });
     expect(sent).toEqual([]);
-  });
-
-  test("an answer after a switch to B is not shown to B", async () => {
-    const ada = device("account-a");
-    const { client: convex } = client();
-    const made = await inSession(
-      ada.ticket(),
-      async () => ({ client: convex }),
-      async ({ client }) => {
-        const id = await duplicateNote(
-          client,
-          "account-a",
-          "{}",
-          undefined,
-          "note-1",
-        );
-        ada.switchTo("account-b");
-        return id;
-      },
-    );
-    // Sent in Ada's session (and naming her account, which the server checks
-    // against whoever is signed in when it arrives), but answered under Bea:
-    // the caller shows no toast or dialog change.
-    expect(made).toEqual({ sent: true, result: "copy-id", current: false });
   });
 
   test("a session that has already changed prepares nothing", async () => {
@@ -133,56 +154,142 @@ describe("copies within the session they started in", () => {
   });
 });
 
-describe("failures within the session they started in", () => {
-  /** The server's refusal of a copy that names another account. */
-  const refusal = Object.assign(
-    new Error("This change was made in another account."),
-    { data: { code: "conflict" } },
-  );
-
-  /** Duplicate's composition in App: the copy, fenced for failures too. */
-  function duplicate(ada: ReturnType<typeof device>, during: () => void) {
-    const current = ada.ticket();
-    return failInSession(current, () =>
-      inSession(
-        current,
-        async () => ({}),
-        async () => {
-          during();
-          throw refusal;
-        },
-      ),
+describe("a copy's outcome shows only in its session", () => {
+  /** Duplicate's shape in App: read the note, load the helper, send. */
+  function duplicate(
+    ada: ReturnType<typeof device>,
+    ui: ReturnType<typeof screen>,
+    answer?: () => Promise<unknown>,
+  ) {
+    const { client: convex } = client(answer);
+    return copyInSession(
+      ada.ticket(),
+      async () => {
+        const doc = await Promise.resolve("{}");
+        const helper = await Promise.resolve(duplicateNote);
+        return { doc, helper };
+      },
+      ({ doc, helper }) =>
+        helper(convex, "account-a", doc, undefined, "note-1", "key-1"),
+      ui.opened,
+      ui.ui,
     );
   }
 
-  test("a refusal in the same session reaches the screen", async () => {
+  test("in the same session: the toast shows, and Open opens the copy", async () => {
     const ada = device("account-a");
-    await expect(duplicate(ada, () => {})).rejects.toBe(refusal);
+    const ui = screen(ada);
+    expect(await duplicate(ada, ui)).toEqual({ sent: true, result: "copy-id" });
+    ui.pressOpen();
+    expect(ui.shown).toEqual([
+      { what: "made copy-id", account: "account-a" },
+      { what: "opened copy-id", account: "account-a" },
+    ]);
   });
 
-  test("a refusal after a switch to B shows B nothing", async () => {
+  test("R7-1: whenever A → B happens, nothing shows under B", async () => {
+    let madeInA = 0;
+    for (let ticks = 0; ticks <= 40; ticks++) {
+      const ada = device("account-a");
+      const ui = screen(ada);
+      switchAfter(ada, ticks);
+      await duplicate(ada, ui);
+      await settle();
+      expect(ada.now.account).toBe("account-b");
+      // Each change happened while A was signed in, never after the switch.
+      for (const change of ui.shown) expect(change.account).toBe("account-a");
+      if (ui.shown.length) madeInA += 1;
+    }
+    // The late switches came after the copy's toast: the sweep covers both.
+    expect(madeInA).toBeGreaterThan(0);
+    expect(madeInA).toBeLessThan(41);
+  });
+
+  test("R7-1: whenever A → B happens, a refusal shows nothing under B", async () => {
+    let failedInA = 0;
+    for (let ticks = 0; ticks <= 40; ticks++) {
+      const ada = device("account-a");
+      const ui = screen(ada);
+      switchAfter(ada, ticks);
+      const outcome = await duplicate(ada, ui, async () => {
+        throw refusal;
+      });
+      await settle();
+      for (const change of ui.shown) expect(change.account).toBe("account-a");
+      if (ui.shown.length) {
+        failedInA += 1;
+        expect(outcome).toEqual({ failure: refusal });
+      }
+    }
+    expect(failedInA).toBeGreaterThan(0);
+    expect(failedInA).toBeLessThan(41);
+  });
+
+  test("a refusal in the same session is shown, and nothing is thrown", async () => {
     const ada = device("account-a");
-    // Bea signs in while Ada's copy is on its way; the server then refuses it.
-    expect(await duplicate(ada, () => ada.switchTo("account-b"))).toBe(
-      undefined,
-    );
+    const ui = screen(ada);
+    const outcome = await duplicate(ada, ui, async () => {
+      throw refusal;
+    });
+    expect(outcome).toEqual({ failure: refusal });
+    expect(ui.shown).toEqual([
+      {
+        what: "failed This change was made in another account.",
+        account: "account-a",
+      },
+    ]);
   });
 
   test("a failure while preparing, after a switch, shows nothing", async () => {
     const ada = device("account-a");
-    const current = ada.ticket();
-    expect(
-      await failInSession(current, async () => {
+    const ui = screen(ada);
+    const outcome = await copyInSession(
+      ada.ticket(),
+      async () => {
         ada.switchTo("account-b");
-        throw new Error("Could not load the note.");
-      }),
-    ).toBe(undefined);
+        throw new Error("This note's text is not on this device yet.");
+      },
+      async () => "never",
+      ui.opened,
+      ui.ui,
+    );
+    expect("failure" in outcome).toBe(true);
+    expect(ui.shown).toEqual([]);
   });
 
-  test("a success passes through unchanged", async () => {
+  test("R7-2: Open pressed after A → B opens nothing", async () => {
     const ada = device("account-a");
-    expect(await failInSession(ada.ticket(), async () => "copy-id")).toBe(
-      "copy-id",
+    const ui = screen(ada);
+    await duplicate(ada, ui);
+    // The toast stays up; Bea signs in, then the Open button is pressed.
+    ada.switchTo("account-b");
+    ui.pressOpen();
+    expect(ui.shown).toEqual([{ what: "made copy-id", account: "account-a" }]);
+  });
+
+  test("R7-2: Open after A signs out and back in opens nothing", async () => {
+    const ada = device("account-a");
+    const ui = screen(ada);
+    await duplicate(ada, ui);
+    // Another session of the same account is not the session the copy began in.
+    ada.switchTo("account-a");
+    ui.pressOpen();
+    expect(ui.shown).toEqual([{ what: "made copy-id", account: "account-a" }]);
+  });
+});
+
+describe("whether the server answered a copy", () => {
+  test("made, or refused with a code: answered", () => {
+    expect(serverAnswered({ sent: true, result: "copy-id" })).toBe(true);
+    expect(serverAnswered({ failure: refusal })).toBe(true);
+  });
+
+  test("not sent, or a failure without a code: no answer", () => {
+    expect(serverAnswered({ sent: false })).toBe(false);
+    expect(serverAnswered({ failure: new Error("Connection lost") })).toBe(
+      false,
     );
+    expect(serverAnswered({ failure: null })).toBe(false);
+    expect(serverAnswered({ failure: "offline" })).toBe(false);
   });
 });

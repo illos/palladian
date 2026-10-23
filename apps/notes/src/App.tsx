@@ -18,7 +18,7 @@ import type {
 } from "./cache";
 import { emptyDocument, validateCachedDocument } from "./document";
 import { smartDate } from "./dates";
-import { failInSession, inSession, type SessionOutcome } from "./in-session";
+import { copyInSession, serverAnswered } from "./in-session";
 import { CopyKeys } from "./copy-keys";
 import { EditorSurface } from "./EditorSurface";
 import { Icon } from "./Icons";
@@ -1151,39 +1151,39 @@ export function App({
           return toast(pinned ? "Pinned" : "Unpinned");
         }
         case "duplicate": {
-          // Made in this account and session only (`inSession`, History
-          // review round 6): checked after each wait, and the screen is left
-          // alone if another sign-in has taken over by the answer, whether
-          // that is the copy or a failure (`failInSession`).
+          // Made in this account and session only, and shown only there:
+          // the toast, a failure, and the toast's Open each check the
+          // session as they happen (`copyInSession`, History review rounds
+          // 6 and 7). Nothing reaches `failed` below from here.
           const current = sessionTicket();
           const account = accountId;
           if (!live || !account) return;
-          const doc = await failInSession(current, () => documentOf(target));
-          if (!current()) return;
-          if (!doc) return toast("This note's text is not on this device yet.");
           // The copy stays in the same notebook if you can add notes there.
           const book = notebooks.find((n) => n.id === target.notebookId);
           const notebookId =
             book && book.role !== "read"
               ? book.id
               : (liveState.profile?.defaultNotebookId ?? undefined);
-          const copy = await failInSession(current, () =>
-            inSession(
-              current,
-              async () => {
-                const { duplicateNote } = await import("./note-tools");
-                const client = liveRef.current?.client;
-                return client ? { duplicateNote, client } : null;
-              },
-              ({ duplicateNote, client }) =>
-                duplicateNote(client, account, doc, notebookId, target.id),
-            ),
+          await copyInSession(
+            current,
+            async () => {
+              const doc = await documentOf(target);
+              if (!doc)
+                throw new Error("This note's text is not on this device yet.");
+              const { duplicateNote } = await import("./note-tools");
+              const client = liveRef.current?.client;
+              return client ? { doc, duplicateNote, client } : null;
+            },
+            ({ doc, duplicateNote, client }) =>
+              duplicateNote(client, account, doc, notebookId, target.id),
+            (id) => void openRemote(id),
+            {
+              made: (_, open) =>
+                toast("Duplicated", { label: "Open", run: open }),
+              failed,
+            },
           );
-          if (!copy?.sent || !copy.current) return;
-          return toast("Duplicated", {
-            label: "Open",
-            run: () => void openRemote(copy.result),
-          });
+          return;
         }
         case "trash": {
           if (!live) return;
@@ -1384,17 +1384,20 @@ export function App({
    * version's text, in the same notebook if this person can add notes there,
    * otherwise their default notebook, as Duplicate does. The original note,
    * and anyone typing in it, is not touched. Made in this account and session
-   * only (`inSession`, review round 6).
+   * only, and shown only there (`copyInSession`, review rounds 6 and 7):
+   * closing History, the toast, its Open and `failed` (the panel's notice)
+   * each check the session as they happen.
    */
   async function restoreAsNewNote(
     noteId: string,
     revision: number,
     doc: string,
+    failed: (failure: unknown) => void,
   ) {
     const current = sessionTicket();
     const account = accountId;
     if (!account || !liveConnected || !current())
-      throw new Error("Not connected.");
+      return failed(new Error("Not connected."));
     const key = copyKeys.start(account, noteId, revision);
     if (!key) return;
     setCopiesChanged((count) => count + 1);
@@ -1404,39 +1407,34 @@ export function App({
       book && book.role !== "read"
         ? book.id
         : (liveState.profile?.defaultNotebookId ?? undefined);
-    let made: SessionOutcome<string>;
-    try {
-      made = await inSession(
-        current,
-        async () => {
-          const { duplicateNote } = await import("./note-tools");
-          const client = liveRef.current?.client;
-          return client ? { duplicateNote, client } : null;
+    const outcome = await copyInSession(
+      current,
+      async () => {
+        const { duplicateNote } = await import("./note-tools");
+        const client = liveRef.current?.client;
+        return client ? { duplicateNote, client } : null;
+      },
+      // Naming the note it comes from proves access to any attachments in
+      // the version: an editor may copy what the note's history holds (B1).
+      ({ duplicateNote, client }) =>
+        duplicateNote(client, account, doc, notebookId, noteId, key),
+      (id) => void openRemote(id),
+      {
+        made: (_, open) => {
+          setDialog((shown) =>
+            shown?.kind === "history" && shown.noteId === noteId ? null : shown,
+          );
+          toast("Restored as a new note", { label: "Open", run: open });
         },
-        // Naming the note it comes from proves access to any attachments in
-        // the version: an editor may copy what the note's history holds (B1).
-        ({ duplicateNote, client }) =>
-          duplicateNote(client, account, doc, notebookId, noteId, key),
-      );
-    } catch (failure) {
-      // The server said no, so nothing was made: a later try may use a new
-      // key. Without an answer the key stays for the retry.
-      const data = (failure as { data?: { code?: unknown } } | null)?.data;
-      if (typeof data?.code === "string")
-        copyKeys.answered(account, noteId, revision);
-      else copyKeys.unanswered(account, noteId, revision);
-      setCopiesChanged((count) => count + 1);
-      throw failure;
-    }
-    if (made.sent) copyKeys.answered(account, noteId, revision);
+        failed,
+      },
+    );
+    // Once the server has answered (made, or refused, which makes nothing)
+    // a later restore may use a new key; otherwise the key stays for the
+    // retry. Bookkeeping only: it does not change the screen.
+    if (serverAnswered(outcome)) copyKeys.answered(account, noteId, revision);
     else copyKeys.unanswered(account, noteId, revision);
     setCopiesChanged((count) => count + 1);
-    if (!made.sent || !made.current) return;
-    setDialog(null);
-    toast("Restored as a new note", {
-      label: "Open",
-      run: () => void openRemote(made.result),
-    });
   }
   // History closes once the note no longer offers it to this person: a lost
   // edit role, Trash, or the note gone. The note as it is now comes from its
@@ -2168,8 +2166,8 @@ export function App({
               connected={liveConnected}
               onClose={() => setDialog(null)}
               copyState={(revision) => copyState(dialog.noteId, revision)}
-              onRestoreAsNew={(doc, revision) =>
-                restoreAsNewNote(dialog.noteId, revision, doc)
+              onRestoreAsNew={(doc, revision, failed) =>
+                restoreAsNewNote(dialog.noteId, revision, doc, failed)
               }
             />
           </Suspense>

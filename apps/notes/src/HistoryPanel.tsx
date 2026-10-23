@@ -52,9 +52,15 @@ const compareLabels: Record<Compare, string> = {
 
 /**
  * Creates a new note from a version's stored document (App does this, with
- * one creation key per version until answered: History review round 6).
+ * one creation key per version until answered: History review round 6). A
+ * failure is reported through `failed`, and only while the session it
+ * started in holds (round 7); on success App closes History.
  */
-type RestoreAsNew = (doc: string, revision: number) => Promise<void>;
+type RestoreAsNew = (
+  doc: string,
+  revision: number,
+  failed: (failure: unknown) => void,
+) => Promise<void>;
 /** Whether a copy of a version is on its way, or sent without an answer. */
 type CopyStateOf = (revision: number) => CopyState;
 
@@ -406,7 +412,9 @@ function VersionView({
         connected={connected}
         needsFiles={needsFiles}
         copy={copy}
-        onRestoreAsNew={(doc) => onRestoreAsNew(doc, version.revision)}
+        onRestoreAsNew={(doc, failed) =>
+          onRestoreAsNew(doc, version.revision, failed)
+        }
       />
     </>
   );
@@ -472,7 +480,10 @@ function NewNoteControls({
   needsFiles: boolean;
   /** A copy of this version on its way, or sent without an answer. */
   copy: CopyState;
-  onRestoreAsNew: (doc: string) => Promise<void>;
+  onRestoreAsNew: (
+    doc: string,
+    failed: (failure: unknown) => void,
+  ) => Promise<void>;
 }) {
   const [confirming, setConfirming] = useState(copy === "sending");
   const [sending, setBusy] = useState(false);
@@ -485,12 +496,12 @@ function NewNoteControls({
     setNotice(null);
     try {
       // On success App closes History; otherwise the panel stays usable.
-      await onRestoreAsNew(doc);
-    } catch (failure) {
-      const error = transportError(failure);
-      setNotice(
-        isFilesOffRefusal(error) ? COPY_NEEDS_FILES_MESSAGE : error.message,
-      );
+      await onRestoreAsNew(doc, (failure) => {
+        const error = transportError(failure);
+        setNotice(
+          isFilesOffRefusal(error) ? COPY_NEEDS_FILES_MESSAGE : error.message,
+        );
+      });
     } finally {
       setBusy(false);
     }

@@ -6,7 +6,22 @@
  * key, and `notes.create` returns the copy already made for it rather than
  * making a second. Once the server answers (made, or refused) the key is
  * forgotten: a deliberate second restore of the version makes another copy.
- * Kept in App, so it outlives the panel; in memory only.
+ * Kept in App, so it outlives the panel.
+ *
+ * Boundaries (review round 7, R7-3):
+ * - In memory only. A full reload loses the keys, so a restore whose answer
+ *   was lost before the reload, and then retried, can make a second note.
+ * - One Convex client per page. The live layer, and its client, are created
+ *   once when the page loads (`main.tsx`) and are never replaced or closed;
+ *   signing out, back in or as another account changes the client's
+ *   authentication only. A copy on its way is therefore answered once the
+ *   client reaches the server: made, or refused if it arrives under another
+ *   account (`notes.create`'s account check) or signed out. It does not stay
+ *   "sending" for good. If the client is ever replaced or closed while the
+ *   page stays (a closed client leaves its pending mutations unanswered), each
+ *   entry must record its client, show an entry from a retired client as
+ *   unconfirmed (retry with the same key) and ignore that client's late
+ *   answer.
  */
 export type CopyState = "sending" | "unconfirmed" | null;
 
