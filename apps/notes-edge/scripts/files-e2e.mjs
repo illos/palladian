@@ -146,6 +146,17 @@ async function r2Object(objectId) {
   }
 }
 
+/** A read-only inline query against the deployment (counts and numbers only). */
+async function inlineQuery(expression) {
+  const { stdout } = await run(
+    "npx",
+    ["convex", "run", "--inline-query", `return ${expression};`],
+    { cwd: BACKEND_DIR, env: process.env, maxBuffer: 1 << 20 },
+  );
+  const start = stdout.search(/[[{0-9]/);
+  return JSON.parse(stdout.slice(start));
+}
+
 const SERVICE_IDENTITY = JSON.stringify({
   issuer: ISSUER,
   subject: "service:files",
@@ -497,8 +508,10 @@ async function main() {
           SERVICE_IDENTITY,
         ])
       ).map((row) => row.key);
-    // An upload the Worker admitted and wrote: cancelling it queues the bytes,
-    // but not before its write lease and settle time have passed (review F3).
+    // An upload the Worker admitted and wrote: cancelling it leaves a
+    // tombstone. The next sweep deletes the bytes, and the tombstone stays,
+    // to delete them again daily until seven days after the lease (review
+    // R2-2), in case a write still lands.
     const spare = await ada.client.mutation(api.files.createUpload, {
       noteId,
       name: "spare.png",
@@ -510,12 +523,30 @@ async function main() {
     await ada.client.mutation(api.files.cancelUpload, {
       objectId: spare.objectId,
     });
+    assert(
+      (await queued()).includes(`objects/${spare.objectId}`),
+      "a cancelled upload's deletion is due at once",
+    );
     await sweep();
+    let swept = false;
+    for (let i = 0; i < 20 && !swept; i++) {
+      swept = (await r2Object(spare.objectId)) === null;
+      if (!swept) await new Promise((r) => setTimeout(r, 500));
+    }
+    assert(swept, "the sweep deleted the cancelled upload's bytes");
+    const rows = await inlineQuery(
+      `(await ctx.db.query("objectDeletions").collect()).filter((r) => r.key === ${JSON.stringify(`objects/${spare.objectId}`)}).map((r) => ({ passes: r.passes, retainUntil: r.retainUntil }))`,
+    );
+    assert(
+      rows.length === 1 &&
+        rows[0].passes === 1 &&
+        rows[0].retainUntil > Date.now() + 6 * 86_400_000,
+      "its tombstone stays, one pass recorded, for seven days past the lease",
+    );
     assert(
       !(await queued()).includes(`objects/${spare.objectId}`),
-      "a deletion waiting out a write lease is not handed to the sweep",
+      "and is not due again in the same run",
     );
-    assert(await r2Object(spare.objectId), "so its bytes are still there");
     // An upload never admitted is due at once. Bytes placed for it (as a
     // stray write would be) are deleted by the next sweep.
     const idle = await ada.client.mutation(api.files.createUpload, {
@@ -565,8 +596,15 @@ async function main() {
       !(await queued()).includes(`objects/${idle.objectId}`),
       "and confirmed the deletion",
     );
+    const idleRows = await inlineQuery(
+      `(await ctx.db.query("objectDeletions").collect()).filter((r) => r.key === ${JSON.stringify(`objects/${idle.objectId}`)}).length`,
+    );
+    assert(
+      idleRows === 0,
+      "a never-admitted upload's tombstone retires after one pass",
+    );
     log(
-      "deletions: a cancelled, written upload waits out its lease (not swept yet, bytes kept); one never admitted was swept from R2 and confirmed",
+      "deletions: a cancelled, written upload was swept at once and keeps a tombstone for seven days past its lease; one never admitted was swept and retired",
     );
   }
   log("PASS");
