@@ -21,6 +21,8 @@ VITE_NOTES_AUTH_SITE_URL=http://127.0.0.1:3219 pnpm --filter @palladian/notes de
 
 A build without that endpoint retains cached viewing and local drafts but cannot connect an account. Do not point a proof at production or real data.
 
+Attachments (plan 08 B3) load and upload through the Worker's `/files` routes. The dev server proxies `/files` to `NOTES_FILES_ORIGIN` (default `http://localhost:8787`), where `wrangler dev` runs as the [Worker README](../notes-edge/README.md) describes. `scripts/attachments-e2e.mjs` starts its own Worker on that origin; see its header for the environment it needs.
+
 The app icon is a serliana (Palladian window) whose arched centre light is a note. Its sources are `icons/app-icon.svg`, `icons/app-icon-maskable.svg` and the favicon `public/icon.svg`. After editing one, run `node apps/notes/scripts/icons.mjs` to re-render the committed PNGs and `favicon.ico` in `public/`. The service worker does not precache icons.
 
 Checks:
