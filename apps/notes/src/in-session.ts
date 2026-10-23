@@ -24,3 +24,21 @@ export async function inSession<P, R>(
   const result = await dispatch(prepared);
   return { sent: true, result, current: current() };
 }
+
+/**
+ * Runs `task`, passing on its failure only while the session it started in
+ * holds. A failure that arrives after another sign-in has taken over (such as
+ * the server refusing a copy made in another account) is dropped, so the new
+ * account's screen shows nothing of it; the result is then undefined.
+ */
+export async function failInSession<R>(
+  current: () => boolean,
+  task: () => Promise<R>,
+): Promise<R | undefined> {
+  try {
+    return await task();
+  } catch (failure) {
+    if (current()) throw failure;
+    return undefined;
+  }
+}

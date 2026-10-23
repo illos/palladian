@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { ConvexReactClient } from "convex/react";
-import { inSession } from "../../src/in-session";
+import { failInSession, inSession } from "../../src/in-session";
 import { duplicateNote } from "../../src/note-tools";
 
 // History review round 6 (R6-1): a copy (Duplicate, Restore as a new note)
@@ -130,5 +130,59 @@ describe("copies within the session they started in", () => {
       ),
     ).toEqual({ sent: false });
     expect(dispatched).toBe(false);
+  });
+});
+
+describe("failures within the session they started in", () => {
+  /** The server's refusal of a copy that names another account. */
+  const refusal = Object.assign(
+    new Error("This change was made in another account."),
+    { data: { code: "conflict" } },
+  );
+
+  /** Duplicate's composition in App: the copy, fenced for failures too. */
+  function duplicate(ada: ReturnType<typeof device>, during: () => void) {
+    const current = ada.ticket();
+    return failInSession(current, () =>
+      inSession(
+        current,
+        async () => ({}),
+        async () => {
+          during();
+          throw refusal;
+        },
+      ),
+    );
+  }
+
+  test("a refusal in the same session reaches the screen", async () => {
+    const ada = device("account-a");
+    await expect(duplicate(ada, () => {})).rejects.toBe(refusal);
+  });
+
+  test("a refusal after a switch to B shows B nothing", async () => {
+    const ada = device("account-a");
+    // Bea signs in while Ada's copy is on its way; the server then refuses it.
+    expect(await duplicate(ada, () => ada.switchTo("account-b"))).toBe(
+      undefined,
+    );
+  });
+
+  test("a failure while preparing, after a switch, shows nothing", async () => {
+    const ada = device("account-a");
+    const current = ada.ticket();
+    expect(
+      await failInSession(current, async () => {
+        ada.switchTo("account-b");
+        throw new Error("Could not load the note.");
+      }),
+    ).toBe(undefined);
+  });
+
+  test("a success passes through unchanged", async () => {
+    const ada = device("account-a");
+    expect(await failInSession(ada.ticket(), async () => "copy-id")).toBe(
+      "copy-id",
+    );
   });
 });

@@ -18,7 +18,7 @@ import type {
 } from "./cache";
 import { emptyDocument, validateCachedDocument } from "./document";
 import { smartDate } from "./dates";
-import { inSession, type SessionOutcome } from "./in-session";
+import { failInSession, inSession, type SessionOutcome } from "./in-session";
 import { CopyKeys } from "./copy-keys";
 import { EditorSurface } from "./EditorSurface";
 import { Icon } from "./Icons";
@@ -1153,11 +1153,12 @@ export function App({
         case "duplicate": {
           // Made in this account and session only (`inSession`, History
           // review round 6): checked after each wait, and the screen is left
-          // alone if another sign-in has taken over by the answer.
+          // alone if another sign-in has taken over by the answer, whether
+          // that is the copy or a failure (`failInSession`).
           const current = sessionTicket();
           const account = accountId;
           if (!live || !account) return;
-          const doc = await documentOf(target);
+          const doc = await failInSession(current, () => documentOf(target));
           if (!current()) return;
           if (!doc) return toast("This note's text is not on this device yet.");
           // The copy stays in the same notebook if you can add notes there.
@@ -1166,17 +1167,19 @@ export function App({
             book && book.role !== "read"
               ? book.id
               : (liveState.profile?.defaultNotebookId ?? undefined);
-          const copy = await inSession(
-            current,
-            async () => {
-              const { duplicateNote } = await import("./note-tools");
-              const client = liveRef.current?.client;
-              return client ? { duplicateNote, client } : null;
-            },
-            ({ duplicateNote, client }) =>
-              duplicateNote(client, account, doc, notebookId, target.id),
+          const copy = await failInSession(current, () =>
+            inSession(
+              current,
+              async () => {
+                const { duplicateNote } = await import("./note-tools");
+                const client = liveRef.current?.client;
+                return client ? { duplicateNote, client } : null;
+              },
+              ({ duplicateNote, client }) =>
+                duplicateNote(client, account, doc, notebookId, target.id),
+            ),
           );
-          if (!copy.sent || !copy.current) return;
+          if (!copy?.sent || !copy.current) return;
           return toast("Duplicated", {
             label: "Open",
             run: () => void openRemote(copy.result),
