@@ -43,6 +43,7 @@ describe("note actions", () => {
 
   test("History is for editors, outside Trash, and online (D13)", () => {
     expect(noteActions(note({ role: "edit" }), true)).toEqual([
+      "pin",
       "duplicate",
       "share",
       "history",

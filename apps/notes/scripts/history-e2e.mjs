@@ -26,6 +26,8 @@ import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { assertDevTarget } from "./dev-target.mjs";
+import { describeFailure, redact, secret } from "./redact.mjs";
 
 const require = createRequire(new URL("../package.json", import.meta.url));
 const { chromium, devices, expect } = require("@playwright/test");
@@ -33,20 +35,18 @@ const backend =
   process.env.NOTES_BACKEND_DIR ??
   fileURLToPath(new URL("../../notes-backend", import.meta.url));
 const app = process.env.NOTES_APP_URL ?? "http://localhost:5178";
+/** The step running now, named in a failure report. */
+let current = "start";
+const begin = (name) => {
+  current = name;
+};
 const step = (message) => console.log("✓ " + message);
 const shots = process.env.SCREENSHOT_DIR;
 const shot = (page, name) =>
   shots ? page.screenshot({ path: `${shots}/${name}.png` }) : undefined;
-if (
-  process.env.CONVEX_PROD ||
-  !/^dev:/.test(process.env.CONVEX_DEPLOYMENT ?? "")
-)
-  throw new Error(
-    "Run against a development deployment (CONVEX_DEPLOYMENT=dev:…).",
-  );
-const site = process.env.CONVEX_SITE_URL;
-const cloud = process.env.CONVEX_CLOUD_URL;
-assert.ok(site && cloud, "CONVEX_SITE_URL and CONVEX_CLOUD_URL are set");
+// Set by the development-target check, before anything is provisioned.
+let site = "";
+let cloud = "";
 
 function setupLink(email) {
   const result = spawnSync(
@@ -56,10 +56,12 @@ function setupLink(email) {
   );
   assert.equal(result.status, 0, "setup link created");
   const out = result.stdout;
-  return `${app}/invite#${JSON.parse(out.slice(out.indexOf("{"))).token}`;
+  const token = secret(JSON.parse(out.slice(out.indexOf("{"))).token);
+  return `${app}/invite#${token}`;
 }
 
-const secret = () => randomBytes(18).toString("base64url");
+/** A fresh password, registered so it is never printed. */
+const password = () => secret(randomBytes(18).toString("base64url"));
 const address = (name) =>
   `history-${name.toLowerCase()}-${randomBytes(4).toString("hex")}@example.test`;
 
@@ -78,7 +80,12 @@ async function dismissPasskeyOffer(page) {
 }
 
 const only = (process.env.HISTORY_E2E_STEPS ?? "").split(",").filter(Boolean);
-const wanted = (name) => !only.length || only.includes(name);
+/** Whether to run a step; a step that runs is the one a failure names. */
+const wanted = (name) => {
+  const run = !only.length || only.includes(name);
+  if (run) begin(name);
+  return run;
+};
 
 /** The Convex function a client-to-server message runs, if it is a mutation. */
 function mutationPath(message) {
@@ -158,19 +165,19 @@ async function newContext(options = {}) {
 /** With HISTORY_E2E_DEBUG set, report page errors, failed requests and reloads. */
 function watch(page, name) {
   if (!process.env.HISTORY_E2E_DEBUG) return;
-  page.on("pageerror", (error) =>
-    console.log(`[${name}] page error: ${error.message}`),
-  );
+  // Page text can carry links, tokens or note content: only redacted, short.
+  const log = (text) => console.log(`[${name}] ${redact(text).slice(0, 300)}`);
+  page.on("pageerror", (error) => log(`page error: ${error.message}`));
   page.on("console", (message) => {
     if (message.type() === "error" || message.type() === "warning")
-      console.log(`[${name}] console ${message.type()}: ${message.text()}`);
+      log(`console ${message.type()}: ${message.text()}`);
   });
   page.on("requestfailed", (request) =>
-    console.log(`[${name}] request failed: ${new URL(request.url()).pathname}`),
+    log(`request failed: ${new URL(request.url()).pathname}`),
   );
   page.on("framenavigated", (frame) => {
     if (frame === page.mainFrame())
-      console.log(`[${name}] navigated: ${new URL(frame.url()).pathname}`);
+      log(`navigated: ${new URL(frame.url()).pathname}`);
   });
 }
 
@@ -265,11 +272,34 @@ async function saved(page) {
   });
 }
 
+// Anything thrown outside the steps is reported the same safe way.
+process.on("unhandledRejection", (failure) => {
+  console.error(
+    `history-e2e failed during "${current}": ${describeFailure(failure)}`,
+  );
+  process.exit(1);
+});
+
 const browser = await chromium.launch({ headless: true });
 try {
+  // Everything must point at one development deployment, checked before any
+  // account is provisioned: the environment and the CLI's env files, the
+  // CLI's effective deployment, and the app's actual endpoints.
+  begin("development target");
+  const target = await assertDevTarget({
+    env: process.env,
+    backendDir: backend,
+    browser,
+    appUrl: app,
+  });
+  site = target.site;
+  cloud = target.cloud;
+  step(`everything points at the development deployment ${target.name}`);
+
+  begin("setup");
   // Ada owns the note; Cy may edit it; Bo may only read it.
   const adaEmail = address("ada");
-  const adaPassword = secret();
+  const adaPassword = password();
   const deskA = await newContext();
   const a = await acceptLink(deskA, setupLink(adaEmail), "Ada", adaPassword);
   const { noteId } = await convex(a, "mutation", "notes:createFromMarkdown", {
@@ -283,10 +313,11 @@ try {
         role,
       })
     ).token;
-  const cyLink = `${app}/invite#${await invite("edit")}`;
-  const boLink = `${app}/invite#${await invite("read")}`;
+
+  const cyLink = `${app}/invite#${secret(await invite("edit"))}`;
+  const boLink = `${app}/invite#${secret(await invite("read"))}`;
   const deskC = await newContext();
-  const c = await acceptLink(deskC, cyLink, "Cy", secret());
+  const c = await acceptLink(deskC, cyLink, "Cy", password());
   step("Ada's note, shared with Cy (can edit) by invitation");
 
   const editorA = await openNote(a, "Recipe");
@@ -316,7 +347,9 @@ try {
   const restoreButton = history.getByRole("button", {
     name: "Restore this version…",
   });
-  const waiting = history.getByText("Waiting for your changes to save…");
+  const waiting = history.getByText(
+    "Waiting for your changes in this window to save…",
+  );
   const offline = history.getByText(
     "Not connected. Restore when the connection is back.",
   );
@@ -601,6 +634,114 @@ try {
     );
   }
 
+  if (wanted("r2-1")) {
+    // Review round 2, R2-1: Ada's restore is held in flight. History cannot
+    // be dismissed and the note is read-only here; after the patience time
+    // History may close, but the note stays read-only, so typing (with its
+    // push held, as the reviewer did) cannot start; then the restore lands
+    // and editing resumes.
+    await openHistory();
+    await rows.nth(1).click();
+    await expect(versionText).not.toContainText("After restore.", {
+      timeout: 20_000,
+    });
+    deskA.gate.hold("history:restore");
+    await restoreButton.click();
+    await history.getByRole("button", { name: "Restore", exact: true }).click();
+    await expect.poll(() => deskA.gate.held("history:restore")).toBe(1);
+    await a.keyboard.press("Escape");
+    await expect(history).toBeVisible();
+    await expect(history.getByRole("button", { name: "Done" })).toBeDisabled();
+    await expect(
+      history.getByRole("button", { name: "Restoring…" }),
+    ).toBeDisabled();
+    await expect(editorA).toHaveAttribute("contenteditable", "false");
+    await expect(a.locator(".save-status")).toHaveText(/^Restoring a version/);
+    await expect(history.getByText(/^Still restoring/)).toBeVisible({
+      timeout: 30_000,
+    });
+    await shot(a, "desktop-restore-stalled");
+    await closeHistory();
+    await expect(editorA).toHaveAttribute("contenteditable", "false");
+    deskA.gate.hold("notes:push");
+    await editorA.click();
+    await a.keyboard.press("Control+End");
+    await a.keyboard.type(" Typed while restoring.");
+    await a.waitForTimeout(1_000);
+    await expect(editorA).not.toContainText("Typed while restoring.");
+    assert.equal(deskA.gate.held("notes:push"), 0, "nothing was typed");
+    deskA.gate.release("history:restore");
+    await expect(a.locator(".toast")).toContainText(
+      "Restored the version from Today",
+      { timeout: 20_000 },
+    );
+    await expect(editorA).not.toContainText("After restore.", {
+      timeout: 20_000,
+    });
+    await expect(editorA).toHaveAttribute("contenteditable", "true", {
+      timeout: 20_000,
+    });
+    deskA.gate.release("notes:push");
+    await typeAtEnd(a, editorA, " Resumed.");
+    await saved(a);
+    const newest = (await convex(a, "query", "history:list", { noteId }))
+      .versions[0];
+    const now = await convex(a, "query", "history:read", {
+      noteId,
+      revision: newest.revision,
+    });
+    assert.ok(now.markdown.includes("Resumed."), "typing resumed and saved");
+    assert.ok(!now.markdown.includes("After restore."), "the restore applied");
+    step(
+      "review R2-1: while a restore is in flight, History stays open and the note stays read-only, even after History closes",
+    );
+  }
+
+  if (wanted("tab")) {
+    // Review round 2, R2-4, the known gap (fundamentals, not changed): a
+    // second tab of the same browser journals unsent typing, but this
+    // window's guard learns nothing of it, Restore is allowed, and the other
+    // tab's typing is lost.
+    const a2 = await deskA.newPage();
+    watch(a2, "Ada tab 2");
+    await a2.goto(`${app}/notes/${noteId}`);
+    const editorA2 = a2.getByRole("textbox", { name: "Note content" });
+    await expect(editorA2).toHaveAttribute("contenteditable", "true", {
+      timeout: 20_000,
+    });
+    await expect(editorA2).toContainText("Resumed.", { timeout: 20_000 });
+    deskA.gate.hold("notes:push");
+    await typeAtEnd(a2, editorA2, " Other tab.");
+    await expect(a2.locator(".save-status")).toHaveText("Saving…");
+    await expect(
+      a2.getByRole("button", { name: /^Recipe\b/ }).first(),
+    ).toContainText("Unsaved changes", { timeout: 10_000 });
+    await a.bringToFront();
+    await openHistory();
+    await rows.nth(1).click();
+    await expect(restoreButton).toBeEnabled({ timeout: 20_000 });
+    await expect(waiting).toHaveCount(0);
+    await expect(recipeRow).not.toContainText("Unsaved changes");
+    await restoreButton.click();
+    await history.getByRole("button", { name: "Restore", exact: true }).click();
+    await expect(history).toBeHidden({ timeout: 20_000 });
+    await expect(editorA2).not.toContainText("Resumed.", { timeout: 20_000 });
+    deskA.gate.release("notes:push");
+    await a2.waitForTimeout(2_000);
+    await expect(editorA2).not.toContainText("Other tab.");
+    const newest = (await convex(a, "query", "history:list", { noteId }))
+      .versions[0];
+    const now = await convex(a, "query", "history:read", {
+      noteId,
+      revision: newest.revision,
+    });
+    assert.ok(!now.markdown.includes("Other tab."), "the other tab's word");
+    await a2.close();
+    step(
+      "known gap, not changed (R2-4): another tab's unsent typing is invisible to this window's guard and lost on restore",
+    );
+  }
+
   if (wanted("paging")) {
     // More versions than one page holds.
     const paging = await convex(a, "mutation", "notes:createFromMarkdown", {
@@ -658,7 +799,7 @@ try {
   if (wanted("reader")) {
     // Bo can only read: no History anywhere, and the server refuses it.
     const deskB = await newContext();
-    const b = await acceptLink(deskB, boLink, "Bo", secret());
+    const b = await acceptLink(deskB, boLink, "Bo", password());
     await openNote(b, "Recipe", false);
     await expect(b.getByRole("button", { name: "Note info" })).toBeVisible({
       timeout: 20_000,
@@ -669,6 +810,7 @@ try {
     await b.getByRole("button", { name: "More actions" }).click();
     const bMenu = b.getByRole("dialog", { name: "Actions for Recipe" });
     await expect(bMenu.getByRole("menuitem")).toHaveText([
+      "Pin",
       "Duplicate",
       "Export as Markdown",
       "Print or save as PDF",
@@ -679,6 +821,7 @@ try {
       .first()
       .click({ button: "right" });
     await expect(bMenu.getByRole("menuitem")).toHaveText([
+      "Pin",
       "Duplicate",
       "Share…",
       "Info",
@@ -735,6 +878,7 @@ try {
     await phone.getByRole("button", { name: "More actions" }).click();
     const sheet = phone.getByRole("dialog", { name: "Actions for Recipe" });
     await expect(sheet.getByRole("menuitem")).toHaveText([
+      "Pin",
       "Duplicate",
       "Move…",
       "Share…",
@@ -785,24 +929,29 @@ try {
   }
   console.log("All history checks passed.");
 } catch (failure) {
+  // Only the step and a redacted, short message: raw failures can carry
+  // invitation links, passwords or tokens.
+  console.error(
+    `history-e2e failed during "${current}": ${describeFailure(failure)}`,
+  );
+  process.exitCode = 1;
   if (process.env.HISTORY_E2E_DEBUG)
     for (const open of browser.contexts().flatMap((c) => c.pages()))
-      console.log(
-        await open.evaluate(() =>
-          JSON.stringify({
-            path: location.pathname,
-            dialogs: [...document.querySelectorAll("dialog")].map((d) => [
-              d.className,
-              d.open,
-              d.getAttribute("aria-label"),
-            ]),
-            failure: document.querySelector(".panel-failure")?.textContent,
-            toasts: [...document.querySelectorAll(".toast")].map(
-              (t) => t.textContent,
-            ),
-            error: document.querySelector(".note-surface > .error")
-              ?.textContent,
-          }),
+      console.error(
+        redact(
+          await open
+            .evaluate(() =>
+              JSON.stringify({
+                path: location.pathname,
+                dialogs: [...document.querySelectorAll("dialog")].map((d) => [
+                  d.className,
+                  d.open,
+                ]),
+                toasts: [...document.querySelectorAll(".toast")].length,
+                panelFailure: !!document.querySelector(".panel-failure"),
+              }),
+            )
+            .catch(() => "(page unavailable)"),
         ),
       );
   // A picture of each page at the failure, for the person debugging it.
@@ -813,7 +962,6 @@ try {
     await open
       .screenshot({ path: `/tmp/history-e2e-failure-${i}.png` })
       .catch(() => undefined);
-  throw failure;
 } finally {
   await browser.close();
 }

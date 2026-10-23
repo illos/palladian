@@ -80,12 +80,17 @@ export class RestoreRequests {
 }
 
 /**
- * Why this device may not restore right now, if it may not. A restore
+ * Why this window may not restore right now, if it may not. A restore
  * replaces the whole note; typing this window has not yet sent would be
  * rebased onto the replaced text and lost, so the restore waits until the
  * note's open editor here reports everything saved (nothing unsent, nothing
- * in flight, no failure) and no unsent edits are journaled for it. It also
- * needs the connection, to read the current revision it expects to replace.
+ * in flight, no failure) and this window knows of no unsent edits journaled
+ * for it. It also needs the connection, to read the current revision it
+ * expects to replace.
+ *
+ * This covers this window only. Another tab learns nothing from this one's
+ * cache notifications, and other devices are out of reach: their unsent
+ * typing is still replaced (a known gap in collaboration, outside History).
  */
 export type RestoreHold = "offline" | "unsaved" | null;
 
@@ -106,6 +111,29 @@ export function restoreHold(state: {
   if (state.open?.kind === "live" && state.open.status !== "saved")
     return "unsaved";
   return null;
+}
+
+/** How a restore request ended. */
+export type RestoreOutcome =
+  | { kind: "restored" }
+  /** The note changed first; nothing was restored. */
+  | { kind: "conflict" }
+  /** The request failed without an answer; repeating it is safe. */
+  | { kind: "unanswered" }
+  | { kind: "refused"; message: string };
+
+/** What a toast says about a restore that did not apply, once History is closed. */
+export function restoreOutcomeText(
+  outcome: Exclude<RestoreOutcome, { kind: "restored" }>,
+): string {
+  switch (outcome.kind) {
+    case "conflict":
+      return "The restore did not apply: the note changed first.";
+    case "unanswered":
+      return "The restore did not reach the server. Open History to try again.";
+    case "refused":
+      return `The restore did not apply: ${outcome.message}`;
+  }
 }
 
 export interface VersionPageResult {

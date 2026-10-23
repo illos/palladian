@@ -18,7 +18,12 @@ import type {
 } from "./cache";
 import { emptyDocument, validateCachedDocument } from "./document";
 import { dayAndTime, smartDate } from "./dates";
-import { restoreHold } from "./versions";
+import {
+  restoreHold,
+  restoreOutcomeText,
+  type RestoreOutcome,
+  type Version,
+} from "./versions";
 import { EditorSurface } from "./EditorSurface";
 import { Icon } from "./Icons";
 import { Appearance } from "./Appearance";
@@ -221,6 +226,17 @@ export function App({
   const shownTab = settingsTab ?? (phone ? null : "account");
   const [section, setSection] = useState<Section>({ kind: "all" });
   const [dialog, setDialog] = useState<Dialog>(null);
+  const dialogRef = useRef(dialog);
+  dialogRef.current = dialog;
+  /**
+   * Restores sent from this window and not yet answered. Each one's note
+   * stays read-only here until it settles, or until the note is opened again,
+   * so no typing can start that the whole-note replacement would drop.
+   */
+  const [restorings, setRestorings] = useState<
+    { token: number; noteId: string; opening: number; since: number }[]
+  >([]);
+  const restoreTokens = useRef(0);
   const [menu, setMenu] = useState<Menu | null>(null);
   /** The note row resting open after a swipe; one at a time. */
   const [openSwipe, setOpenSwipe] = useState<string | null>(null);
@@ -1295,8 +1311,18 @@ export function App({
       : section.kind === "notebook"
         ? (notebooks.find((n) => n.id === section.id)?.name ?? "Notebook")
         : "All notes";
+  // A restore of the open note is in flight from this window, sent while
+  // this opening of the note was shown.
+  const restoreLocked =
+    !!currentOpen &&
+    restorings.some(
+      (restore) =>
+        restore.noteId === currentOpen.id &&
+        currentOpen.opening <= restore.opening,
+    );
   const editable =
     !!currentOpen &&
+    !restoreLocked &&
     (currentOpen.kind === "draft" ||
       (currentOpen.kind === "live" &&
         !currentOpen.trashed &&
@@ -1314,7 +1340,9 @@ export function App({
             : "Cached copy — read only"
           : currentOpen.trashed
             ? "In Trash — restore to edit"
-            : channelLabel(channelStatus, !!currentOpen.channel?.ready);
+            : restoreLocked
+              ? "Restoring a version — editing resumes when it is done"
+              : channelLabel(channelStatus, !!currentOpen.channel?.ready);
   const sessionStatus =
     statusLabels[snapshot.status] +
     (snapshot.status === "ready" && live && !liveState.connected
@@ -1354,6 +1382,36 @@ export function App({
   useEffect(() => {
     if (menuStale) setMenu(null);
   }, [menuStale]);
+  /** A restore is being sent: hold its note read-only in this window. */
+  function restoreStarted(noteId: string) {
+    const token = ++restoreTokens.current;
+    setRestorings((list) => [
+      ...list,
+      { token, noteId, opening: openings.current, since: Date.now() },
+    ]);
+    return token;
+  }
+  /**
+   * The server answered a restore (or the request failed): editing resumes.
+   * The History panel reports the outcome while it shows this note; if it
+   * was closed in the meantime, a toast does.
+   */
+  function restoreSettled(
+    token: number,
+    noteId: string,
+    outcome: RestoreOutcome,
+    version: Version,
+  ) {
+    setRestorings((list) => list.filter((restore) => restore.token !== token));
+    const showing =
+      dialogRef.current?.kind === "history" &&
+      dialogRef.current.noteId === noteId;
+    if (outcome.kind === "restored") {
+      if (showing) setDialog(null);
+      toast(`Restored the version from ${dayAndTime(version.endedAt)}`);
+    } else if (!showing) toast(restoreOutcomeText(outcome));
+  }
+
   // History closes once the note no longer offers it to this person: a lost
   // edit role, Trash, or the note gone. The note as it is now comes from its
   // row (or the open note, which follows its row); a server note with unsent
@@ -2097,13 +2155,15 @@ export function App({
               noteId={dialog.noteId}
               title={dialog.title}
               restoreHold={historyHold}
+              restoring={
+                restorings.find((restore) => restore.noteId === dialog.noteId)
+                  ?.since ?? null
+              }
               onClose={() => setDialog(null)}
-              onRestored={(version) => {
-                setDialog(null);
-                toast(
-                  `Restored the version from ${dayAndTime(version.endedAt)}`,
-                );
-              }}
+              onRestoreStart={() => restoreStarted(dialog.noteId)}
+              onRestoreSettled={(token, outcome, version) =>
+                restoreSettled(token, dialog.noteId, outcome, version)
+              }
             />
           </Suspense>
         </PanelBoundary>
