@@ -16,6 +16,7 @@ import {
   mutation,
   query,
   type MutationCtx,
+  type QueryCtx,
 } from "./_generated/server";
 import {
   accessibleNotebooks,
@@ -96,17 +97,26 @@ function checkSources(sourceNoteIds: Id<"notes">[]) {
 }
 
 /** Whether this person deleted the notebook themselves (`deletedNotebooks`). */
+export async function deletedBy(
+  ctx: QueryCtx | MutationCtx,
+  personId: Id<"principals">,
+  notebookId: Id<"notebooks">,
+) {
+  const record = await ctx.db
+    .query("deletedNotebooks")
+    .withIndex("by_notebook", (q) => q.eq("notebookId", notebookId))
+    .first();
+  return record !== null && record.ownerId === personId;
+}
+
 async function deletedByCaller(
   ctx: MutationCtx,
   actor: Principal,
   notebookId: Id<"notebooks">,
 ) {
-  if (actor.kind !== "human") return false;
-  const record = await ctx.db
-    .query("deletedNotebooks")
-    .withIndex("by_notebook", (q) => q.eq("notebookId", notebookId))
-    .first();
-  return record !== null && record.ownerId === actor._id;
+  return (
+    actor.kind === "human" && (await deletedBy(ctx, actor._id, notebookId))
+  );
 }
 
 function editFailure(error: unknown): never {

@@ -114,11 +114,13 @@ describe("review round 2", () => {
     ["old-mine", "owner"],
     ["old-team", "edit"],
   ]);
+  const deletedByMe = new Set(["server-says-mine"]);
   const lost = (id: string, notebookId?: string) =>
     draftNotebookLost(
       { id, ...(notebookId ? { notebookId } : {}) },
       listed,
       (notebook) => seen.get(notebook),
+      (notebook) => deletedByMe.has(notebook),
     );
 
   test("R2-1: an uncreated draft is lost when its notebook stops taking the person's notes", () => {
@@ -136,5 +138,37 @@ describe("review round 2", () => {
     // No notebook (the default), and notes already on the server.
     expect(lost("local-1")).toBe(false);
     expect(lost("server-note", "old-team")).toBe(false);
+  });
+});
+
+describe("review round 3", () => {
+  const listed = [{ id: "team", role: "edit" as const }];
+  const lost = (
+    id: string,
+    notebookId: string,
+    lastRole?: "owner" | "edit" | "read",
+    serverSaysMine = false,
+  ) =>
+    draftNotebookLost(
+      { id, notebookId },
+      listed,
+      () => lastRole,
+      () => serverSaysMine,
+    );
+  const uuid = "123e4567-e89b-42d3-a456-426614174000";
+
+  test("R3-2: drafts with bare UUIDs from earlier offline creation count as uncreated", () => {
+    expect(lost(uuid, "gone")).toBe(true);
+    expect(lost(uuid, "team")).toBe(false);
+    expect(lost("server-note", "gone")).toBe(false);
+  });
+
+  test("R3-4: unknown ownership is not permission; the server's answer or this tab's evidence is", () => {
+    // After a reload or in a new tab, nothing is known until the server says.
+    expect(lost("local-1", "gone")).toBe(true);
+    expect(lost("local-1", "gone", undefined, true)).toBe(false);
+    expect(lost("local-1", "gone", "owner")).toBe(false);
+    // Someone else's notebook stays lost.
+    expect(lost("local-1", "gone", "edit")).toBe(true);
   });
 });

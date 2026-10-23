@@ -1214,3 +1214,134 @@ describe("review round 2 regressions", () => {
     );
   });
 });
+
+describe("review round 3 regressions", () => {
+  test("R3-4: the app can ask which notebooks the person deleted themselves", async () => {
+    const t = setup();
+    const ada = await human(t, "Ada");
+    const bea = await human(t, "Bea");
+    const journal = await notebook(ada, "Journal");
+    const team = await notebook(bea, "Team");
+    const kept = await notebook(ada, "Kept");
+    await share(t, team, ada.id, "edit", bea.id);
+    await removeAll(ada, journal, ada.notebookId, false);
+    await removeAll(bea, team, bea.notebookId, false);
+    const ask = [journal, team, kept, "not-an-id"];
+    // Only Ada's own deletion; Bea's, a live notebook and nonsense are left out.
+    expect(
+      await ada.as.query(api.notebooks.deletedByMe, { notebookIds: ask }),
+    ).toEqual([journal]);
+    expect(
+      await bea.as.query(api.notebooks.deletedByMe, { notebookIds: ask }),
+    ).toEqual([team]);
+    const claude = await agent(t, ada.id, ["share", "move", "delete"]);
+    await expect(
+      claude.as.query(api.notebooks.deletedByMe, { notebookIds: ask }),
+    ).rejects.toThrow(/Only people/);
+    await expect(
+      t.query(api.notebooks.deletedByMe, { notebookIds: ask }),
+    ).rejects.toThrow(/Sign in/);
+    await expect(
+      ada.as.query(api.notebooks.deletedByMe, {
+        notebookIds: Array.from({ length: 101 }, () => journal),
+      }),
+    ).rejects.toThrow(/at most 100/);
+  });
+
+  test("R3-5: deletion works with A6's arrangement: quotas, versions, pins, positions, accounts", async () => {
+    const t = setup(true);
+    const ada = await human(t, "Ada");
+    const bea = await human(t, "Bea");
+    const journal = await notebook(ada, "Journal");
+    const first = await note(ada, journal, "First");
+    const second = await note(ada, journal, "Second");
+    const write = <Args extends Record<string, unknown>>(args: Args) => ({
+      account: ada.account,
+      ...args,
+    });
+    await ada.as.mutation(
+      api.arrangement.setPin,
+      write({ noteId: first, pinned: true }),
+    );
+    await ada.as.mutation(
+      api.arrangement.setPositions,
+      write({
+        notebookId: journal,
+        entries: [
+          { noteId: first, key: "V" },
+          { noteId: second, key: "k" },
+        ],
+      }),
+    );
+    // 100 sort orders, the quota: All Notes, Journal and 98 other notebooks.
+    const others = await t.run(async (ctx) => {
+      const ids: Id<"notebooks">[] = [];
+      for (let i = 0; i < 99; i++) {
+        const notebookId = await ctx.db.insert("notebooks", {
+          ownerId: ada.id,
+          name: `Book ${i}`,
+          description: "",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+        await ctx.db.insert("notebookSequences", { notebookId, seq: 0 });
+        ids.push(notebookId);
+      }
+      return ids;
+    });
+    for (const list of ["all", journal, ...others.slice(0, 98)])
+      await ada.as.mutation(
+        api.arrangement.setOrder,
+        write({ list, order: "alpha" }),
+      );
+    await expect(
+      ada.as.mutation(
+        api.arrangement.setOrder,
+        write({ list: others[98]!, order: "alpha" }),
+      ),
+    ).rejects.toThrow(/100 lists/);
+    const before = (await ada.as.query(api.arrangement.mine, {})).version;
+
+    await removeAll(ada, journal, ada.notebookId, false);
+    // The deletion writes no arrangement version of its own.
+    const after = await ada.as.query(api.arrangement.mine, {});
+    expect(after.version).toBe(before);
+    // Pins follow the moved note; Journal's order is hidden at once.
+    expect(after.pins.map((pin) => pin.noteId)).toEqual([first]);
+    expect(after.orders.some((row) => row.list === journal)).toBe(false);
+    // A position set in the destination before cleanup runs survives it.
+    await ada.as.mutation(
+      api.arrangement.setPositions,
+      write({
+        notebookId: ada.notebookId,
+        entries: [{ noteId: first, key: "M" }],
+      }),
+    );
+    // At the quota, Journal's leftover order is reclaimed for a new list,
+    // even before its scheduled cleanup has run.
+    expect(
+      await ada.as.mutation(
+        api.arrangement.setOrder,
+        write({ list: others[98]!, order: "alpha" }),
+      ),
+    ).toEqual({ version: before + 2 });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    const settled = await ada.as.query(api.arrangement.mine, {});
+    expect(settled.version).toBe(before + 2);
+    expect(settled.positions).toEqual([
+      { notebookId: ada.notebookId, noteId: first, key: "M" },
+    ]);
+    expect(settled.pins.map((pin) => pin.noteId)).toEqual([first]);
+    // A write naming another account is refused and changes nothing.
+    await expect(
+      ada.as.mutation(api.arrangement.setOrder, {
+        account: bea.account,
+        list: "all",
+        order: "edited",
+      }),
+    ).rejects.toThrow(/another account/);
+    expect((await ada.as.query(api.arrangement.mine, {})).version).toBe(
+      before + 2,
+    );
+  });
+});

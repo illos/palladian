@@ -16,7 +16,7 @@ import {
   type Principal,
 } from "./access";
 import { moveNote } from "./lifecycle";
-import { changeLifecycle } from "./notes";
+import { changeLifecycle, deletedBy } from "./notes";
 import { changeRestriction } from "./sharing";
 
 export function cleanName(name: string) {
@@ -211,6 +211,30 @@ async function hasMembers(
     .first();
   return member !== null;
 }
+
+/**
+ * Which of these notebooks the caller deleted themselves (review round 3).
+ * The app keeps a draft for such a notebook available, because notes.create
+ * files it in the caller's default notebook; for any other notebook that has
+ * gone, the draft is not shown (D86). Only the caller's own deletions are
+ * reported; other IDs, valid or not, are left out.
+ */
+export const deletedByMe = query({
+  args: { notebookIds: v.array(v.string()) },
+  returns: v.array(v.id("notebooks")),
+  handler: async (ctx, args) => {
+    const person = await requireHuman(ctx);
+    if (args.notebookIds.length > 100)
+      fail("too_large", "Ask about at most 100 notebooks at once.");
+    const mine: Id<"notebooks">[] = [];
+    for (const raw of args.notebookIds) {
+      const notebookId = ctx.db.normalizeId("notebooks", raw);
+      if (notebookId && (await deletedBy(ctx, person._id, notebookId)))
+        mine.push(notebookId);
+    }
+    return mine;
+  },
+});
 
 /** How much the deletion preview examines before saying it is not exact. */
 const PREVIEW_MEMBERS = 200;

@@ -401,7 +401,9 @@ try {
   // a notebook the owner deletes meanwhile (on the desktop) lands in the
   // owner's default notebook instead of being lost. Only the owner's devices
   // get this; a collaborator's draft is refused as before (D86).
-  await convex(page, "mutation", "notebooks:create", { name: "Later" });
+  const later = await convex(page, "mutation", "notebooks:create", {
+    name: "Later",
+  });
   await phone.getByRole("button", { name: "Menu" }).click();
   const laterItem = sheet.getByRole("button", { name: "Later", exact: true });
   await expect(laterItem).toBeVisible({ timeout: 20_000 });
@@ -431,6 +433,20 @@ try {
   await expect(page.getByText("Deleted “Later”")).toBeVisible({
     timeout: 30_000,
   });
+  // Review round 3: the server tells the owner (and only the owner) that
+  // they deleted it, which is how a reloaded tab keeps such a draft available.
+  assert.deepEqual(
+    await convex(page, "query", "notebooks:deletedByMe", {
+      notebookIds: [later, archive],
+    }),
+    [later],
+  );
+  assert.deepEqual(
+    await convex(bea, "query", "notebooks:deletedByMe", {
+      notebookIds: [later, journal],
+    }),
+    [],
+  );
   await phoneContext.setOffline(false);
   await expect
     .poll(

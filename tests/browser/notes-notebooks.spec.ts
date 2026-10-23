@@ -343,7 +343,29 @@ async function typeNewNote(page: Page, phone: boolean, text: string) {
   if (phone) await page.getByRole("button", { name: "All notes" }).click();
 }
 
-test("review round 2, R2-1: a draft for a notebook that stops taking the person's notes is not shown", async ({
+/** Local drafts' IDs by title, read from the device store (not the screen). */
+async function draftIds(page: Page) {
+  return page.evaluate(async () => {
+    type Store = {
+      list(accountId: string): Promise<{ id: string; title: string }[]>;
+    };
+    const store = (window as unknown as { __notesHarness: { store: Store } })
+      .__notesHarness.store;
+    return Object.fromEntries(
+      (await store.list("fixture-account"))
+        .filter(
+          (row) => row.id !== "fixture-welcome" && row.id !== "fixture-long",
+        )
+        .map((row) => [row.title, row.id]),
+    );
+  });
+}
+
+/** A note's row in the list, found by its ID rather than its text. */
+const rowOf = (page: Page, id: string) =>
+  page.locator(`.note-row-wrap[data-note-id="${id}"]`);
+
+test("review rounds 2-3: a draft for a notebook that stops taking the person's notes is not shown, opened or searched", async ({
   page,
 }, info) => {
   await seed(page);
@@ -359,40 +381,121 @@ test("review round 2, R2-1: a draft for a notebook that stops taking the person'
     "Team draft": "book-team",
     "Journal draft": "book-journal",
   });
+  const ids = await draftIds(page);
+  const teamRow = rowOf(page, ids["Team draft"]!);
+  const journalRow = rowOf(page, ids["Journal draft"]!);
+  const editor = page.getByRole("textbox", { name: "Note content" });
   if (!phone) {
     // The owner's draft is open; open the collaborator's one from All Notes.
     await nav.getByRole("button", { name: /^All Notes/ }).click();
-    await page.getByRole("button", { name: /^Team draft/ }).click();
-    await expect(
-      page.getByRole("textbox", { name: "Note content" }),
-    ).toContainText("Team draft");
+    await teamRow.locator(".note-row").click();
+    await expect(editor).toContainText("Team draft");
   }
 
   // Team's owner deletes it, and Journal goes too (its owner is this person).
   await listNotebooks(page, ["book-notes", "book-recipes"]);
-  const editor = page.getByRole("textbox", { name: "Note content" });
   await expect(editor).toBeHidden();
   if (!phone)
     await expect(page.getByRole("alert")).toContainText(
       "no longer takes your notes",
     );
-  const teamRow = page.getByRole("button", { name: /^Team draft/ });
+  // The row stays, without any of the draft's text.
   await expect(teamRow.locator(".row-unavailable")).toHaveText("Not available");
-  // Its text is not shown in the list either.
-  await expect(teamRow.locator(".row-preview")).toHaveText(
-    "Its notebook no longer takes your notes",
-  );
-  await teamRow.click();
+  await expect(teamRow.locator("strong")).toHaveText("Unavailable draft");
+  await expect(teamRow).not.toContainText("Team draft");
+  await expect(page.locator(".note-list")).not.toContainText("Team draft");
+  await teamRow.locator(".note-row").click();
   await expect(editor).toBeHidden();
-  // The person's own draft stays available: the server files it in their
-  // default notebook.
-  const journalRow = page.getByRole("button", { name: /^Journal draft/ });
+  // Searching does not find it by its text.
+  const search = page.getByRole("searchbox", { name: "Search notes" });
+  await search.fill("Team draft");
+  await expect(teamRow).toHaveCount(0);
+  await search.fill("");
+  await expect(teamRow).toHaveCount(1);
+  // The person's own draft stays available in this tab: the server files it
+  // in their default notebook.
   await expect(journalRow.locator(".row-unavailable")).toHaveCount(0);
-  await journalRow.click();
+  await journalRow.locator(".note-row").click();
   await expect(editor).toContainText("Journal draft");
   // Neither draft was sent somewhere else.
   expect(await draftNotebooks(page)).toEqual({
     "Team draft": "book-team",
     "Journal draft": "book-journal",
   });
+});
+
+test("review round 3, R3-2: a draft with a bare UUID is covered too, deep links included", async ({
+  page,
+}) => {
+  await seed(page);
+  const uuid = "123e4567-e89b-42d3-a456-426614174000";
+  // An offline draft from earlier app versions, which used bare UUIDs.
+  await page.evaluate(async (id) => {
+    type Store = { writeDraft(draft: unknown): Promise<void> };
+    const store = (window as unknown as { __notesHarness: { store: Store } })
+      .__notesHarness.store;
+    await store.writeDraft({
+      accountId: "fixture-account",
+      id,
+      document: JSON.stringify({
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "Secret plan" }],
+          },
+        ],
+      }),
+      text: "Secret plan",
+      updatedAt: Date.now(),
+      notebookId: "book-team",
+    });
+  }, uuid);
+  const row = rowOf(page, uuid);
+  const editor = page.getByRole("textbox", { name: "Note content" });
+  // While Team takes the person's notes, a deep link opens it.
+  await page.goto(`/notes/${uuid}?fixture=1&session=stall`);
+  await expect(editor).toContainText("Secret plan");
+  await listNotebooks(page, ["book-notes", "book-journal", "book-recipes"]);
+  await expect(editor).toBeHidden();
+  await expect(row.locator(".row-unavailable")).toHaveText("Not available");
+  await expect(row).not.toContainText("Secret plan");
+  await row.locator(".note-row").click();
+  await expect(editor).toBeHidden();
+  // A deep link no longer opens it either, after a reload.
+  await page.goto(`/notes/${uuid}?fixture=1&session=stall`);
+  await expect(row.locator(".row-unavailable")).toHaveText("Not available");
+  await page.waitForTimeout(500);
+  await expect(editor).toBeHidden();
+  await expect(page.locator(".note-list")).not.toContainText("Secret plan");
+});
+
+test("review round 3, R3-4: after a reload or in a new tab, unknown ownership does not make a draft available", async ({
+  page,
+}, info) => {
+  await seed(page);
+  const phone = info.project.name.includes("mobile");
+  const nav = await navigation(page, phone);
+  await nav.getByRole("button", { name: "Journal", exact: true }).click();
+  await typeNewNote(page, phone, "Journal draft");
+  const id = (await draftIds(page))["Journal draft"]!;
+  await listNotebooks(page, ["book-notes", "book-team", "book-recipes"]);
+  // This tab saw Journal as the person's own: the draft stays available.
+  await expect(rowOf(page, id).locator(".row-unavailable")).toHaveCount(0);
+  // Offline, nothing else is known after a reload, or in a new tab: the
+  // server's answer (notebooks.deletedByMe) is needed to show it again.
+  const second = await page.context().newPage();
+  await second.goto("/?fixture=1&session=stall");
+  await expect(rowOf(second, id).locator(".row-unavailable")).toHaveText(
+    "Not available",
+  );
+  await expect(rowOf(second, id)).not.toContainText("Journal draft");
+  await page.goto("/?fixture=1&session=stall");
+  await expect(rowOf(page, id).locator(".row-unavailable")).toHaveText(
+    "Not available",
+  );
+  await rowOf(page, id).locator(".note-row").click();
+  await expect(
+    page.getByRole("textbox", { name: "Note content" }),
+  ).toBeHidden();
 });

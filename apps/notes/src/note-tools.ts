@@ -36,6 +36,14 @@ export async function duplicateNote(
   return result.noteId;
 }
 
+/** Which of these notebooks the person deleted themselves (review round 3). */
+export async function deletedByMe(
+  client: ConvexReactClient,
+  notebookIds: string[],
+): Promise<string[]> {
+  return await client.query(api.notebooks.deletedByMe, { notebookIds });
+}
+
 /** Where new notes from All Notes go (owner's notebooks only). */
 export async function setDefaultNotebook(
   client: ConvexReactClient,

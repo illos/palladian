@@ -1,4 +1,5 @@
 import type { NoteRole } from "./cache";
+import { isLocalNoteId } from "./note-actions";
 
 /**
  * What can be done to a notebook from its menu (plan 08, A5): right-click or
@@ -106,19 +107,24 @@ export function previewMatches(
 
 /**
  * Whether an uncreated draft is aimed at a notebook that no longer takes
- * this person's notes: one gone from this device's list, unless it was their
- * own (the server files the owner's draft for a notebook they deleted in
- * their default notebook), or one that is read-only now. The app does not
- * open such a draft (review round 2, R2-1; D86). `lastRole` is the role the
- * notebook had when this device last listed it.
+ * this person's notes: one that is read-only now, or one gone from this
+ * device's list, unless there is evidence the person deleted it themselves
+ * (the server files the owner's draft for a notebook they deleted in their
+ * default notebook). The evidence is the role this tab last saw (`lastRole`)
+ * or the server's answer (`deletedByMe`); without either, ownership is
+ * unknown and the draft counts as lost (review rounds 2 and 3; D86). The app
+ * neither opens, shows nor searches such a draft.
  */
 export function draftNotebookLost(
   draft: { id: string; notebookId?: string | undefined },
   notebooks: readonly { id: string; role: NoteRole }[],
   lastRole: (notebookId: string) => NoteRole | undefined,
+  deletedByMe: (notebookId: string) => boolean,
 ): boolean {
-  if (!draft.id.startsWith("local-") || !draft.notebookId) return false;
+  if (!isLocalNoteId(draft.id) || !draft.notebookId) return false;
   const listed = notebooks.find((notebook) => notebook.id === draft.notebookId);
   if (listed) return listed.role === "read";
-  return lastRole(draft.notebookId) !== "owner";
+  return (
+    lastRole(draft.notebookId) !== "owner" && !deletedByMe(draft.notebookId)
+  );
 }

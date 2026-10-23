@@ -269,6 +269,16 @@ export function App({
   const listedNotebooks = useRef(new Map<string, NoteRole>());
   /** The notebook each draft started here is for; drafts keep it. */
   const draftTargets = useRef(new Map<string, string | undefined>());
+  /**
+   * Notebooks the server says this person deleted themselves (and those it
+   * was asked about), so their drafts stay available after a reload or in a
+   * new tab (review round 3, R3-4).
+   */
+  const [deletedByMe, setDeletedByMe] = useState<{
+    accountId: string | null;
+    asked: Set<string>;
+    mine: Set<string>;
+  }>({ accountId: null, asked: new Set(), mine: new Set() });
   /** The note row resting open after a swipe; one at a time. */
   const [openSwipe, setOpenSwipe] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -569,7 +579,7 @@ export function App({
     const id = pendingRoute.current;
     if (!id || !permitted || view !== "notes") return;
     const row = rows.find((r) => r.id === id);
-    if (row) void selectNote(row);
+    if (row) void openCachedRow(row);
     else if (liveReady) {
       pendingRoute.current = null;
       void openRemote(id);
@@ -829,9 +839,29 @@ export function App({
 
   /** An uncreated draft for a notebook that no longer takes its notes. */
   function draftLost(draft: { id: string; notebookId?: string | undefined }) {
-    return draftNotebookLost(draft, notebooks, (id) =>
-      listedNotebooks.current.get(id),
+    return draftNotebookLost(
+      draft,
+      notebooks,
+      (id) => listedNotebooks.current.get(id),
+      (id) => deletedByMe.accountId === accountId && deletedByMe.mine.has(id),
     );
+  }
+
+  /**
+   * Open a row, unless it is an uncreated draft whose notebook no longer
+   * takes this person's notes (review round 3): every way of opening a cached
+   * row goes through here, deep links included.
+   */
+  function openCachedRow(row: NoteSummary) {
+    if (draftLost(row)) {
+      if (pendingRoute.current === row.id) {
+        pendingRoute.current = null;
+        writeNotesPath(notePath(openRef.current));
+      }
+      setError(draftLostMessage);
+      return;
+    }
+    return selectNote(row);
   }
 
   async function persistDraft(
@@ -1357,8 +1387,11 @@ export function App({
   const orderedRows = listKey
     ? arrangeRows(sectionRows, arrangement, listKey, { pins: true })
     : sectionRows;
-  const visibleRows = orderedRows.filter((row) =>
-    (row.title + " " + row.preview).toLocaleLowerCase().includes(needle),
+  // An unavailable draft's text is not searched (review round 3).
+  const visibleRows = orderedRows.filter(
+    (row) =>
+      !(needle && draftLost(row)) &&
+      (row.title + " " + row.preview).toLocaleLowerCase().includes(needle),
   );
   /** Custom order: notes dragged into place; pinned notes stay on top. */
   const canReorder =
@@ -1385,6 +1418,57 @@ export function App({
       : section.kind === "notebook"
         ? (notebooks.find((n) => n.id === section.id)?.name ?? "Notebook")
         : "All notes";
+  // Drafts here for notebooks gone from the list, whose owner this tab never
+  // saw: ask the server whether this person deleted them. Until it answers,
+  // or while offline, ownership is unknown and the drafts stay unavailable
+  // (review round 3, R3-4).
+  const unknownOwnership = [
+    ...new Set(
+      rows
+        .filter(
+          (row) =>
+            row.accountId === accountId &&
+            isLocalNoteId(row.id) &&
+            row.notebookId !== undefined &&
+            !notebooks.some((notebook) => notebook.id === row.notebookId) &&
+            listedNotebooks.current.get(row.notebookId) === undefined &&
+            !(
+              deletedByMe.accountId === accountId &&
+              deletedByMe.asked.has(row.notebookId)
+            ),
+        )
+        .map((row) => row.notebookId!),
+    ),
+  ]
+    .sort()
+    .slice(0, 100)
+    .join(",");
+  useEffect(() => {
+    if (!liveReady || !live || !accountId || !unknownOwnership) return;
+    const ids = unknownOwnership.split(",");
+    let current = true;
+    void import("./note-tools")
+      .then((tools) => tools.deletedByMe(live.client, ids))
+      .then((mine) => {
+        if (!current || snapshotRef.current.accountId !== accountId) return;
+        setDeletedByMe((previous) => {
+          const known =
+            previous.accountId === accountId
+              ? previous
+              : { asked: new Set<string>(), mine: new Set<string>() };
+          return {
+            accountId,
+            asked: new Set([...known.asked, ...ids]),
+            mine: new Set([...known.mine, ...mine]),
+          };
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [liveReady, live, accountId, unknownOwnership]);
+
   // An open draft for a notebook that no longer takes this person's notes
   // (deleted or unshared by its owner, or read-only now) closes, and its row
   // does not open it again (review round 2, R2-1; D86). The sync core keeps
@@ -2061,8 +2145,7 @@ export function App({
                         event.dataTransfer.effectAllowed = "move";
                       }}
                       onClick={() => {
-                        if (draftLost(row)) return setError(draftLostMessage);
-                        void selectNote(row);
+                        void openCachedRow(row);
                       }}
                     >
                       <strong>
@@ -2071,7 +2154,9 @@ export function App({
                             <Icon name="pin" size={13} />
                           </span>
                         )}
-                        {row.title || "Untitled"}
+                        {draftLost(row)
+                          ? "Unavailable draft"
+                          : row.title || "Untitled"}
                       </strong>
                       <span className="row-detail">
                         <time dateTime={new Date(row.updatedAt).toISOString()}>
@@ -2101,7 +2186,7 @@ export function App({
                       {row.notebookId &&
                         !visibleNotebookIds.has(row.notebookId) &&
                         !row.trashed &&
-                        !row.id.startsWith("local-") && (
+                        !isLocalNoteId(row.id) && (
                           <small>Shared with you</small>
                         )}
                     </button>
@@ -2185,7 +2270,7 @@ export function App({
                     className="note-row"
                     onClick={() => {
                       const row = rows.find((r) => r.id === hit.summary.id);
-                      if (row) void selectNote(row);
+                      if (row) void openCachedRow(row);
                       else void openRemote(hit.summary.id);
                     }}
                   >
