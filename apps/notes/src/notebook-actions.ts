@@ -103,3 +103,22 @@ export function previewMatches(
     preview.trash === trash
   );
 }
+
+/**
+ * Whether an uncreated draft is aimed at a notebook that no longer takes
+ * this person's notes: one gone from this device's list, unless it was their
+ * own (the server files the owner's draft for a notebook they deleted in
+ * their default notebook), or one that is read-only now. The app does not
+ * open such a draft (review round 2, R2-1; D86). `lastRole` is the role the
+ * notebook had when this device last listed it.
+ */
+export function draftNotebookLost(
+  draft: { id: string; notebookId?: string | undefined },
+  notebooks: readonly { id: string; role: NoteRole }[],
+  lastRole: (notebookId: string) => NoteRole | undefined,
+): boolean {
+  if (!draft.id.startsWith("local-") || !draft.notebookId) return false;
+  const listed = notebooks.find((notebook) => notebook.id === draft.notebookId);
+  if (listed) return listed.role === "read";
+  return lastRole(draft.notebookId) !== "owner";
+}

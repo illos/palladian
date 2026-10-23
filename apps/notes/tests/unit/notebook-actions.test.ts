@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  draftNotebookLost,
   newNoteNotebook,
   notebookActions,
   notebookCounts,
@@ -98,5 +99,42 @@ describe("review round 1", () => {
     expect(previewMatches(preview, "archive", false)).toBe(true);
     expect(previewMatches(preview, "notes", false)).toBe(false);
     expect(previewMatches(preview, "archive", true)).toBe(false);
+  });
+});
+
+describe("review round 2", () => {
+  const listed = [
+    { id: "mine", role: "owner" as const },
+    { id: "team", role: "edit" as const },
+    { id: "recipes", role: "read" as const },
+  ];
+  const seen = new Map<string, "owner" | "edit" | "read">([
+    ["mine", "owner"],
+    ["team", "edit"],
+    ["old-mine", "owner"],
+    ["old-team", "edit"],
+  ]);
+  const lost = (id: string, notebookId?: string) =>
+    draftNotebookLost(
+      { id, ...(notebookId ? { notebookId } : {}) },
+      listed,
+      (notebook) => seen.get(notebook),
+    );
+
+  test("R2-1: an uncreated draft is lost when its notebook stops taking the person's notes", () => {
+    // Still listed and editable.
+    expect(lost("local-1", "mine")).toBe(false);
+    expect(lost("local-1", "team")).toBe(false);
+    // Read-only now.
+    expect(lost("local-1", "recipes")).toBe(true);
+    // Gone from the list: someone else's notebook, or one never seen here.
+    expect(lost("local-1", "old-team")).toBe(true);
+    expect(lost("local-1", "never-seen")).toBe(true);
+    // The person's own deleted notebook: the server files the draft in
+    // their default notebook, so it stays.
+    expect(lost("local-1", "old-mine")).toBe(false);
+    // No notebook (the default), and notes already on the server.
+    expect(lost("local-1")).toBe(false);
+    expect(lost("server-note", "old-team")).toBe(false);
   });
 });

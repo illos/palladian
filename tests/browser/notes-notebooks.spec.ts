@@ -307,3 +307,92 @@ test("review round 1, F1: a new note never goes to a notebook that does not take
   });
   expect(drafts).toEqual([null]);
 });
+
+/** The notebook each local draft is for, as this device stores it. */
+async function draftNotebooks(page: Page) {
+  return page.evaluate(async () => {
+    type Store = {
+      list(
+        accountId: string,
+      ): Promise<{ id: string; title: string; notebookId?: string }[]>;
+    };
+    const store = (window as unknown as { __notesHarness: { store: Store } })
+      .__notesHarness.store;
+    return Object.fromEntries(
+      (await store.list("fixture-account"))
+        .filter((row) => row.id.startsWith("local-"))
+        .map((row) => [row.title, row.notebookId ?? null]),
+    );
+  });
+}
+
+/** Start a note in the notebook shown and type a first line. */
+async function typeNewNote(page: Page, phone: boolean, text: string) {
+  const bar = phone
+    ? page.locator(".mobile-home-actions")
+    : page.locator(".library-header");
+  await bar.getByRole("button", { name: "New note" }).click();
+  const editor = page.getByRole("textbox", { name: "Note content" });
+  await expect(editor).toBeVisible();
+  await editor.click();
+  await page.keyboard.type(text);
+  await expect(
+    page.getByText("Draft saved on this device — not saved to server"),
+  ).toBeVisible();
+  // Leave the note so the list shows (phones show one or the other).
+  if (phone) await page.getByRole("button", { name: "All notes" }).click();
+}
+
+test("review round 2, R2-1: a draft for a notebook that stops taking the person's notes is not shown", async ({
+  page,
+}, info) => {
+  await seed(page);
+  const phone = info.project.name.includes("mobile");
+  // A collaborator's draft in Team, and the owner's draft in Journal.
+  let nav = await navigation(page, phone);
+  await nav.getByRole("button", { name: /^Team/ }).click();
+  await typeNewNote(page, phone, "Team draft");
+  nav = await navigation(page, phone);
+  await nav.getByRole("button", { name: "Journal", exact: true }).click();
+  await typeNewNote(page, phone, "Journal draft");
+  expect(await draftNotebooks(page)).toEqual({
+    "Team draft": "book-team",
+    "Journal draft": "book-journal",
+  });
+  if (!phone) {
+    // The owner's draft is open; open the collaborator's one from All Notes.
+    await nav.getByRole("button", { name: /^All Notes/ }).click();
+    await page.getByRole("button", { name: /^Team draft/ }).click();
+    await expect(
+      page.getByRole("textbox", { name: "Note content" }),
+    ).toContainText("Team draft");
+  }
+
+  // Team's owner deletes it, and Journal goes too (its owner is this person).
+  await listNotebooks(page, ["book-notes", "book-recipes"]);
+  const editor = page.getByRole("textbox", { name: "Note content" });
+  await expect(editor).toBeHidden();
+  if (!phone)
+    await expect(page.getByRole("alert")).toContainText(
+      "no longer takes your notes",
+    );
+  const teamRow = page.getByRole("button", { name: /^Team draft/ });
+  await expect(teamRow.locator(".row-unavailable")).toHaveText("Not available");
+  // Its text is not shown in the list either.
+  await expect(teamRow.locator(".row-preview")).toHaveText(
+    "Its notebook no longer takes your notes",
+  );
+  await teamRow.click();
+  await expect(editor).toBeHidden();
+  // The person's own draft stays available: the server files it in their
+  // default notebook.
+  const journalRow = page.getByRole("button", { name: /^Journal draft/ });
+  await expect(journalRow.locator(".row-unavailable")).toHaveCount(0);
+  await journalRow.click();
+  await expect(editor).toContainText("Journal draft");
+  // Neither draft was sent somewhere else.
+  expect(await draftNotebooks(page)).toEqual({
+    "Team draft": "book-team",
+    "Journal draft": "book-journal",
+  });
+});

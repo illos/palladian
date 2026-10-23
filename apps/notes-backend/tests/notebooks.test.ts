@@ -80,6 +80,8 @@ async function human(t: T, name: string) {
     id: made.principalId,
     notebookId: made.notebookId,
     email: name.toLowerCase() + "@example.com",
+    /** The app's account ID (the Better Auth user ID). */
+    account: made.userId,
     as: t.withIdentity({
       subject: made.userId,
       sessionId: made.sessionId,
@@ -292,10 +294,12 @@ describe("notebook deletion", () => {
     });
     for (const person of [ada, bea]) {
       await person.as.mutation(api.arrangement.setPin, {
+        account: person.account,
         noteId: first,
         pinned: true,
       });
       await person.as.mutation(api.arrangement.setPositions, {
+        account: person.account,
         notebookId: journal,
         entries: [
           { noteId: first, key: "V" },
@@ -567,14 +571,17 @@ describe("notebook deletion", () => {
       [cy, "created"],
     ] as const)
       await person.as.mutation(api.arrangement.setOrder, {
+        account: person.account,
         list: journal,
         order,
       });
     await ada.as.mutation(api.arrangement.setOrder, {
+      account: ada.account,
       list: "all",
       order: "alpha",
     });
     await bea.as.mutation(api.arrangement.setPositions, {
+      account: bea.account,
       notebookId: journal,
       entries: [{ noteId: first, key: "V" }],
     });
@@ -1151,5 +1158,59 @@ describe("review round 1 regressions", () => {
     }))!;
     expect(crowded.complete).toBe(false);
     expect(crowded.lost).toHaveLength(200);
+  });
+});
+
+describe("review round 2 regressions", () => {
+  test("R2-2: the preview reads at most 5,000 grants and says when it stopped short", async () => {
+    const t = setup(true);
+    const ada = await human(t, "Ada");
+    const bea = await human(t, "Bea");
+    const journal = await notebook(ada, "Journal");
+    const archive = await notebook(ada, "Archive");
+    await share(t, journal, bea.id, "edit", ada.id);
+    // 26 notes with 200 explicit grants each, Bea's among them: she keeps
+    // every note, so only reading all of them shows nobody loses anything.
+    const notes: Id<"notes">[] = [];
+    for (let i = 0; i < 26; i++) notes.push(await note(ada, journal, `N${i}`));
+    await t.run(async (ctx) => {
+      const others: Id<"principals">[] = [];
+      for (let i = 0; i < 199; i++)
+        others.push(
+          await ctx.db.insert("principals", {
+            kind: "human",
+            name: `Grantee ${i}`,
+            createdAt: Date.now(),
+          }),
+        );
+      for (const noteId of notes)
+        for (const principalId of [bea.id, ...others])
+          await ctx.db.insert("noteMembers", {
+            noteId,
+            principalId,
+            role: "read",
+            grantedBy: ada.id,
+            createdAt: Date.now(),
+          });
+    });
+    const args = { notebookId: journal, destinationId: archive, trash: false };
+    // 5,200 grants: more than the budget, so the answer says so.
+    expect(await ada.as.query(api.notebooks.deletePreview, args)).toMatchObject(
+      { lost: [], complete: false },
+    );
+    // 4,800 grants fit.
+    await t.run(async (ctx) => {
+      for (const noteId of notes.slice(24)) {
+        for (const grant of await ctx.db
+          .query("noteMembers")
+          .withIndex("by_note_and_principal", (q) => q.eq("noteId", noteId))
+          .collect())
+          await ctx.db.delete(grant._id);
+        await ctx.db.patch(noteId, { restricted: true });
+      }
+    });
+    expect(await ada.as.query(api.notebooks.deletePreview, args)).toMatchObject(
+      { lost: [], complete: true },
+    );
   });
 });

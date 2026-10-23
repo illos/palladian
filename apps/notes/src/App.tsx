@@ -42,6 +42,7 @@ import {
 } from "./arrange";
 import { dropIndex, placement } from "./reorder";
 import {
+  draftNotebookLost,
   newNoteNotebook,
   notebookActionLabels,
   notebookActions,
@@ -183,6 +184,9 @@ const statusLabels = {
   "signed-out": "Signed out",
 };
 
+const draftLostMessage =
+  "This draft is for a notebook that no longer takes your notes, so it cannot be opened here.";
+
 function withNotebook(notebookId: string | undefined) {
   return notebookId ? { notebookId } : {};
 }
@@ -258,8 +262,13 @@ export function App({
   const [notebookMenu, setNotebookMenu] = useState<NotebookMenu | null>(null);
   /** A notebook whose "New note here" waits for its list to show. */
   const [newNoteIn, setNewNoteIn] = useState<string | null>(null);
-  /** Notebooks this device has listed, to tell a removed one from a new one. */
-  const listedNotebooks = useRef(new Set<string>());
+  /**
+   * Notebooks this device has listed, with the role they had: tells a removed
+   * notebook from a new one, and the person's own from someone else's.
+   */
+  const listedNotebooks = useRef(new Map<string, NoteRole>());
+  /** The notebook each draft started here is for; drafts keep it. */
+  const draftTargets = useRef(new Map<string, string | undefined>());
   /** The note row resting open after a swipe; one at a time. */
   const [openSwipe, setOpenSwipe] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -748,13 +757,15 @@ export function App({
       const { emptyDoc } = await import("@palladian/notes-core/document");
       const id = "local-" + randomId();
       const doc = JSON.stringify(emptyDoc().toJSON());
+      const shown = newNoteNotebook(
+        section.kind === "notebook" ? section.id : null,
+        notebooks,
+      );
       const notebookId =
-        newNoteNotebook(
-          section.kind === "notebook" ? section.id : null,
-          notebooks,
-        ) ??
-        liveState.profile?.defaultNotebookId ??
-        undefined;
+        shown ?? liveState.profile?.defaultNotebookId ?? undefined;
+      // Only a notebook chosen by the list it was started in can be lost
+      // later; one going to the default notebook never is.
+      draftTargets.current.set(id, shown);
       const request = openRequest.current;
       const channel = await makeChannel(
         {
@@ -797,9 +808,30 @@ export function App({
       channel: null,
     };
     draft.key = draft.id;
+    draftTargets.current.set(
+      draft.id,
+      newNoteNotebook(
+        section.kind === "notebook" ? section.id : null,
+        notebooks,
+      ),
+    );
     show(draft); // Typing can start before IDB or authentication completes.
     setSaveState("Saving draft on this device…");
     await persistDraft(draft, draft.document, "");
+  }
+
+  /** The notebook an uncreated draft is for: as started here, or as stored. */
+  function draftNotebook(id: string): string | undefined {
+    if (draftTargets.current.has(id)) return draftTargets.current.get(id);
+    return rows.find((row) => row.accountId === accountId && row.id === id)
+      ?.notebookId;
+  }
+
+  /** An uncreated draft for a notebook that no longer takes its notes. */
+  function draftLost(draft: { id: string; notebookId?: string | undefined }) {
+    return draftNotebookLost(draft, notebooks, (id) =>
+      listedNotebooks.current.get(id),
+    );
   }
 
   async function persistDraft(
@@ -816,13 +848,11 @@ export function App({
         document,
         text,
         updatedAt: Date.now(),
-        // Without one, the server files it in the default notebook.
-        ...withNotebook(
-          newNoteNotebook(
-            section.kind === "notebook" ? section.id : null,
-            notebooks,
-          ),
-        ),
+        // A draft keeps the notebook it was started for, whatever list
+        // shows later (review round 2): following the list could send a
+        // collaborator's draft for a lost notebook to their default one.
+        // Without a notebook, the server files it in the default notebook.
+        ...withNotebook(draftNotebook(note.id)),
       });
       if (
         snapshotRef.current.accountId === note.accountId &&
@@ -1355,8 +1385,26 @@ export function App({
       : section.kind === "notebook"
         ? (notebooks.find((n) => n.id === section.id)?.name ?? "Notebook")
         : "All notes";
+  // An open draft for a notebook that no longer takes this person's notes
+  // (deleted or unshared by its owner, or read-only now) closes, and its row
+  // does not open it again (review round 2, R2-1; D86). The sync core keeps
+  // the draft on this device; this only stops showing and exporting it here.
+  const openDraftLost =
+    !!currentOpen &&
+    draftLost({
+      id: currentOpen.id,
+      notebookId: draftNotebook(currentOpen.id),
+    });
+  useEffect(() => {
+    if (!openDraftLost) return;
+    openRef.current?.channel?.close();
+    closeOpen();
+    setError(draftLostMessage);
+  }, [openDraftLost]);
+
   const editable =
     !!currentOpen &&
+    !openDraftLost &&
     (currentOpen.kind === "draft" ||
       (currentOpen.kind === "live" &&
         !currentOpen.trashed &&
@@ -1601,7 +1649,8 @@ export function App({
   // on another device) stops being shown; All Notes shows instead. One just
   // created, not listed yet, stays shown (review round 1, F1).
   useEffect(() => {
-    for (const notebook of notebooks) listedNotebooks.current.add(notebook.id);
+    for (const notebook of notebooks)
+      listedNotebooks.current.set(notebook.id, notebook.role);
     if (
       section.kind === "notebook" &&
       listedNotebooks.current.has(section.id) &&
@@ -2012,6 +2061,7 @@ export function App({
                         event.dataTransfer.effectAllowed = "move";
                       }}
                       onClick={() => {
+                        if (draftLost(row)) return setError(draftLostMessage);
                         void selectNote(row);
                       }}
                     >
@@ -2028,13 +2078,19 @@ export function App({
                           {smartDate(row.updatedAt)}
                         </time>
                         <span className="row-preview">
-                          {row.preview || "Empty note"}
+                          {draftLost(row)
+                            ? "Its notebook no longer takes your notes"
+                            : row.preview || "Empty note"}
                         </span>
                       </span>
-                      {row.kind === "draft" && (
-                        <small>
-                          {row.role ? "Unsaved changes" : "Local draft"}
-                        </small>
+                      {draftLost(row) ? (
+                        <small className="row-unavailable">Not available</small>
+                      ) : (
+                        row.kind === "draft" && (
+                          <small>
+                            {row.role ? "Unsaved changes" : "Local draft"}
+                          </small>
+                        )
                       )}
                       {row.trashed && section.kind !== "trash" && (
                         <small>In Trash</small>
@@ -2044,7 +2100,10 @@ export function App({
                       )}
                       {row.notebookId &&
                         !visibleNotebookIds.has(row.notebookId) &&
-                        !row.trashed && <small>Shared with you</small>}
+                        !row.trashed &&
+                        !row.id.startsWith("local-") && (
+                          <small>Shared with you</small>
+                        )}
                     </button>
                   </SwipeRow>
                   {actions.length > 0 && (

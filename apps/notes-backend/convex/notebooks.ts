@@ -226,9 +226,10 @@ const PREVIEW_GRANTS = 5000;
  * explicit grant of theirs) when they are not a member of the destination,
  * or when the note ends up private in Trash there. Explicit grants, "No
  * access" included, keep deciding as before; restricted notes are opened
- * only through them. Up to 200 members and 500 notes are examined; beyond
- * that, or with unusually many grants, `complete` is false and the app says
- * the list may not be exact. Null for anyone but the owner, or an invalid
+ * only through them. At most 200 members, 500 notes and 5,000 explicit
+ * grants are read; when that leaves anything unexamined, or a note has more
+ * than 200 grants, `complete` is false and the app says the list may not be
+ * exact. Null for anyone but the owner, or an invalid
  * destination. The answer names its destination and choice, so the app can
  * tell it belongs to what is selected.
  */
@@ -293,15 +294,23 @@ export const deletePreview = query({
       // Once everyone examined loses something, more notes add nothing.
       if (losing.size === candidates.length) break;
       if (note.restricted) continue;
-      if (grantsRead > PREVIEW_GRANTS) {
+      // Never read past the grant budget (review round 2, R2-2). When the
+      // budget left cannot show that a note's grants are all read, that note
+      // and the rest stay unexamined.
+      const budget = Math.min(PREVIEW_MEMBERS + 1, PREVIEW_GRANTS - grantsRead);
+      if (budget <= 0) {
         unexamined = true;
         break;
       }
       const grants = await ctx.db
         .query("noteMembers")
         .withIndex("by_note_and_principal", (q) => q.eq("noteId", note._id))
-        .take(PREVIEW_MEMBERS + 1);
+        .take(budget);
       grantsRead += grants.length;
+      if (grants.length === budget && budget <= PREVIEW_MEMBERS) {
+        unexamined = true;
+        break;
+      }
       if (grants.length > PREVIEW_MEMBERS) grantsCut = true;
       const explicit = new Set(grants.map((grant) => grant.principalId));
       const privateInTrash =
