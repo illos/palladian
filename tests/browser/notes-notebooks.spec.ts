@@ -339,6 +339,22 @@ async function typeNewNote(page: Page, phone: boolean, text: string) {
   await expect(
     page.getByText("Draft saved on this device — not saved to server"),
   ).toBeVisible();
+  // The status shows once the empty draft is saved; wait for the typing.
+  await expect
+    .poll(async () =>
+      page.evaluate(async (title) => {
+        type Store = {
+          list(accountId: string): Promise<{ title: string }[]>;
+        };
+        const store = (
+          window as unknown as { __notesHarness: { store: Store } }
+        ).__notesHarness.store;
+        return (await store.list("fixture-account")).some(
+          (row) => row.title === title,
+        );
+      }, text),
+    )
+    .toBe(true);
   // Leave the note so the list shows (phones show one or the other).
   if (phone) await page.getByRole("button", { name: "All notes" }).click();
 }

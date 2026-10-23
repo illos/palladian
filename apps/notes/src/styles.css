@@ -2077,6 +2077,8 @@ ul.member-list {
 @media (max-width: 760px) {
   .link-notice {
     bottom: calc(110px + var(--keyboard-inset, 0px));
+  }
+}
 
 /* ---- Notebook menus and counts (plan 08, A5) ---- */
 .nav-row {

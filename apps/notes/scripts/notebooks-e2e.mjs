@@ -140,8 +140,13 @@ try {
     });
   const nav = page.locator("aside.navigation");
   const navItem = (name) => nav.getByRole("button", { name, exact: true });
-  const count = (name) =>
-    nav.locator(".nav-row", { has: navItem(name) }).locator(".nav-count");
+  // A filter's inner locator is matched within each row, so it starts at the
+  // page, not at the navigation.
+  const navRow = (name) =>
+    nav
+      .locator(".nav-row")
+      .filter({ has: page.getByRole("button", { name, exact: true }) });
+  const count = (name) => navRow(name).locator(".nav-count");
   await expect(count("Journal")).toHaveText("2", { timeout: 20_000 });
   await expect(count("Archive")).toHaveText("0");
   step("account with Journal (two notes) and an empty Archive");
@@ -179,10 +184,7 @@ try {
 
   // Set as default from the hover "…".
   await navItem("Diary").hover();
-  await nav
-    .locator(".nav-row", { has: navItem("Diary") })
-    .locator(".nav-more")
-    .click();
+  await navRow("Diary").locator(".nav-more").click();
   await menu("Diary").getByRole("menuitem", { name: "Set as default" }).click();
   await expect(page.getByText(/now go to “Diary”/)).toBeVisible();
   await expect
@@ -216,13 +218,19 @@ try {
     timeout: 20_000,
   });
   await expect(count("Archive")).toHaveText("1", { timeout: 20_000 });
-  const filed = await convex(page, "query", "library:recent", {
-    notebookId: archive,
-  });
-  assert.deepEqual(
-    filed.notes.map((n) => n.title),
-    ["Filed from the menu"],
-  );
+  // The title follows the text a moment after saving (summaries refresh
+  // shortly after edits).
+  await expect
+    .poll(
+      async () =>
+        (
+          await convex(page, "query", "library:recent", {
+            notebookId: archive,
+          })
+        ).notes.map((n) => n.title),
+      { timeout: 20_000 },
+    )
+    .toEqual(["Filed from the menu"]);
   step("header … → New note here creates the note in that notebook");
 
   // The default notebook asks for another default before it can go.
@@ -265,7 +273,11 @@ try {
   await beaNav.getByRole("button", { name: /^Diary/ }).click({
     button: "right",
   });
-  await expect(menu("Diary").getByRole("menuitem")).toHaveText(["Members…"]);
+  await expect(
+    bea
+      .getByRole("dialog", { name: "Actions for notebook Diary" })
+      .getByRole("menuitem"),
+  ).toHaveText(["Members…"]);
   await bea.keyboard.press("Escape");
   // Bea keeps Diary's list open while Ada deletes it.
   await beaNav.getByRole("button", { name: /^Diary/ }).click();
@@ -355,7 +367,7 @@ try {
   await phone.getByRole("button", { name: "Sign in", exact: true }).click();
   await connected(phone);
   await dismissPasskeyOffer(phone);
-  await phone.getByRole("button", { name: "Menu" }).click();
+  await phone.getByRole("button", { name: "Menu", exact: true }).click();
   const sheet = phone.getByRole("dialog", { name: "Navigation" });
   const archiveItem = sheet.getByRole("button", {
     name: "Archive",
@@ -404,7 +416,17 @@ try {
   const later = await convex(page, "mutation", "notebooks:create", {
     name: "Later",
   });
-  await phone.getByRole("button", { name: "Menu" }).click();
+  // Open a note while online first: the development server loads the editor
+  // on first use, which it cannot do offline.
+  await phone
+    .getByRole("button", { name: /^Monday\b/ })
+    .first()
+    .click();
+  await expect(
+    phone.getByRole("textbox", { name: "Note content" }),
+  ).toContainText("What happened on Monday", { timeout: 20_000 });
+  await phone.getByRole("button", { name: "All notes" }).click();
+  await phone.getByRole("button", { name: "Menu", exact: true }).click();
   const laterItem = sheet.getByRole("button", { name: "Later", exact: true });
   await expect(laterItem).toBeVisible({ timeout: 20_000 });
   await laterItem.click();
@@ -418,12 +440,33 @@ try {
   await expect(offlineText).toBeVisible({ timeout: 20_000 });
   await offlineText.click();
   await phone.keyboard.type("Offline in Later");
-  await expect(
-    phone.getByText(
-      /Offline — changes kept on this device|Draft saved on this device|Saving…/,
-    ),
-  ).toBeVisible({ timeout: 15_000 });
-  await phone.waitForTimeout(800); // journal writes are batched for 200 ms
+  // The typing is kept on the phone (its draft journal) before going on.
+  await expect
+    .poll(
+      () =>
+        phone.evaluate(async () => {
+          const open = indexedDB.open("palladian-notes-foundation");
+          const db = await new Promise((resolve, reject) => {
+            open.onsuccess = () => resolve(open.result);
+            open.onerror = () => reject(open.error);
+          });
+          const drafts = await new Promise((resolve) => {
+            const request = db
+              .transaction("drafts")
+              .objectStore("drafts")
+              .getAll();
+            request.onsuccess = () => resolve(request.result);
+          });
+          db.close();
+          return drafts.some((draft) =>
+            String(draft.text ?? "").includes("Offline in Later"),
+          );
+        }),
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+  const status = await phone.locator(".save-status").textContent();
+  console.log(`  (phone status while offline: ${status})`);
   await navItem("Later").click({ button: "right" });
   await menu("Later")
     .getByRole("menuitem", { name: "Delete notebook…" })
@@ -459,10 +502,18 @@ try {
       { timeout: 60_000 },
     )
     .toContain("Offline in Later");
+  // The note stays open with its text, and the phone's list leaves Later.
+  await expect(
+    phone.getByRole("textbox", { name: "Note content" }),
+  ).toContainText("Offline in Later");
+  await phone.getByRole("button", { name: "All notes" }).click();
   await expect(phone.getByRole("heading", { level: 1 })).toHaveText(
     "All notes",
     { timeout: 20_000 },
   );
+  await expect(
+    phone.getByRole("button", { name: /^Offline in Later\b/ }),
+  ).toBeVisible({ timeout: 20_000 });
   step(
     "owner's phone: a note typed offline in a notebook the owner deleted meanwhile lands in Notes",
   );
