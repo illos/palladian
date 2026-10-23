@@ -201,7 +201,7 @@ There are no haptics: iOS web has none.
 
 ### A3. Editor interactions (M)
 
-Implemented 2026-10-22 and accepted 2026-10-23 after six independent review rounds; the iPhone check is pending (`docs/reviews/notes-editor-interactions-implementation.md`).
+Implemented 2026-10-22; accepted after six independent review rounds and released to production on 2026-10-23; the iPhone check is pending (`docs/reviews/notes-editor-interactions-implementation.md`).
 
 Deltos reference: `editor/keymap.ts`, `commands.ts`, `inputRules.ts`, `autolink.ts`, `markdownPaste.ts`, `clipboard.ts`, `DesktopLinkForm.tsx`, `LinkEntryBar.tsx`, `slashPalette/*`, `MobileEditorBar.tsx`, `ProseMirrorEditor.tsx`; spec `ui-lanes34-editor-toolbars-markdown.md`.
 

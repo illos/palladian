@@ -105,6 +105,23 @@ Report: `notes-editor-interactions-round6-astra-review.md`. The verdict is ACCEP
 
 Before merging, the branch was rebased onto `main` `9976b59`, a test-only commit after `b095f8c`, without conflicts.
 
+## Release
+
+Released 2026-10-23 from `main` `1919ec9`:
+
+- Worker `palladian` version `f42eed84`, at 100% from 13:02 UTC. There was no backend change, so Convex was not redeployed.
+- The custom domain and cron were confirmed through the Cloudflare API, after the known "No access" message on the routes call.
+
+Before merging, these passed against dev Convex on the final code:
+
+- `live-e2e.mjs`: all checks passed.
+- `actions-e2e.mjs`: 17 steps passed.
+- `arrange-e2e.mjs`: 9 steps passed.
+
+After deploying, `live-e2e.mjs` and `apps/notes-edge/scripts/browser-e2e.mjs` passed against production.
+
+Still pending: the iPhone checklist under Evidence.
+
 ## Rebase onto main
 
 The branch was rebased twice on 2026-10-23: onto `5211e06` (`main` with A2), then onto `b095f8c` (`main` with A6). Both times only additions at the end of `playwright.config.ts` and `styles.css` overlapped, and both sides were kept; `EditorSurface.tsx`, `editor.tsx` and `App.tsx` needed no merging (this branch does not change `App.tsx`).
