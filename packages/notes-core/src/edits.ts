@@ -390,6 +390,8 @@ export function applyEdits(doc: ProseMirrorNode, edits: NoteEdit[]): Transform {
   });
   assignBlockIds(tr);
   tr.doc.check();
-  assertSafeDocument(tr.doc);
+  // New blocks come from the Markdown parser, which emits only current
+  // sources; untouched stored blocks may keep legacy ones.
+  assertSafeDocument(tr.doc, { legacySources: true });
   return tr;
 }

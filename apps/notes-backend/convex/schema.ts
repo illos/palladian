@@ -270,6 +270,11 @@ export default defineSchema({
     ticketHashes: v.array(v.string()),
     /** Pending: when its tickets stop working. Failed: when the record is removed. */
     expiresAt: v.optional(v.number()),
+    /**
+     * Until when an upload the Worker admitted may still write its bytes
+     * (files.admitUpload). Byte deletion waits until after it.
+     */
+    leaseUntil: v.optional(v.number()),
     requestId: v.optional(v.string()),
     requestDigest: v.optional(v.string()),
     createdAt: v.number(),
@@ -303,11 +308,28 @@ export default defineSchema({
     .index("by_object_and_live", ["objectId", "live"])
     .index("by_object_and_current", ["objectId", "current"]),
 
-  /** R2 keys whose bytes the Worker still has to delete (retry-safe queue). */
+  /**
+   * References a commit could not settle in its own transaction: the actor
+   * may use the object through some note the bounded search did not reach.
+   * files.verifyReference finishes the search in batches.
+   */
+  referenceChecks: defineTable({
+    noteId: v.id("notes"),
+    objectId: v.id("objects"),
+    actorId: v.id("principals"),
+    cursor: v.union(v.string(), v.null()),
+    createdAt: v.number(),
+  }).index("by_note_and_object_and_actor", ["noteId", "objectId", "actorId"]),
+
+  /**
+   * R2 keys whose bytes the Worker still has to delete (retry-safe queue).
+   * Handed out only from `notBefore`, when no admitted upload can still write.
+   */
   objectDeletions: defineTable({
     key: v.string(),
     requestedAt: v.number(),
-  }),
+    notBefore: v.optional(v.number()),
+  }).index("by_not_before", ["notBefore"]),
 
   /** Recent account emails, kept briefly to limit sends per subject and overall. */
   emailSends: defineTable({

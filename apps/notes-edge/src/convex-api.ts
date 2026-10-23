@@ -108,14 +108,20 @@ export const fns = {
         replayed: boolean;
       }
     >("files:createUpload"),
-    uploadTarget: makeFunctionReference<
-      "query",
+    admitUpload: makeFunctionReference<
+      "mutation",
       { objectId: string; ticket: string },
-      | { status: "pending"; size: number; sha256: string; mimeType: string }
+      | {
+          status: "pending";
+          size: number;
+          sha256: string;
+          mimeType: string;
+          leaseUntil: number;
+        }
       | { status: "ready"; size: number; sha256: string }
       | { status: "gone" }
       | { status: "denied" }
-    >("files:uploadTarget"),
+    >("files:admitUpload"),
     finalize: makeFunctionReference<
       "mutation",
       { objectId: string; ticket: string; size: number; sha256: string },

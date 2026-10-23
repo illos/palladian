@@ -1,5 +1,13 @@
 import { getFunctionName, type FunctionReference } from "convex/server";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { ConvexCallError, type ConvexCaller } from "../src/convex.ts";
 import { fns } from "../src/convex-api.ts";
 import {
@@ -78,11 +86,12 @@ async function expecting(
   finalized: { status: string } | (() => never) = { status: "ready" },
 ) {
   const hash = await sha256Hex(bytes(content));
-  service.set(fns.files.uploadTarget, () => ({
+  service.set(fns.files.admitUpload, () => ({
     status: "pending",
     size: bytes(content).byteLength,
     sha256: hash,
     mimeType,
+    leaseUntil: Date.now() + 15 * 60_000,
   }));
   service.set(
     fns.files.finalize,
@@ -125,7 +134,7 @@ describe("PUT /files/upload/<objectId>", () => {
     expect(await stored!.text()).toBe("png bytes");
     expect(stored!.httpMetadata?.contentType).toBe("image/png");
     expect(calls.map((c) => [c.as, c.name, c.args])).toEqual([
-      ["service", "files:uploadTarget", { objectId: id, ticket: TICKET }],
+      ["service", "files:admitUpload", { objectId: id, ticket: TICKET }],
       [
         "service",
         "files:finalize",
@@ -143,14 +152,14 @@ describe("PUT /files/upload/<objectId>", () => {
     const listed = await r2.bucket.list({ prefix: `objects/${id}` });
     expect(listed.objects).toHaveLength(1);
     // Already ready: nothing is read or written.
-    service.set(fns.files.uploadTarget, () => ({
+    service.set(fns.files.admitUpload, () => ({
       status: "ready",
       size: 3,
       sha256: "x",
     }));
     calls = [];
     expect((await put(id, "abc")).status).toBe(200);
-    expect(calls.map((c) => c.name)).toEqual(["files:uploadTarget"]);
+    expect(calls.map((c) => c.name)).toEqual(["files:admitUpload"]);
   });
 
   it("refuses bytes that differ from the ticket, before writing", async () => {
@@ -210,9 +219,9 @@ describe("PUT /files/upload/<objectId>", () => {
       expect(response.status).toBe(401);
     }
     expect(calls).toEqual([]);
-    service.set(fns.files.uploadTarget, () => ({ status: "denied" }));
+    service.set(fns.files.admitUpload, () => ({ status: "denied" }));
     expect((await put(id, "x")).status).toBe(404);
-    service.set(fns.files.uploadTarget, () => ({ status: "gone" }));
+    service.set(fns.files.admitUpload, () => ({ status: "gone" }));
     const gone = await put(id, "x");
     expect(gone.status).toBe(410);
     expect(await gone.json()).toEqual({ error: "expired" });
@@ -238,7 +247,7 @@ describe("PUT /files/upload/<objectId>", () => {
   });
 
   it("answers 503 when Convex cannot be asked", async () => {
-    service.set(fns.files.uploadTarget, () => {
+    service.set(fns.files.admitUpload, () => {
       throw new ConvexCallError({ kind: "uncertain", message: "down" });
     });
     expect((await put(newId(), "x")).status).toBe(503);
@@ -458,5 +467,130 @@ describe("routing and cleanup", () => {
       expect(await r2.bucket.head(`objects/${id}`)).toBeNull();
     expect(await r2.bucket.head(`objects/${keep}`)).not.toBeNull();
     expect(queue).toEqual([]);
+  });
+});
+
+describe("review round 1", () => {
+  /** Date.now() as the code sees it, moved forward while a body is read. */
+  function clock() {
+    const start = Date.now();
+    const state = { offset: 0 };
+    const spy = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => start + state.offset);
+    return { state, restore: () => spy.mockRestore() };
+  }
+  /** A body whose bytes arrive after `delay` milliseconds of the code's time. */
+  function slowBody(content: string, state: { offset: number }, delay: number) {
+    // highWaterMark 0: nothing is pulled until the Worker reads the body.
+    return new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          state.offset += delay;
+          controller.enqueue(bytes(content));
+          controller.close();
+        },
+      },
+      { highWaterMark: 0 },
+    );
+  }
+  function putStream(objectId: string, body: ReadableStream, using = deps) {
+    return handleFiles(
+      new Request(`${ORIGIN}/files/upload/${objectId}`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${TICKET}` },
+        body,
+        duplex: "half",
+      } as RequestInit),
+      env,
+      using,
+    );
+  }
+
+  it("F3: no write once the admission's lease has passed", async () => {
+    const id = newId();
+    await expecting("late bytes");
+    const { state, restore } = clock();
+    try {
+      const response = await putStream(
+        id,
+        slowBody("late bytes", state, 15 * 60_000 + 1),
+      );
+      expect(response.status).toBe(408);
+      expect(await response.json()).toEqual({ error: "too_slow" });
+    } finally {
+      restore();
+    }
+    expect(await r2.bucket.head(`objects/${id}`)).toBeNull();
+    expect(calls.map((c) => c.name)).toEqual(["files:admitUpload"]);
+  });
+
+  it("F5: a slow upload finalizes with a fresh service token", async () => {
+    const id = newId();
+    await expecting("slow bytes");
+    // Each client works for 60 s after it is made, like its service JWT.
+    let made = 0;
+    const expiring: FilesDeps = {
+      service: async () => {
+        const created = Date.now();
+        made++;
+        const inner = fake("service", () => service);
+        const guard = <R>(call: () => Promise<R>): Promise<R> => {
+          if (Date.now() - created > 60_000)
+            throw new ConvexCallError({
+              kind: "rejected",
+              credentials: true,
+              message: "The service token expired.",
+            });
+          return call();
+        };
+        return {
+          query: ((fn: never, args: never) =>
+            guard(() => inner.query(fn, args))) as never,
+          mutation: ((fn: never, args: never) =>
+            guard(() => inner.mutation(fn, args))) as never,
+        };
+      },
+    };
+    const { state, restore } = clock();
+    try {
+      const response = await putStream(
+        id,
+        slowBody("slow bytes", state, 61_000),
+        expiring,
+      );
+      expect(response.status).toBe(200);
+    } finally {
+      restore();
+    }
+    expect(made).toBe(2);
+    expect(await (await r2.bucket.get(`objects/${id}`))!.text()).toBe(
+      "slow bytes",
+    );
+  });
+
+  it("F5: the deletion sweep uses a fresh service token per call", async () => {
+    let made = 0;
+    let queue = Array.from({ length: 150 }, (_, i) => ({
+      id: `d${i}`,
+      key: `objects/${newId()}`,
+    }));
+    service.set(fns.files.deletionBatch, (args) =>
+      queue.slice(0, Number(args.limit)),
+    );
+    service.set(fns.files.confirmDeletions, (args) => {
+      const done = new Set(args.ids as string[]);
+      queue = queue.filter((row) => !done.has(row.id));
+      return null;
+    });
+    const counting: FilesDeps = {
+      service: async () => {
+        made++;
+        return fake("service", () => service);
+      },
+    };
+    expect(await sweepDeletedFiles(env, counting)).toBe(150);
+    // Two batches: a list and a confirmation each, each with its own token.
+    expect(made).toBe(4);
   });
 });

@@ -41,7 +41,7 @@ import {
   STEP_PAGE,
   touchNote,
 } from "./documents";
-import { scheduleNoteSync } from "./references";
+import { MAX_SOURCE_NOTES, scheduleNoteSync } from "./references";
 import { accessRole, noteEdit, noteSummary, toSummary } from "./validators";
 
 /** Pick the destination notebook, requiring edit access. */
@@ -74,6 +74,13 @@ async function destination(
     "invalid",
     "Choose a notebook: " + editable.map((e) => e.notebook.name).join(", "),
   );
+}
+
+/** Source notes are hints checked exactly in references.ts; bound them. */
+function checkSources(sourceNoteIds: Id<"notes">[]) {
+  if (sourceNoteIds.length > MAX_SOURCE_NOTES)
+    fail("invalid", `Name at most ${MAX_SOURCE_NOTES} source notes.`);
+  return sourceNoteIds;
 }
 
 function editFailure(error: unknown): never {
@@ -140,6 +147,8 @@ export const create = mutation({
       doc: normalizeNewDoc(args.doc),
       clientKey: args.clientKey,
       ...(args.deviceTime !== undefined ? { deviceTime: args.deviceTime } : {}),
+      // Attachments in a copy are usable through the note it copies.
+      ...(args.sourceNoteId ? { sources: [args.sourceNoteId] } : {}),
     });
     return { noteId, revision: 0, replayed: false };
   },
@@ -318,6 +327,8 @@ export const push = mutation({
     steps: v.array(v.string()),
     clientId: v.string(),
     deviceTime: v.optional(v.number()),
+    /** Notes pasted attachments came from; proves access to them at once. */
+    sourceNoteIds: v.optional(v.array(v.id("notes"))),
   },
   returns: v.union(
     v.object({ status: v.literal("accepted"), revision: v.number() }),
@@ -343,6 +354,9 @@ export const push = mutation({
       clientId: args.clientId,
       kind: "edit",
       ...(args.deviceTime !== undefined ? { deviceTime: args.deviceTime } : {}),
+      ...(args.sourceNoteIds
+        ? { sources: checkSources(args.sourceNoteIds) }
+        : {}),
     });
     return { status: "accepted" as const, revision: result.revision };
   },
@@ -436,6 +450,8 @@ export const edit = mutation({
     edits: v.array(noteEdit),
     expectedRevision: v.optional(v.number()),
     requestId: v.optional(v.string()),
+    /** Notes attachments in the new Markdown came from. */
+    sourceNoteIds: v.optional(v.array(v.id("notes"))),
   },
   returns: v.object({
     revision: v.number(),
@@ -503,6 +519,9 @@ export const edit = mutation({
       steps: tr.steps,
       clientId: "agent:" + actor._id,
       kind: "edit",
+      ...(args.sourceNoteIds
+        ? { sources: checkSources(args.sourceNoteIds) }
+        : {}),
     });
     if (args.requestId)
       await ctx.db.insert("receipts", {

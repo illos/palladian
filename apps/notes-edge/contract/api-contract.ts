@@ -37,7 +37,7 @@ declare const proof: Ok;
 
 export const contract = [
   same<typeof api.files.createUpload, typeof fns.files.createUpload>(proof),
-  same<typeof api.files.uploadTarget, typeof fns.files.uploadTarget>(proof),
+  same<typeof api.files.admitUpload, typeof fns.files.admitUpload>(proof),
   same<typeof api.files.finalize, typeof fns.files.finalize>(proof),
   same<typeof api.files.authorizeRead, typeof fns.files.authorizeRead>(proof),
   same<

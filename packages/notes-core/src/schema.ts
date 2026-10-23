@@ -53,6 +53,18 @@ export function isSafeImageSource(src: unknown): src is string {
   return /^https:/i.test(src.trim()) || attachmentObjectId(src) !== null;
 }
 
+/**
+ * The image sources accepted before attachments existed: `https:` or any
+ * `attachment:` text, in any case, with outer spaces. Documents already
+ * stored (current content, checkpoints, history) may keep them so they still
+ * open and edit; a loose `attachment:` source names no object and so grants
+ * nothing. New content must use `isSafeImageSource`.
+ */
+export function isLegacyImageSource(src: unknown): src is string {
+  if (typeof src !== "string" || src.length > 2048) return false;
+  return /^(https:|attachment:)/i.test(src.trim());
+}
+
 /** A resized image's display width in CSS pixels; null shows natural size. */
 export const IMAGE_WIDTH_MIN = 32;
 export const IMAGE_WIDTH_MAX = 4096;
@@ -465,8 +477,15 @@ export function assertSafeMark(mark: Mark): void {
   if (!optionalText(mark.attrs.title, 500)) unsafe("Invalid link title.");
 }
 
-/** Validate one node's own attributes and marks (not its children). */
-export function assertSafeNode(node: ProseMirrorNode): void {
+/**
+ * Validate one node's own attributes and marks (not its children). With
+ * `legacySources`, an image may keep a source from before attachments
+ * (`isLegacyImageSource`); only stored documents are checked that way.
+ */
+export function assertSafeNode(
+  node: ProseMirrorNode,
+  options: { legacySources?: boolean } = {},
+): void {
   for (const mark of node.marks) assertSafeMark(mark);
   if (hasBlockId(node)) {
     const id = node.attrs.id;
@@ -475,7 +494,10 @@ export function assertSafeNode(node: ProseMirrorNode): void {
   }
   switch (node.type.name) {
     case "image":
-      if (!isSafeImageSource(node.attrs.src))
+      if (
+        !isSafeImageSource(node.attrs.src) &&
+        !(options.legacySources && isLegacyImageSource(node.attrs.src))
+      )
         unsafe("Images must use https or an attachment reference.");
       if (
         !optionalText(node.attrs.alt, 1000) ||
@@ -522,9 +544,12 @@ export function assertSafeNode(node: ProseMirrorNode): void {
  * `Node.check()` validates structure only; this enforces the same link and
  * image rules as parsing, and sane values for every other attribute.
  */
-export function assertSafeDocument(doc: ProseMirrorNode): void {
+export function assertSafeDocument(
+  doc: ProseMirrorNode,
+  options: { legacySources?: boolean } = {},
+): void {
   doc.descendants((node) => {
-    assertSafeNode(node);
+    assertSafeNode(node, options);
     return true;
   });
 }

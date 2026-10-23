@@ -84,11 +84,12 @@ async function granting(
     mimeType,
     replayed: state !== "pending",
   }));
-  serviceHandlers.set(fns.files.uploadTarget, () => ({
+  serviceHandlers.set(fns.files.admitUpload, () => ({
     status: "pending",
     size: content.length,
     sha256: hash,
     mimeType,
+    leaseUntil: Date.now() + 15 * 60_000,
   }));
   serviceHandlers.set(fns.files.finalize, () => ({ status: "ready" }));
   agentHandlers.set(fns.notes.edit, () => ({
@@ -149,7 +150,7 @@ describe("attach_file", () => {
     });
     expect(calls.map((c) => [c.as, c.name])).toEqual([
       ["agent", "files:createUpload"],
-      ["service", "files:uploadTarget"],
+      ["service", "files:admitUpload"],
       ["service", "files:finalize"],
       ["agent", "notes:edit"],
     ]);
@@ -231,7 +232,7 @@ describe("attach_file", () => {
 
   it("reports storage trouble as retryable with the same request_id", async () => {
     await granting("abc", "image/png");
-    serviceHandlers.set(fns.files.uploadTarget, () => {
+    serviceHandlers.set(fns.files.admitUpload, () => {
       throw new ConvexCallError({ kind: "uncertain", message: "down" });
     });
     const result = await attach({

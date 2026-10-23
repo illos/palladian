@@ -11,8 +11,10 @@ import { mintServiceJwt } from "./jwt.ts";
  *   GET  /files/public/<publicToken>/<objectId>
  *
  * Uploads: the ticket comes from `files.createUpload`. The Worker asks Convex
- * (as the file service) for the expected size and SHA-256, reads at most that
- * many bytes, checks both, writes `objects/<objectId>` and finalizes. A retry
+ * (as the file service) to admit the upload: it answers the expected size and
+ * SHA-256 and grants a write lease. The Worker reads at most that many bytes,
+ * checks both, writes `objects/<objectId>` only while the lease lasts
+ * (deleting an object's bytes waits for its lease) and finalizes. A retry
  * with the same ticket writes the same key or finds the object ready, so it
  * never makes a second object.
  *
@@ -128,7 +130,12 @@ async function readAtMost(
 }
 
 export type StoreFailure =
-  "not_found" | "expired" | "size_mismatch" | "hash_mismatch" | "unavailable";
+  | "not_found"
+  | "expired"
+  | "size_mismatch"
+  | "hash_mismatch"
+  | "too_slow"
+  | "unavailable";
 export type StoreResult =
   | { ok: true; size: number; sha256: string }
   | { ok: false; error: StoreFailure };
@@ -138,6 +145,7 @@ const STORE_STATUS: Record<StoreFailure, number> = {
   expired: 410,
   size_mismatch: 422,
   hash_mismatch: 422,
+  too_slow: 408,
   unavailable: 503,
 };
 
@@ -163,13 +171,16 @@ export async function storeObject(
 ): Promise<StoreResult> {
   if (!ID.test(objectId) || !TICKET.test(ticket))
     return { ok: false, error: "not_found" };
-  let service: ConvexCaller;
+  // A fresh short-lived service token for each call: reading a slow body can
+  // outlast one (review F5).
+  const service = () => (deps.service ?? serviceConvex)(env);
   let target;
   try {
-    service = await (deps.service ?? serviceConvex)(env);
-    target = await service.query(fns.files.uploadTarget, { objectId, ticket });
+    target = await (
+      await service()
+    ).mutation(fns.files.admitUpload, { objectId, ticket });
   } catch (failure) {
-    logFailure("target", failure);
+    logFailure("admit", failure);
     return { ok: false, error: "unavailable" };
   }
   if (target.status === "denied") return { ok: false, error: "not_found" };
@@ -181,6 +192,9 @@ export async function storeObject(
     return { ok: false, error: "size_mismatch" };
   const sha256 = await sha256Hex(bytes);
   if (sha256 !== target.sha256) return { ok: false, error: "hash_mismatch" };
+  // Write only within the lease Convex granted: once it has passed, the
+  // object's bytes may already be queued for deletion (review F3).
+  if (Date.now() >= target.leaseUntil) return { ok: false, error: "too_slow" };
   const key = objectKey(objectId);
   try {
     await env.FILES.put(key, bytes, {
@@ -194,7 +208,9 @@ export async function storeObject(
   }
   let done;
   try {
-    done = await service.mutation(fns.files.finalize, {
+    done = await (
+      await service()
+    ).mutation(fns.files.finalize, {
       objectId,
       ticket,
       size: bytes.byteLength,
@@ -202,7 +218,8 @@ export async function storeObject(
     });
   } catch (failure) {
     // Unknown outcome: the object is ready or still pending, and a retry with
-    // the same ticket settles it either way. Keep the bytes.
+    // the same ticket settles it either way. Keep the bytes: if the object
+    // fails instead, its deletion waits out this write's lease.
     logFailure("finalize", failure);
     return { ok: false, error: "unavailable" };
   }
@@ -399,18 +416,21 @@ export async function sweepDeletedFiles(
 ): Promise<number> {
   const files = env.FILES;
   if (!files) return 0;
-  const service = await (deps.service ?? serviceConvex)(env);
+  // A fresh short-lived token for each call: a long sweep outlasts one.
+  const service = () => (deps.service ?? serviceConvex)(env);
   let deleted = 0;
   for (let round = 0; round < DELETION_ROUNDS; round++) {
-    const batch = await service.query(fns.files.deletionBatch, {
-      limit: DELETION_BATCH,
-    });
+    const batch = await (
+      await service()
+    ).query(fns.files.deletionBatch, { limit: DELETION_BATCH });
     if (!batch.length) break;
     const keys = batch
       .map((row) => row.key)
       .filter((key) => OBJECT_KEY.test(key));
     if (keys.length) await files.delete(keys);
-    await service.mutation(fns.files.confirmDeletions, {
+    await (
+      await service()
+    ).mutation(fns.files.confirmDeletions, {
       ids: batch.map((row) => row.id),
     });
     deleted += keys.length;

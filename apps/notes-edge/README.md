@@ -266,11 +266,11 @@ Attachment bytes live in the private `FILES` bucket and leave only through
 these routes, each after Convex (`apps/notes-backend/convex/files.ts`)
 authorizes the request. See `docs/reviews/notes-files-backend-implementation.md`.
 
-| Route                                       | Credential                                                 | Convex decides with                                        |
-| ------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
-| `PUT /files/upload/<objectId>`              | `Authorization: Bearer <ticket>` from `files.createUpload` | `files.uploadTarget`, then `files.finalize` (file service) |
-| `GET/HEAD /files/notes/<noteId>/<objectId>` | `Authorization: Bearer <the caller's Convex token>`        | `files.authorizeRead`, as the caller                       |
-| `GET/HEAD /files/public/<token>/<objectId>` | the public link token in the path                          | `files.authorizePublicRead`, signed out                    |
+| Route                                       | Credential                                                 | Convex decides with                                                              |
+| ------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `PUT /files/upload/<objectId>`              | `Authorization: Bearer <ticket>` from `files.createUpload` | `files.admitUpload` (grants a write lease), then `files.finalize` (file service) |
+| `GET/HEAD /files/notes/<noteId>/<objectId>` | `Authorization: Bearer <the caller's Convex token>`        | `files.authorizeRead`, as the caller                                             |
+| `GET/HEAD /files/public/<token>/<objectId>` | the public link token in the path                          | `files.authorizePublicRead`, signed out                                          |
 
 The Worker calls the file service functions with a 60-second JWT it signs
 with `AGENT_JWT_PRIVATE_KEY`, subject `service:files`; it names no agent or

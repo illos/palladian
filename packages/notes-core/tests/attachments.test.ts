@@ -226,7 +226,7 @@ test("attachment links become file blocks wherever they appear", () => {
   assert.equal(links.firstChild!.textContent, "web bad up");
 });
 
-test("stored documents reject invalid file blocks", () => {
+test("stored documents reject invalid file blocks", async () => {
   const bad: Record<string, unknown>[] = [
     { objectId: "short" },
     { objectId: A.toUpperCase() },
@@ -270,14 +270,20 @@ test("stored documents reject invalid file blocks", () => {
       JSON.stringify(attrs),
     );
   }
-  const image = {
+  const image = JSON.stringify({
     type: "doc",
     content: [{ type: "image", attrs: { id: "i1", src: "attachment:../x" } }],
-  };
-  assert.throws(
-    () => parseStoredDoc(JSON.stringify(image)),
-    UnsafeDocumentError,
-  );
+  });
+  // New content is refused; a stored one is tolerated as legacy (review F7)
+  // but names no object.
+  const { parseSubmittedDoc } = await import("../src/index.ts");
+  assert.throws(() => parseSubmittedDoc(image), UnsafeDocumentError);
+  assert.deepEqual(attachmentIds(parseStoredDoc(image)), []);
+  const notAnImage = JSON.stringify({
+    type: "doc",
+    content: [{ type: "image", attrs: { id: "i1", src: "javascript:x" } }],
+  });
+  assert.throws(() => parseStoredDoc(notAnImage), UnsafeDocumentError);
 });
 
 test("steps cannot introduce invalid attachments", () => {
@@ -480,5 +486,109 @@ test("the file block renders and parses through the DOM spec", () => {
       }) as unknown as HTMLElement,
     ),
     false,
+  );
+});
+
+// Review round 1 (docs/reviews/notes-files-backend-round1-astra-review.md).
+
+test("F6: names and descriptions with autolinks round-trip", async () => {
+  const names = [
+    "contact <x@y.com>.pdf",
+    "<https://example.com>.pdf",
+    "see https://example.com now.pdf",
+    "www.example.com notes.txt",
+    "a@b.co.pdf",
+    "x < y > z.txt",
+    "<>.txt",
+  ];
+  for (const name of names) {
+    const value = doc(file({ name, mimeType: "", size: null }));
+    stored(value);
+    const back = markdownToDoc(docToMarkdown(value));
+    assert.equal(back.childCount, 1, name);
+    assert.equal(back.firstChild!.attrs.name, name, name);
+  }
+  for (const alt of ["a <x@y.com>", "<https://example.com>", "a &amp; b"]) {
+    const value = doc(node.image!.create({ src: `attachment:${A}`, alt }));
+    const back = markdownToDoc(docToMarkdown(value));
+    assert.equal(back.lastChild!.attrs.alt, alt, alt);
+  }
+  // Agent Markdown with a link inside an attachment label still parses.
+  const nested = markdownToDoc(`[file <x@y.com> name](attachment:${A})`);
+  assert.equal(nested.childCount, 1);
+  assert.equal(nested.firstChild!.type.name, "file");
+  assert.equal(nested.firstChild!.attrs.name, "file x@y.com name");
+});
+
+test("F7: stored documents keep legacy image sources; new content may not", async () => {
+  const { parseSubmittedDoc, isLegacyImageSource } =
+    await import("../src/index.ts");
+  const legacy = JSON.stringify({
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        attrs: { id: "p1" },
+        content: [{ type: "text", text: "x" }],
+      },
+      {
+        type: "image",
+        attrs: { id: "i1", src: " Attachment:Old/ID ", width: null },
+      },
+    ],
+  });
+  assert.ok(isLegacyImageSource(" Attachment:Old/ID "));
+  assert.ok(!isLegacyImageSource("http://insecure.example/a.png"));
+  const value = parseStoredDoc(legacy);
+  assert.deepEqual(attachmentIds(value), []);
+  assert.throws(() => parseSubmittedDoc(legacy), UnsafeDocumentError);
+  // Editing elsewhere, or resizing it, keeps working ...
+  const edited = applySafeStep(
+    value,
+    new ReplaceStep(
+      2,
+      2,
+      new Slice(Fragment.from(notesSchema.text("y")), 0, 0),
+    ),
+  );
+  const imagePos = edited.child(0).nodeSize;
+  applySafeStep(edited, new AttrStep(imagePos, "width", 200));
+  // ... but a new loose source is refused, as is inserting one.
+  assert.throws(
+    () => applySafeStep(edited, new AttrStep(imagePos, "src", "attachment:x")),
+    UnsafeDocumentError,
+  );
+  assert.throws(
+    () =>
+      applySafeStep(
+        edited,
+        new ReplaceStep(
+          edited.content.size,
+          edited.content.size,
+          new Slice(Fragment.from(edited.child(1)), 0, 0),
+        ),
+      ),
+    UnsafeDocumentError,
+  );
+  // Agent edits on such a note work too.
+  const tr = applyEdits(value, [{ type: "append", markdown: "More." }]);
+  assert.equal(tr.doc.lastChild!.textContent, "More.");
+});
+
+test("F2: stepAttachmentIds names what each step brings in", async () => {
+  const { stepAttachmentIds } = await import("../src/index.ts");
+  const start = stored(doc(node.paragraph!.create({ id: "p1" })));
+  const tr = new Transform(start);
+  tr.insert(start.content.size, file({ id: "f1" }));
+  tr.insert(
+    tr.doc.content.size,
+    node.image!.create({ id: "i1", src: `attachment:${B}` }),
+  );
+  tr.setNodeAttribute(tr.doc.content.size - 1, "src", `attachment:${A}`);
+  tr.setNodeAttribute(tr.doc.content.size - 1, "width", 100);
+  tr.delete(start.content.size, tr.doc.content.size);
+  assert.deepEqual(
+    tr.steps.map((step) => stepAttachmentIds(step)),
+    [[A], [B], [A], [], []],
   );
 });

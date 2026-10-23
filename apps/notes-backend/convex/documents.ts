@@ -7,7 +7,9 @@ import {
   DOC_JSON_LIMIT,
   notesSchema,
   parseStoredDoc,
+  parseSubmittedDoc,
   plainText,
+  stepAttachmentIds,
   UnsafeDocumentError,
 } from "@palladian/notes-core";
 import type { Node as ProseMirrorNode } from "prosemirror-model";
@@ -74,7 +76,7 @@ export function serializeDoc(doc: ProseMirrorNode) {
 export function normalizeNewDoc(json: string): ProseMirrorNode {
   let doc: ProseMirrorNode;
   try {
-    doc = parseStoredDoc(json);
+    doc = parseSubmittedDoc(json);
   } catch {
     fail("invalid", "The note document is not valid.");
   }
@@ -89,6 +91,8 @@ export async function createNoteRecord(
     doc: ProseMirrorNode;
     clientKey?: string;
     deviceTime?: number;
+    /** Notes its attachments were copied from, to prove access to them. */
+    sources?: Id<"notes">[];
   },
 ) {
   const now = Date.now();
@@ -127,6 +131,7 @@ export async function createNoteRecord(
     actor: args.actor,
     before: null,
     after: args.doc,
+    ...(args.sources ? { sources: args.sources } : {}),
   });
   await ctx.db.insert("noteVersions", {
     noteId,
@@ -156,6 +161,8 @@ export async function commitSteps(
     clientId: string;
     kind: "edit" | "restore";
     deviceTime?: number;
+    /** Notes new attachments were copied from, to prove access to them. */
+    sources?: Id<"notes">[];
   },
 ): Promise<{ revision: number; doc: ProseMirrorNode }> {
   if (args.note.lifecycle !== "active")
@@ -163,6 +170,9 @@ export async function commitSteps(
   const before = parseStoredDoc(args.content.doc);
   let doc = before;
   let revision = args.content.revision;
+  // Objects any accepted revision of this batch references (each step is a
+  // revision), so history references are recorded too.
+  const seen = new Set<string>();
   // Checkpoints land on every interval boundary, even inside a large batch, so
   // any revision is rebuilt from at most one interval of steps.
   const checkpoints: { revision: number; doc: ProseMirrorNode }[] = [];
@@ -171,6 +181,7 @@ export async function commitSteps(
   const apply = (step: Step) => {
     try {
       doc = applySafeStep(doc, step);
+      for (const objectId of stepAttachmentIds(step)) seen.add(objectId);
     } catch (error) {
       fail(
         "invalid",
@@ -185,7 +196,7 @@ export async function commitSteps(
       // A checkpoint is read back with parseStoredDoc; hold it to the same bar.
       try {
         doc.check();
-        assertSafeDocument(doc);
+        assertSafeDocument(doc, { legacySources: true });
       } catch {
         fail("invalid", "The edit would produce an invalid or unsafe note.");
       }
@@ -198,20 +209,24 @@ export async function commitSteps(
     ? assignBlockIds(new Transform(doc)).steps
     : [];
   for (const step of repairs) apply(step);
+  // New content was checked strictly step by step; stored blocks may keep
+  // image sources from before attachments.
   try {
     doc.check();
-    assertSafeDocument(doc);
+    assertSafeDocument(doc, { legacySources: true });
   } catch {
     fail("invalid", "The edit would produce an invalid or unsafe note.");
   }
   const json = serializeDoc(doc);
-  // Which objects the accepted document references (B1); may refuse an edit
-  // that exceeds the per-note attachment limit, before anything is written.
+  // Which objects the accepted revisions reference (B1); may refuse an edit
+  // that exceeds the attachment limits, before anything is written.
   await recordReferences(ctx, {
     note: args.note,
     actor: args.actor,
     before,
     after: doc,
+    seen,
+    ...(args.sources ? { sources: args.sources } : {}),
   });
 
   const now = Date.now();

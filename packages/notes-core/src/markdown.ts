@@ -4,6 +4,7 @@ import {
   MarkdownParser,
   MarkdownSerializer,
   defaultMarkdownSerializer,
+  type MarkdownSerializerState,
 } from "prosemirror-markdown";
 import { Fragment, type Node as ProseMirrorNode } from "prosemirror-model";
 import { Transform } from "prosemirror-transform";
@@ -181,9 +182,14 @@ function collectAttachments(children: Token[], TokenClass: typeof Token) {
     if (token.type !== "link_open") continue;
     const objectId = attachmentObjectId(token.attrGet("href"));
     if (!objectId) continue;
-    const close = result.findIndex(
-      (other, k) => k > i && other.type === "link_close",
-    );
+    // The matching close: the label may itself hold a link, such as an
+    // autolink in an agent's Markdown.
+    let close = -1;
+    for (let k = i + 1, depth = 0; k < result.length && close < 0; k++) {
+      const type = result[k]!.type;
+      if (type === "link_open") depth++;
+      else if (type === "link_close" && depth-- === 0) close = k;
+    }
     if (close < 0) continue;
     const ref = new TokenClass("file_ref", "", 0);
     ref.attrSet("objectId", objectId);
@@ -376,6 +382,18 @@ export function markdownToDoc(markdown: string): ProseMirrorNode {
   return tr.doc;
 }
 
+/**
+ * A link label or image description that reads back as the same text:
+ * besides the usual escapes, `<` and `>` (an autolink would form) and `&`
+ * before an entity reference.
+ */
+function labelText(state: MarkdownSerializerState, text: string): string {
+  return state
+    .esc(text)
+    .replace(/[<>]/g, "\\$&")
+    .replace(/&(?=#?[a-z0-9]+;)/gi, "\\&");
+}
+
 const serializer = new MarkdownSerializer(
   {
     ...defaultMarkdownSerializer.nodes,
@@ -400,18 +418,22 @@ const serializer = new MarkdownSerializer(
       state.closeBlock(node);
     },
     image(state, node) {
-      defaultMarkdownSerializer.nodes.image!(state, node, node, 0);
+      const title = node.attrs.title
+        ? ` "${String(node.attrs.title).replace(/"/g, '\\"')}"`
+        : "";
+      const src = String(node.attrs.src).replace(/[()]/g, "\\$&");
+      state.write(
+        `![${labelText(state, String(node.attrs.alt ?? ""))}](${src}${title})`,
+      );
       if (isImageWidth(node.attrs.width))
         state.write(`{width=${node.attrs.width}}`);
       state.closeBlock(node);
     },
     file(state, node) {
       const { objectId, name, mimeType, size } = node.attrs;
-      // `&` would otherwise start an entity reference when read back.
-      const label = state
-        .esc(String(name))
-        .replace(/&(?=#?[a-z0-9]+;)/gi, "\\&");
-      state.write(`[${label}](${attachmentSource(String(objectId))})`);
+      state.write(
+        `[${labelText(state, String(name))}](${attachmentSource(String(objectId))})`,
+      );
       const attributes = [
         mimeType ? `type=${mimeType}` : "",
         size !== null ? `size=${size}` : "",

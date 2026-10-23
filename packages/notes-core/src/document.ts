@@ -33,15 +33,28 @@ export function emptyDoc(): ProseMirrorNode {
   return assignBlockIds(new Transform(doc)).doc;
 }
 
-/** Validate a stored or submitted document: structure and every attribute. */
-export function parseStoredDoc(json: string): ProseMirrorNode {
+function parseDoc(json: string, legacySources: boolean): ProseMirrorNode {
   if (json.length > DOC_JSON_LIMIT) throw new Error("Note is too large.");
   const doc = notesSchema.nodeFromJSON(JSON.parse(json));
   if (doc.type !== notesSchema.topNodeType)
     throw new Error("Note document root required.");
   doc.check();
-  assertSafeDocument(doc);
+  assertSafeDocument(doc, { legacySources });
   return doc;
+}
+
+/**
+ * Validate a stored document (current content, a checkpoint, a cached copy):
+ * structure and every attribute. Image sources from before attachments are
+ * tolerated so existing notes and their history keep opening.
+ */
+export function parseStoredDoc(json: string): ProseMirrorNode {
+  return parseDoc(json, true);
+}
+
+/** Validate a document a client submits as new content: no legacy sources. */
+export function parseSubmittedDoc(json: string): ProseMirrorNode {
+  return parseDoc(json, false);
 }
 
 /**
@@ -116,8 +129,10 @@ export function applySafeStep(
     checkChangedRange(result.doc, map.map(step.from, -1), map.map(step.to, 1));
   }
   if (step instanceof AttrStep) {
+    // The changed attribute is new content; a legacy image source the node
+    // already had may stay when another attribute (its width) changes.
     const node = result.doc.nodeAt(step.pos);
-    if (node) assertSafeNode(node);
+    if (node) assertSafeNode(node, { legacySources: step.attr !== "src" });
   }
   return result.doc;
 }

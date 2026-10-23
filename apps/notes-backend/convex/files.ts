@@ -1,9 +1,17 @@
-import { FILE_NAME_LIMIT, isFileName, isMimeType } from "@palladian/notes-core";
+import {
+  attachmentIds,
+  FILE_NAME_LIMIT,
+  isFileName,
+  isMimeType,
+  isSafeImageSource,
+  parseStoredDoc,
+} from "@palladian/notes-core";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   internalMutation,
+  internalQuery,
   mutation,
   query,
   type MutationCtx,
@@ -25,6 +33,7 @@ import { hashToken, newToken } from "./invitations";
 import { DEFAULT_RETENTION_DAYS } from "./lifecycle";
 import {
   MAX_NOTE_OBJECTS,
+  NoteRoles,
   objectKey,
   REF_BATCH,
   refFor,
@@ -39,8 +48,9 @@ import {
  *    one-hour upload ticket, once. The object ID is fixed here, so no retry
  *    can create a second object.
  * 2. The Worker takes `PUT /files/upload/<objectId>` with the ticket, reads
- *    the expected size and SHA-256 with `uploadTarget`, checks the bytes,
- *    writes R2 key `objects/<objectId>` and calls `finalize`. Both calls are
+ *    the expected size and SHA-256 with `admitUpload` (which grants a
+ *    write lease), checks the bytes, writes R2 key `objects/<objectId>`
+ *    before the lease ends, and calls `finalize`. Both calls are
  *    authenticated as the file service: a JWT the Worker signs with its agent
  *    key, subject `service:files` (no person or agent is resolved from it).
  * 3. Reads: the Worker asks `authorizeRead` with the caller's own Convex
@@ -65,6 +75,17 @@ export const FAILED_TTL_MS = DAY_MS;
 export const ORPHAN_TTL_MS = 7 * DAY_MS;
 /** Unexpired pending uploads one person or agent may hold. */
 export const MAX_PENDING_UPLOADS = 20;
+/**
+ * How long the Worker may take, after admitting an upload, to read and check
+ * the bytes before writing them. It refuses to write once this has passed.
+ */
+export const UPLOAD_LEASE_MS = 15 * MINUTE_MS;
+/**
+ * How long after its lease an admitted write could still complete (the R2
+ * write itself, clock differences). Byte deletion waits this long too, so no
+ * write can land after its deletion was swept.
+ */
+export const WRITE_SETTLE_MS = 10 * MINUTE_MS;
 /** Tickets kept per object (each retried request adds one). */
 const MAX_TICKETS = 5;
 const SWEEP_BATCH = 100;
@@ -299,8 +320,13 @@ function expired(object: Doc<"objects">, now: number) {
   return now > (object.expiresAt ?? 0);
 }
 
-/** File service: what the Worker should accept for this ticket. */
-export const uploadTarget = query({
+/**
+ * File service: admit an upload for this ticket. Answers what the Worker
+ * should accept and, while the object is pending, grants a lease: the Worker
+ * writes the bytes only before `leaseUntil`, and deleting the object's bytes
+ * waits until the lease and WRITE_SETTLE_MS have passed.
+ */
+export const admitUpload = mutation({
   args: { objectId: v.string(), ticket: v.string() },
   returns: v.union(
     v.object({
@@ -308,6 +334,7 @@ export const uploadTarget = query({
       size: v.number(),
       sha256: v.string(),
       mimeType: v.string(),
+      leaseUntil: v.number(),
     }),
     v.object({
       status: v.literal("ready"),
@@ -327,13 +354,17 @@ export const uploadTarget = query({
         size: object.size,
         sha256: object.sha256,
       };
-    if (object.state === "failed" || expired(object, Date.now()))
+    const now = Date.now();
+    if (object.state === "failed" || expired(object, now))
       return { status: "gone" as const };
+    const leaseUntil = Math.max(object.leaseUntil ?? 0, now + UPLOAD_LEASE_MS);
+    await ctx.db.patch(object._id, { leaseUntil });
     return {
       status: "pending" as const,
       size: object.size,
       sha256: object.sha256,
       mimeType: object.mimeType,
+      leaseUntil,
     };
   },
 });
@@ -525,14 +556,17 @@ export const noteObjects = query({
   },
 });
 
-/** File service: R2 keys to delete. */
+/** File service: R2 keys to delete now (no admitted write can still land). */
 export const deletionBatch = query({
   args: { limit: v.number() },
   returns: v.array(v.object({ id: v.id("objectDeletions"), key: v.string() })),
   handler: async (ctx, args) => {
     await requireFilesService(ctx);
     const limit = Math.max(1, Math.min(DELETION_BATCH, Math.floor(args.limit)));
-    const rows = await ctx.db.query("objectDeletions").take(limit);
+    const rows = await ctx.db
+      .query("objectDeletions")
+      .withIndex("by_not_before", (q) => q.lte("notBefore", Date.now()))
+      .take(limit);
     return rows.map((row) => ({ id: row._id, key: row.key }));
   },
 });
@@ -551,10 +585,17 @@ export const confirmDeletions = mutation({
   },
 });
 
-async function enqueueDeletion(ctx: MutationCtx, objectId: Id<"objects">) {
+/**
+ * Queue an object's bytes for deletion. A tombstone: handed to the Worker
+ * only once no upload it admitted can still write (lease plus settle time),
+ * and kept until the Worker confirms the deletion.
+ */
+async function enqueueDeletion(ctx: MutationCtx, object: Doc<"objects">) {
+  const now = Date.now();
   await ctx.db.insert("objectDeletions", {
-    key: objectKey(objectId),
-    requestedAt: Date.now(),
+    key: objectKey(object._id),
+    requestedAt: now,
+    notBefore: Math.max(now, (object.leaseUntil ?? 0) + WRITE_SETTLE_MS),
   });
 }
 
@@ -564,7 +605,7 @@ async function failObject(ctx: MutationCtx, object: Doc<"objects">) {
     state: "failed",
     expiresAt: Date.now() + FAILED_TTL_MS,
   });
-  await enqueueDeletion(ctx, object._id);
+  await enqueueDeletion(ctx, object);
 }
 
 /**
@@ -578,7 +619,7 @@ async function purgeObject(
   bytes: boolean,
 ) {
   await ctx.db.delete(object._id);
-  if (bytes) await enqueueDeletion(ctx, object._id);
+  if (bytes) await enqueueDeletion(ctx, object);
   const ref = await ctx.db
     .query("objectRefs")
     .withIndex("by_object_and_current", (q) => q.eq("objectId", object._id))
@@ -639,7 +680,7 @@ export const syncNote = internalMutation({
           .first();
         const object = await ctx.db.get(row.objectId);
         if (!object) continue;
-        if (other) await settleObject(ctx, object._id);
+        if (other) await settleObject(ctx, object);
         else await purgeObject(ctx, object, true);
       }
     } else {
@@ -652,7 +693,8 @@ export const syncNote = internalMutation({
         .take(REF_BATCH);
       for (const row of rows) {
         await ctx.db.patch(row._id, { live });
-        await settleObject(ctx, row.objectId);
+        const object = await ctx.db.get(row.objectId);
+        if (object) await settleObject(ctx, object);
       }
     }
     if (rows.length === REF_BATCH)
@@ -745,3 +787,164 @@ export const purgeExpired = internalMutation({
     return null;
   },
 });
+
+/**
+ * Finish an access search a commit could not finish (references.ts): page
+ * through every note that references the object, as the actor would see it
+ * now. Found: record the reference, current if the note's document still
+ * contains it. Exhausted: nothing is recorded. Safe to run late or twice.
+ */
+export const verifyReference = internalMutation({
+  args: { checkId: v.id("referenceChecks") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const check = await ctx.db.get(args.checkId);
+    if (!check) return null;
+    const done = async () => {
+      await ctx.db.delete(check._id);
+      return null;
+    };
+    const note = await ctx.db.get(check.noteId);
+    const object = await ctx.db.get(check.objectId);
+    const actor = await ctx.db.get(check.actorId);
+    if (!note || !object || !actor || actor.disabledAt !== undefined)
+      return await done();
+    if (actor.controllerId) {
+      const controller = await ctx.db.get(actor.controllerId);
+      if (!controller || controller.disabledAt !== undefined)
+        return await done();
+    }
+    if (await refFor(ctx, note._id, object._id)) return await done();
+    const roles = new NoteRoles(ctx, { ...actor, connectionId: null });
+    const page = await ctx.db
+      .query("objectRefs")
+      .withIndex("by_object_and_current", (q) => q.eq("objectId", object._id))
+      .paginate({ numItems: VERIFY_PAGE, cursor: check.cursor });
+    let found = false;
+    for (const ref of page.page)
+      if (ref.noteId !== note._id && (await roles.grants(ref))) {
+        found = true;
+        break;
+      }
+    if (!found) {
+      if (page.isDone) return await done();
+      await ctx.db.patch(check._id, { cursor: page.continueCursor });
+      await ctx.scheduler.runAfter(0, internal.files.verifyReference, args);
+      return null;
+    }
+    const content = await ctx.db
+      .query("noteContent")
+      .withIndex("by_note", (q) => q.eq("noteId", note._id))
+      .unique();
+    const current =
+      !!content &&
+      attachmentIds(parseStoredDoc(content.doc)).includes(object._id);
+    await ctx.db.insert("objectRefs", {
+      noteId: note._id,
+      objectId: object._id,
+      current,
+      live: current && note.lifecycle === "active",
+    });
+    await settleObject(ctx, object);
+    return await done();
+  },
+});
+
+/** Reference rows one verification step examines. */
+const VERIFY_PAGE = 64;
+
+/**
+ * Operator scan, read-only, for review finding F7: image sources that start
+ * with `attachment:` (any case, any spaces) but are not exactly an object
+ * reference, in current content, checkpoints or the step log. B2 tolerates
+ * these in stored documents (they open, edit and grant nothing) and refuses
+ * them in new content. Run before deploying, for example:
+ *
+ *   npx convex run --prod files:scanAttachmentSources \
+ *     '{"table":"noteSteps","cursor":null,"numItems":200}'
+ *
+ * repeating with `continueCursor` until `isDone`. Reports note IDs,
+ * revisions and counts only, never content.
+ */
+export const scanAttachmentSources = internalQuery({
+  args: {
+    table: v.union(
+      v.literal("noteContent"),
+      v.literal("noteCheckpoints"),
+      v.literal("noteSteps"),
+    ),
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.number(),
+  },
+  returns: v.object({
+    scanned: v.number(),
+    loose: v.array(
+      v.object({
+        noteId: v.id("notes"),
+        revision: v.union(v.number(), v.null()),
+        sources: v.number(),
+      }),
+    ),
+    continueCursor: v.string(),
+    isDone: v.boolean(),
+  }),
+  handler: async (ctx, args) => {
+    const numItems = Math.max(1, Math.min(200, Math.floor(args.numItems)));
+    // Documents can be large; stop a page early rather than read too much.
+    const options = {
+      cursor: args.cursor,
+      numItems,
+      maximumBytesRead: 4_000_000,
+    };
+    const result =
+      args.table === "noteContent"
+        ? await ctx.db.query("noteContent").paginate(options)
+        : args.table === "noteCheckpoints"
+          ? await ctx.db.query("noteCheckpoints").paginate(options)
+          : await ctx.db.query("noteSteps").paginate(options);
+    const loose = [];
+    for (const row of result.page) {
+      const json = "doc" in row ? row.doc : row.step;
+      const sources = looseSources(JSON.parse(json));
+      if (sources)
+        loose.push({
+          noteId: row.noteId,
+          revision: args.table === "noteContent" ? null : row.revision,
+          sources,
+        });
+    }
+    return {
+      scanned: result.page.length,
+      loose,
+      continueCursor: result.continueCursor,
+      isDone: result.isDone,
+    };
+  },
+});
+
+/** Count loose `attachment:` image sources in a document or step's JSON. */
+function looseSources(value: unknown): number {
+  let count = 0;
+  const loose = (src: unknown) =>
+    typeof src === "string" &&
+    /^\s*attachment:/i.test(src) &&
+    !isSafeImageSource(src);
+  const visit = (item: unknown): void => {
+    if (Array.isArray(item)) item.forEach(visit);
+    else if (item && typeof item === "object") {
+      const record = item as Record<string, unknown>;
+      const attrs = record.attrs as Record<string, unknown> | undefined;
+      if (record.type === "image" && attrs && loose(attrs.src)) count++;
+      // An attribute step pointing an image at a new source.
+      if (
+        record.stepType === "attr" &&
+        record.attr === "src" &&
+        loose(record.value)
+      )
+        count++;
+      for (const child of Object.values(record)) visit(child);
+    }
+  };
+  visit(value);
+  return count;
+}

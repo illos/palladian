@@ -40,6 +40,7 @@ export type { NoteEdit, EditErrorCode, OutlineEntry } from "./edits.ts";
 export {
   emptyDoc,
   parseStoredDoc,
+  parseSubmittedDoc,
   diffStep,
   diffSteps,
   contentKey,
@@ -56,9 +57,10 @@ export {
   isMimeType,
   isFileSize,
   isSafeFileAttrs,
+  isLegacyImageSource,
   IMAGE_WIDTH_MIN,
   IMAGE_WIDTH_MAX,
   FILE_NAME_LIMIT,
   FILE_SIZE_LIMIT,
 } from "./schema.ts";
-export { attachmentIds } from "./attachments.ts";
+export { attachmentIds, stepAttachmentIds } from "./attachments.ts";
