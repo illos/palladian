@@ -71,6 +71,7 @@ import {
 } from "./Settings";
 import type { ChannelStatus, NoteChannel } from "./channel";
 import { watchFileCapability } from "./file-capability";
+import { watchNotebookCapability } from "./notebook-capability";
 import { liveStateSource, type LiveBox } from "./liveBox";
 import type { SearchHit } from "./live";
 import "./theme.css";
@@ -371,6 +372,14 @@ export function App({
   useEffect(() => {
     if (!live || !liveReady) return;
     return watchFileCapability(live.client);
+  }, [live, liveReady]);
+
+  // Whether owners may delete notebooks here (NOTEBOOK_DELETE_ENABLED;
+  // shipped off). While off, the notebook menu has no Delete at all.
+  const [notebookDelete, setNotebookDelete] = useState(false);
+  useEffect(() => {
+    if (!live || !liveReady) return;
+    return watchNotebookCapability(live.client, setNotebookDelete);
   }, [live, liveReady]);
 
   // Back and Forward move between the notes and Settings without closing the
@@ -1703,7 +1712,7 @@ export function App({
   ) {
     const target = notebookTarget(id);
     if (!target) return;
-    const actions = notebookActions(target, liveReady);
+    const actions = notebookActions(target, liveReady, notebookDelete);
     if (actions.length) setNotebookMenu({ target, actions, anchor });
   }
 
@@ -1713,7 +1722,10 @@ export function App({
    */
   async function runNotebookAction(action: NotebookActionId, id: string) {
     const target = notebookTarget(id);
-    if (!target || !notebookActions(target, liveReady).includes(action))
+    if (
+      !target ||
+      !notebookActions(target, liveReady, notebookDelete).includes(action)
+    )
       return toast("That action is no longer available for this notebook.");
     navSheet.current?.close();
     try {
@@ -1778,7 +1790,7 @@ export function App({
   const notebookMenuStale =
     !!notebookMenu &&
     (!notebookMenuNow ||
-      notebookActions(notebookMenuNow, liveReady).join() !==
+      notebookActions(notebookMenuNow, liveReady, notebookDelete).join() !==
         notebookMenu.actions.join());
   useEffect(() => {
     if (notebookMenuStale) setNotebookMenu(null);
@@ -1914,6 +1926,7 @@ export function App({
                 isDefault: notebook.isDefault,
               },
               liveReady,
+              notebookDelete,
             ).length > 0
           }
           onSelect={() => choose({ kind: "notebook", id: notebook.id })}
@@ -1975,7 +1988,8 @@ export function App({
     ? notebookTarget(activeNotebook.id)
     : null;
   const activeHasMenu =
-    !!activeTarget && notebookActions(activeTarget, liveReady).length > 0;
+    !!activeTarget &&
+    notebookActions(activeTarget, liveReady, notebookDelete).length > 0;
 
   return (
     <div

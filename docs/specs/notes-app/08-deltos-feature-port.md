@@ -282,7 +282,7 @@ Deltos reference: `components/HistoryPanel.tsx`, for the UI only. Deltos kept pe
 
 ### A5. Notebooks (S, one backend item)
 
-Implemented 2026-10-22, in review (`docs/reviews/notes-notebooks-implementation.md`).
+Implemented 2026-10-22 (`docs/reviews/notes-notebooks-implementation.md`). Reviewed over six rounds and accepted apart from R3-1/R3-3, the D86 gap for collaborators' offline drafts. It ships with **Delete off** (`NOTEBOOK_DELETE_ENABLED` unset): the menu has no Delete and `notebooks.remove` refuses. Turning it on widens that gap unless the parked fundamentals fix lands first; see "Shipping with Delete off" in the report.
 
 Deltos reference: `views/NavContent.tsx`, `components/NotebookMenuBody.tsx`, `ContextMenuSheet.tsx`, `NotebookMenuPopover.tsx`.
 
@@ -298,6 +298,7 @@ Deltos reference: `views/NavContent.tsx`, `components/NotebookMenuBody.tsx`, `Co
   - It then removes memberships and invitations.
   - The default notebook cannot be deleted until another is chosen.
   - This is an authorization change, so it is reviewed.
+  - Ships off behind `NOTEBOOK_DELETE_ENABLED` (as files did behind `FILES_WRITES_ENABLED`): `notebooks.capabilities` reports it, and the menu offers Delete only when it is on.
 - **Not ported:** Deltos sorted notebooks by name with no reordering; Palladian already matches.
 
 ### A6. Pinning and sort orders (M, small backend)

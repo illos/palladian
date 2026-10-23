@@ -19,8 +19,8 @@ const notebook = (over: Partial<NotebookTarget> = {}): NotebookTarget => ({
 });
 
 describe("notebook actions", () => {
-  test("an owner gets every action, Delete last", () => {
-    expect(notebookActions(notebook(), true)).toEqual([
+  test("with deletion on, an owner gets every action, Delete last", () => {
+    expect(notebookActions(notebook(), true, true)).toEqual([
       "new",
       "rename",
       "sharing",
@@ -31,7 +31,7 @@ describe("notebook actions", () => {
 
   test("the default notebook is not offered as default again, but can be deleted", () => {
     // Its dialog asks for another default first, as the server requires.
-    expect(notebookActions(notebook({ isDefault: true }), true)).toEqual([
+    expect(notebookActions(notebook({ isDefault: true }), true, true)).toEqual([
       "new",
       "rename",
       "sharing",
@@ -49,10 +49,26 @@ describe("notebook actions", () => {
     ]);
     for (const role of ["edit", "read"] as const)
       for (const id of ["rename", "sharing", "default", "delete"] as const)
-        expect(notebookActions(notebook({ role }), true)).not.toContain(id);
+        expect(notebookActions(notebook({ role }), true, true)).not.toContain(
+          id,
+        );
+  });
+
+  test("with deletion off (as shipped), Delete is simply absent", () => {
+    expect(notebookActions(notebook(), true)).toEqual([
+      "new",
+      "rename",
+      "sharing",
+      "default",
+    ]);
+    expect(notebookActions(notebook(), true, false)).not.toContain("delete");
+    expect(
+      notebookActions(notebook({ isDefault: true }), true, false),
+    ).not.toContain("delete");
   });
 
   test("offline, only a new note (a draft on this device) remains", () => {
+    expect(notebookActions(notebook(), false, true)).toEqual(["new"]);
     expect(notebookActions(notebook(), false)).toEqual(["new"]);
     expect(notebookActions(notebook({ role: "edit" }), false)).toEqual(["new"]);
     expect(notebookActions(notebook({ role: "read" }), false)).toEqual([]);

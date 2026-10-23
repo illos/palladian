@@ -8,6 +8,9 @@ import schema from "../convex/schema";
 
 const AGENT_ISSUER = "https://agent.test";
 process.env.AGENT_JWT_ISSUER = AGENT_ISSUER;
+// Deletion ships off (NOTEBOOK_DELETE_ENABLED); these tests cover it on,
+// except where a test turns it off.
+process.env.NOTEBOOK_DELETE_ENABLED = "true";
 
 const modules = import.meta.glob([
   "../convex/**/*.ts",
@@ -188,6 +191,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
+  process.env.NOTEBOOK_DELETE_ENABLED = "true";
 });
 
 describe("notebook deletion", () => {
@@ -1343,5 +1347,53 @@ describe("review round 3 regressions", () => {
     expect((await ada.as.query(api.arrangement.mine, {})).version).toBe(
       before + 2,
     );
+  });
+});
+
+describe("shipping with Delete off", () => {
+  test("notebooks.remove is refused unless NOTEBOOK_DELETE_ENABLED is exactly true", async () => {
+    const t = setup();
+    const ada = await human(t, "Ada");
+    const journal = await notebook(ada, "Journal");
+    const kept = await note(ada, journal, "Kept");
+    const args = {
+      notebookId: journal,
+      destinationId: ada.notebookId,
+      trash: false,
+    };
+    for (const value of [undefined, "", "false", "TRUE", "1", " true"]) {
+      if (value === undefined) delete process.env.NOTEBOOK_DELETE_ENABLED;
+      else process.env.NOTEBOOK_DELETE_ENABLED = value;
+      await expect(
+        ada.as.mutation(api.notebooks.remove, args),
+      ).rejects.toMatchObject({
+        data: {
+          code: "invalid",
+          message: "Deleting notebooks is not enabled on this server yet.",
+        },
+      });
+      expect(await ada.as.query(api.notebooks.capabilities, {})).toEqual({
+        delete: false,
+      });
+    }
+    // Nothing changed while it was off.
+    expect(await row(t, journal)).not.toBeNull();
+    expect((await row(t, kept))!.notebookId).toBe(journal);
+    // Signed-out and agent callers are refused as before, first.
+    await expect(t.mutation(api.notebooks.remove, args)).rejects.toThrow(
+      /Sign in/,
+    );
+
+    process.env.NOTEBOOK_DELETE_ENABLED = "true";
+    expect(await ada.as.query(api.notebooks.capabilities, {})).toEqual({
+      delete: true,
+    });
+    // Signed out, the capability says nothing is allowed.
+    expect(await t.query(api.notebooks.capabilities, {})).toEqual({
+      delete: false,
+    });
+    await removeAll(ada, journal, ada.notebookId, false);
+    expect(await row(t, journal)).toBeNull();
+    expect((await row(t, kept))!.notebookId).toBe(ada.notebookId);
   });
 });

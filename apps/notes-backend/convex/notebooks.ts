@@ -9,12 +9,17 @@ import {
 } from "./_generated/server";
 import {
   fail,
+  getPrincipal,
   hasOwnerAuthority,
   notebookRole,
   requireHuman,
   requirePrincipal,
   type Principal,
 } from "./access";
+import {
+  NOTEBOOK_DELETE_DISABLED_MESSAGE,
+  notebookDeleteEnabled,
+} from "./config";
 import { moveNote } from "./lifecycle";
 import { changeLifecycle, deletedBy } from "./notes";
 import { changeRestriction } from "./sharing";
@@ -213,6 +218,21 @@ async function hasMembers(
 }
 
 /**
+ * What this deployment allows for notebooks: `delete` is whether owners may
+ * delete them (NOTEBOOK_DELETE_ENABLED). Readable by any signed-in principal;
+ * signed out: everything off. It reveals one switch and nothing else, as
+ * `files.capabilities` does.
+ */
+export const capabilities = query({
+  args: {},
+  returns: v.object({ delete: v.boolean() }),
+  handler: async (ctx) => {
+    const principal = await getPrincipal(ctx);
+    return { delete: !!principal && notebookDeleteEnabled() };
+  },
+});
+
+/**
  * Which of these notebooks the caller deleted themselves (review round 3).
  * The app keeps a draft for such a notebook available, because notes.create
  * files it in the caller's default notebook; for any other notebook that has
@@ -378,6 +398,9 @@ export const remove = mutation({
   returns: v.object({ done: v.boolean(), notes: v.number() }),
   handler: async (ctx, args) => {
     const person = await requireHuman(ctx);
+    // Off unless NOTEBOOK_DELETE_ENABLED is "true" (shipping with Delete off).
+    if (!notebookDeleteEnabled())
+      fail("invalid", NOTEBOOK_DELETE_DISABLED_MESSAGE);
     const notebook = await ctx.db.get(args.notebookId);
     if (!notebook || !(await notebookRole(ctx, person, notebook)))
       return { done: true, notes: 0 };

@@ -38,3 +38,16 @@ export function filesWritesEnabled(): boolean {
 }
 export const FILES_DISABLED_MESSAGE =
   "Files and image sizes are not enabled on this server yet.";
+
+/**
+ * Whether owners may delete notebooks (plan 08 A5). Off unless the deployment
+ * sets NOTEBOOK_DELETE_ENABLED=true. Deleting a notebook widens the D86 gap
+ * for collaborators' offline drafts (sign-out export and other tabs) until the
+ * sync fundamentals hold such drafts; see the "Shipping with Delete off"
+ * section of docs/reviews/notes-notebooks-implementation.md.
+ */
+export function notebookDeleteEnabled(): boolean {
+  return process.env.NOTEBOOK_DELETE_ENABLED === "true";
+}
+export const NOTEBOOK_DELETE_DISABLED_MESSAGE =
+  "Deleting notebooks is not enabled on this server yet.";

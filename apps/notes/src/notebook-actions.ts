@@ -42,13 +42,16 @@ const needsServer: Record<NotebookActionId, boolean> = {
 
 /**
  * The actions a notebook offers, in menu order. Owners rename, share, choose
- * it as their default and delete it; anyone who can edit adds notes; others
- * see who has access. Delete stays offered for the default notebook: its
- * dialog asks for another default first, as the server requires.
+ * it as their default and, where the server allows it (`deleteEnabled`,
+ * `notebooks.capabilities`; shipped off), delete it; anyone who can edit adds
+ * notes; others see who has access. Delete stays offered for the default
+ * notebook: its dialog asks for another default first, as the server
+ * requires. While deletion is off, Delete is simply absent.
  */
 export function notebookActions(
   target: NotebookTarget,
   online: boolean,
+  deleteEnabled = false,
 ): NotebookActionId[] {
   const owner = target.role === "owner";
   const edit = owner || target.role === "edit";
@@ -56,7 +59,7 @@ export function notebookActions(
     ...(edit ? (["new"] as const) : []),
     ...(owner ? (["rename", "sharing"] as const) : (["members"] as const)),
     ...(owner && !target.isDefault ? (["default"] as const) : []),
-    ...(owner ? (["delete"] as const) : []),
+    ...(owner && deleteEnabled ? (["delete"] as const) : []),
   ];
   return all.filter((id) => online || !needsServer[id]);
 }

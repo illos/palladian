@@ -2,7 +2,8 @@
 // development deployment + the app + Chromium on a desktop and an emulated
 // iPhone with real touch input. Covers the notebook menu (right-click, hover
 // "…", the list header and a phone long press), name and description, set as
-// default, new note here, deleting with the notes moved (a member losing
+// default, new note here, Delete shipped off (no menu item, the server
+// refuses) and then turned on: deleting with the notes moved (a member losing
 // access, with the warning first) and deleting to Trash, the default
 // notebook asking for another default first, and (review round 1) a member's
 // device leaving the deleted notebook and, on the owner's own phone, a note
@@ -100,7 +101,11 @@ function convex(page, kind, path, args) {
         body: JSON.stringify({ path, args, format: "json" }),
       });
       const body = await response.json();
-      if (body.status !== "success") throw new Error(body.errorMessage);
+      if (body.status !== "success")
+        throw new Error(
+          body.errorMessage +
+            (body.errorData ? " " + JSON.stringify(body.errorData) : ""),
+        );
       return body.value;
     },
     { kind, path, args },
@@ -118,6 +123,30 @@ async function context(browser, options = {}) {
   return made;
 }
 
+/**
+ * Turn notebook deletion on or off on the development deployment
+ * (NOTEBOOK_DELETE_ENABLED). Refuses to go on if the command names anything
+ * but this development deployment.
+ */
+function setDeleteGate(on) {
+  const result = spawnSync(
+    "npx",
+    on
+      ? ["convex", "env", "set", "NOTEBOOK_DELETE_ENABLED", "true"]
+      : ["convex", "env", "remove", "NOTEBOOK_DELETE_ENABLED"],
+    { cwd: backend, encoding: "utf8" },
+  );
+  const out = `${result.stdout}\n${result.stderr}`;
+  assert.ok(!/prod/i.test(out), "the env command did not touch production");
+  assert.ok(
+    out.includes("decisive-reindeer-520"),
+    "it named the dev deployment",
+  );
+  assert.equal(result.status, 0, "env command succeeded");
+}
+
+// Deletion ships off: the deployment starts without NOTEBOOK_DELETE_ENABLED.
+setDeleteGate(false);
 const browser = await chromium.launch({ headless: true });
 try {
   const desk = await context(browser);
@@ -151,10 +180,56 @@ try {
   await expect(count("Archive")).toHaveText("0");
   step("account with Journal (two notes) and an empty Archive");
 
-  // Rename and describe from the sidebar's right-click menu.
-  await navItem("Journal").click({ button: "right" });
+  // Shipped with Delete off: the menu has no Delete, and the server refuses.
   const menu = (name) =>
     page.getByRole("dialog", { name: `Actions for notebook ${name}` });
+  await navItem("Journal").click({ button: "right" });
+  await expect(menu("Journal").getByRole("menuitem")).toHaveText([
+    "New note here",
+    "Name and description…",
+    "Sharing and members…",
+    "Set as default",
+  ]);
+  await page.keyboard.press("Escape");
+  await assert.rejects(
+    convex(page, "mutation", "notebooks:remove", {
+      notebookId: archive,
+      destinationId: notesId,
+      trash: false,
+    }),
+    /Deleting notebooks is not enabled on this server yet/,
+  );
+  assert.deepEqual(await convex(page, "query", "notebooks:capabilities", {}), {
+    delete: false,
+  });
+  assert.ok(
+    (await convex(page, "query", "library:notebooks", {})).some(
+      (b) => b.id === archive,
+    ),
+    "Archive is still there",
+  );
+  step("Delete off: no Delete in the menu, and notebooks.remove is refused");
+
+  // Turned on for the rest of the run (and off again in `finally`).
+  setDeleteGate(true);
+  await expect
+    .poll(
+      async () =>
+        (await convex(page, "query", "notebooks:capabilities", {})).delete,
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+  // The app follows the capability without a reload.
+  await expect(async () => {
+    await navItem("Journal").click({ button: "right" });
+    await expect(
+      menu("Journal").getByRole("menuitem", { name: "Delete notebook…" }),
+    ).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 30_000 });
+  await page.keyboard.press("Escape");
+
+  // Rename and describe from the sidebar's right-click menu.
+  await navItem("Journal").click({ button: "right" });
   await expect(menu("Journal").getByRole("menuitem")).toHaveText([
     "New note here",
     "Name and description…",
@@ -519,4 +594,12 @@ try {
   );
 } finally {
   await browser.close();
+  // Leave the development deployment as shipped: Delete off, whatever
+  // happened above (the runner also does this on exit).
+  try {
+    setDeleteGate(false);
+  } catch (error) {
+    console.error("Could not turn notebook deletion off again:", error);
+    process.exitCode = 1;
+  }
 }
