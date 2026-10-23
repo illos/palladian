@@ -78,3 +78,84 @@ export function stepUsesFileFeatures(step: Step): boolean {
   }
   return false;
 }
+
+/** The file features a document already has (round 4: the gate allows these). */
+export interface FileFeatures {
+  /** Objects it references. */
+  objects: Set<string>;
+  /** Image widths it uses, keyed by source and width. */
+  widths: Set<string>;
+}
+
+function widthKey(src: unknown, width: unknown) {
+  return `${String(src)}\u0000${String(width)}`;
+}
+
+export function fileFeatures(
+  content: ProseMirrorNode | Fragment | null,
+): FileFeatures {
+  const features: FileFeatures = { objects: new Set(), widths: new Set() };
+  if (!content) return features;
+  for (const objectId of attachmentIds(content)) features.objects.add(objectId);
+  content.descendants((node) => {
+    if (node.type.name === "image" && node.attrs.width !== null)
+      features.widths.add(widthKey(node.attrs.src, node.attrs.width));
+    return !node.isTextblock;
+  });
+  return features;
+}
+
+/**
+ * Whether content has file features `existing` lacks: an object it does not
+ * reference, or an image width it does not use. Keeping an identical file
+ * block or sized image is not new.
+ */
+export function addsFileFeatures(
+  content: ProseMirrorNode | Fragment,
+  existing: FileFeatures,
+): boolean {
+  let found = false;
+  content.descendants((node) => {
+    if (found) return false;
+    if (node.type.name === "file")
+      found = !existing.objects.has(String(node.attrs.objectId));
+    else if (node.type.name === "image") {
+      const objectId = attachmentObjectId(node.attrs.src);
+      found =
+        (objectId !== null && !existing.objects.has(objectId)) ||
+        (node.attrs.width !== null &&
+          !existing.widths.has(widthKey(node.attrs.src, node.attrs.width)));
+    }
+    return !found && !node.isTextblock;
+  });
+  return found;
+}
+
+/** Whether a step, applied to `doc`, brings in file features `existing` lacks. */
+export function stepAddsFileFeatures(
+  step: Step,
+  doc: ProseMirrorNode,
+  existing: FileFeatures,
+): boolean {
+  if (step instanceof ReplaceStep || step instanceof ReplaceAroundStep)
+    return addsFileFeatures(step.slice.content, existing);
+  if (step instanceof AttrStep) {
+    const node = doc.nodeAt(step.pos);
+    if (step.attr === "src") {
+      const objectId = attachmentObjectId(step.value);
+      if (objectId !== null && !existing.objects.has(objectId)) return true;
+      const width = node?.attrs.width ?? null;
+      return (
+        width !== null && !existing.widths.has(widthKey(step.value, width))
+      );
+    }
+    if (step.attr === "width")
+      return (
+        step.value !== null &&
+        !existing.widths.has(widthKey(node?.attrs.src, step.value))
+      );
+    if (step.attr === "objectId")
+      return !existing.objects.has(String(step.value));
+  }
+  return false;
+}

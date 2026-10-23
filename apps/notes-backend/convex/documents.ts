@@ -10,19 +10,25 @@ import {
   parseStoredDoc,
   parseSubmittedDoc,
   plainText,
+  addsFileFeatures,
+  fileFeatures,
+  stepAddsFileFeatures,
   stepAttachmentIds,
-  stepUsesFileFeatures,
   UnsafeDocumentError,
-  usesFileFeatures,
+  type FileFeatures,
 } from "@palladian/notes-core";
 import type { Node as ProseMirrorNode } from "prosemirror-model";
 import { Step, Transform } from "prosemirror-transform";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { fail, type Principal } from "./access";
+import { fail, noteRole, type Principal } from "./access";
 import { FILES_DISABLED_MESSAGE, filesWritesEnabled } from "./config";
-import { MAX_NOTE_OBJECTS, recordReferences } from "./references";
+import {
+  MAX_NOTE_OBJECTS,
+  MAX_SOURCE_NOTES,
+  recordReferences,
+} from "./references";
 
 /** Collaboration limits; requests beyond them are rejected, not truncated. */
 export const MAX_STEPS_PER_PUSH = 500;
@@ -87,6 +93,32 @@ export function normalizeNewDoc(json: string): ProseMirrorNode {
   return blockIdProblems(doc) ? assignBlockIds(new Transform(doc)).doc : doc;
 }
 
+/**
+ * The file features of the notes a new note copies (a conflict copy, a
+ * duplicate, a named source) that the actor can read: while files are off,
+ * a copy may keep what its source already has.
+ */
+async function sourceFeatures(
+  ctx: MutationCtx,
+  actor: Principal,
+  sources: Id<"notes">[],
+): Promise<FileFeatures> {
+  const features = fileFeatures(null);
+  for (const source of sources.slice(0, MAX_SOURCE_NOTES)) {
+    const note = await ctx.db.get(source);
+    if (!note || !(await noteRole(ctx, actor, note))) continue;
+    const content = await ctx.db
+      .query("noteContent")
+      .withIndex("by_note", (q) => q.eq("noteId", source))
+      .unique();
+    if (!content) continue;
+    const found = fileFeatures(parseStoredDoc(content.doc));
+    for (const objectId of found.objects) features.objects.add(objectId);
+    for (const width of found.widths) features.widths.add(width);
+  }
+  return features;
+}
+
 export async function createNoteRecord(
   ctx: MutationCtx,
   args: {
@@ -99,7 +131,13 @@ export async function createNoteRecord(
     sources?: Id<"notes">[];
   },
 ) {
-  if (!filesWritesEnabled() && usesFileFeatures(args.doc))
+  if (
+    !filesWritesEnabled() &&
+    addsFileFeatures(
+      args.doc,
+      await sourceFeatures(ctx, args.actor, args.sources ?? []),
+    )
+  )
     fail("invalid", FILES_DISABLED_MESSAGE);
   const now = Date.now();
   const json = serializeDoc(args.doc);
@@ -190,15 +228,17 @@ export async function commitSteps(
   // it passes the limit is a revision counted exactly.
   const union = new Set(attachmentIds(before));
   const baseline = union.size;
-  // Until files are enabled, no step may bring in file features (round 3).
-  const filesOn = filesWritesEnabled();
+  // Until files are enabled, no step may bring in file features the note
+  // does not already have (rounds 3 and 4): keeping an identical file block
+  // or sized image is fine, adding one is not.
+  const existing = filesWritesEnabled() ? null : fileFeatures(before);
   // Checkpoints land on every interval boundary, even inside a large batch, so
   // any revision is rebuilt from at most one interval of steps.
   const checkpoints: { revision: number; doc: ProseMirrorNode }[] = [];
   // Each step is validated for what it introduces, so every revision in the
   // batch, including persisted checkpoints, stays within the safety contract.
   const apply = (step: Step, historical = false) => {
-    if (!filesOn && stepUsesFileFeatures(step))
+    if (existing && stepAddsFileFeatures(step, doc, existing))
       fail("invalid", FILES_DISABLED_MESSAGE);
     let added: string[] = [];
     try {

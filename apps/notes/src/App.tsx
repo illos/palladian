@@ -55,6 +55,7 @@ import {
   type SettingsTab,
 } from "./Settings";
 import type { ChannelStatus, NoteChannel } from "./channel";
+import { watchFileCapability } from "./file-capability";
 import { liveStateSource, type LiveBox } from "./liveBox";
 import type { SearchHit } from "./live";
 import "./theme.css";
@@ -296,6 +297,13 @@ export function App({
     session.start();
     return () => session.stop();
   }, [session]);
+
+  // Whether the server accepts file features yet; pasted content keeps them
+  // only then (file-capability.ts, review round 4 of B1+B2).
+  useEffect(() => {
+    if (!live || !liveReady) return;
+    return watchFileCapability(live.client);
+  }, [live, liveReady]);
 
   // Back and Forward move between the notes and Settings without closing the
   // open note.
@@ -1137,7 +1145,12 @@ export function App({
               ? book.id
               : (liveState.profile?.defaultNotebookId ?? undefined);
           const { duplicateNote } = await import("./note-tools");
-          const id = await duplicateNote(live.client, doc, notebookId);
+          const id = await duplicateNote(
+            live.client,
+            doc,
+            notebookId,
+            target.id,
+          );
           return toast("Duplicated", {
             label: "Open",
             run: () => void openRemote(id),

@@ -698,3 +698,47 @@ test("R3-3: a pasted web image keeps no width; Palladian's own images do", () =>
     300,
   );
 });
+
+// Review round 4 (docs/reviews/notes-files-backend-round4-astra-review.md).
+
+test("R4-2: only file features a note does not already have count as new", async () => {
+  const { fileFeatures, addsFileFeatures, stepAddsFileFeatures } =
+    await import("../src/index.ts");
+  const current = stored(
+    doc(
+      node.paragraph!.create({ id: "p1" }, notesSchema.text("Text")),
+      node.image!.create({ id: "i1", src: `attachment:${A}`, width: 320 }),
+      file({ id: "f1", objectId: B }),
+    ),
+  );
+  const existing = fileFeatures(current);
+  // The same content again (a replace_all keeping them) is not new.
+  assert.equal(addsFileFeatures(current, existing), false);
+  const edited = markdownToDoc(docToMarkdown(current).replace("Text", "New"));
+  assert.equal(addsFileFeatures(edited, existing), false);
+  // Another width, another object: new.
+  assert.equal(
+    addsFileFeatures(
+      doc(node.image!.create({ src: `attachment:${A}`, width: 400 })),
+      existing,
+    ),
+    true,
+  );
+  assert.equal(
+    addsFileFeatures(doc(file({ objectId: "0".repeat(20) })), existing),
+    true,
+  );
+  const imagePos = current.child(0).nodeSize;
+  const steps = new Transform(current)
+    .setNodeAttribute(imagePos, "width", 320)
+    .setNodeAttribute(imagePos, "width", 100).steps;
+  assert.equal(stepAddsFileFeatures(steps[0]!, current, existing), false);
+  assert.equal(stepAddsFileFeatures(steps[1]!, current, existing), true);
+  // A whole-document replacement with the same features is not new.
+  const replaceAll = new Transform(current).replaceWith(
+    0,
+    current.content.size,
+    edited.content,
+  ).steps[0]!;
+  assert.equal(stepAddsFileFeatures(replaceAll, current, existing), false);
+});

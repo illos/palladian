@@ -1,10 +1,15 @@
-import { assertSafeFragment, notesSchema } from "@palladian/notes-core/schema";
+import {
+  assertSafeFragment,
+  attachmentObjectId,
+  notesSchema,
+} from "@palladian/notes-core/schema";
 import {
   Fragment,
   Slice,
   type Node as ProseMirrorNode,
 } from "prosemirror-model";
 import type { EditorView } from "prosemirror-view";
+import { fileWritesEnabled } from "./file-capability";
 
 const paragraph = notesSchema.nodes.paragraph!;
 const hardBreak = notesSchema.nodes.hard_break!;
@@ -272,11 +277,57 @@ function withinLimits(fragment: Fragment): Fragment {
 }
 
 /**
+ * Pasted content without file features, while the server does not accept
+ * them (file-capability.ts): a file block becomes its name, an image of an
+ * uploaded object its description (or nothing), and an image keeps no width.
+ * The server would refuse them and stop the note from saving.
+ */
+function withoutFileFeatures(fragment: Fragment): Fragment {
+  const nodes: ProseMirrorNode[] = [];
+  const text = (value: string) =>
+    paragraph.create(null, value ? notesSchema.text(value) : null);
+  fragment.forEach((node) => {
+    if (node.type.name === "file") {
+      nodes.push(text(String(node.attrs.name ?? "")));
+      return;
+    }
+    if (node.type.name === "image") {
+      if (attachmentObjectId(node.attrs.src) !== null) {
+        const alt = String(node.attrs.alt ?? "").trim();
+        if (alt) nodes.push(text(alt));
+      } else
+        nodes.push(
+          node.attrs.width === null
+            ? node
+            : node.type.create(
+                { ...node.attrs, width: null },
+                null,
+                node.marks,
+              ),
+        );
+      return;
+    }
+    if (node.isLeaf || node.isTextblock) {
+      nodes.push(node);
+      return;
+    }
+    const content = withoutFileFeatures(node.content);
+    nodes.push(
+      node.type.createAndFill(node.attrs, content, node.marks) ??
+        text(content.textBetween(0, content.size, " ", " ")),
+    );
+  });
+  return Fragment.fromArray(nodes);
+}
+
+/**
  * The editor's `transformPasted`, also used for Markdown: pasted content
  * kept within the server's limits; anything still refused pastes as text.
  */
 export function safeSlice(slice: Slice): Slice {
-  const content = withinLimits(slice.content);
+  const content = withinLimits(
+    fileWritesEnabled() ? slice.content : withoutFileFeatures(slice.content),
+  );
   try {
     assertSafeFragment(content);
     return new Slice(content, slice.openStart, slice.openEnd);

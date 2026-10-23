@@ -171,6 +171,20 @@ async function resolveTarget(
   fail("invalid", "Upload to exactly one note or notebook.");
 }
 
+/**
+ * What this deployment accepts from the app (review round 4): whether new
+ * content may use files (FILES_WRITES_ENABLED). The app keeps file features
+ * out of pasted content until this says yes. Signed out: no.
+ */
+export const capabilities = query({
+  args: {},
+  returns: v.object({ writes: v.boolean() }),
+  handler: async (ctx) => {
+    const principal = await getPrincipal(ctx);
+    return { writes: !!principal && filesWritesEnabled() };
+  },
+});
+
 /** Ask for an upload ticket. Needs edit access to the target. */
 export const createUpload = mutation({
   args: {

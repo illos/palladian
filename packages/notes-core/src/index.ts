@@ -68,4 +68,8 @@ export {
   stepAttachmentIds,
   usesFileFeatures,
   stepUsesFileFeatures,
+  fileFeatures,
+  addsFileFeatures,
+  stepAddsFileFeatures,
 } from "./attachments.ts";
+export type { FileFeatures } from "./attachments.ts";

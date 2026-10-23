@@ -9,6 +9,7 @@ export default defineConfig({
     "notes-actions.spec.ts",
     "notes-swipe.spec.ts",
     "notes-editor.spec.ts",
+    "notes-files-gate.spec.ts",
   ],
   fullyParallel: true,
   reporter: "list",

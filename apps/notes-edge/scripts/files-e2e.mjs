@@ -14,7 +14,8 @@
 //
 //   EXPECT_FILES_DISABLED=1: the deployment has FILES_WRITES_ENABLED off;
 //     the script checks that file writes are refused and reads still work,
-//     then stops (review round 3).
+//     then stops (review round 3). With FLIP_GATE=1 it also switches the
+//     variable (ending on) and checks files.capabilities follows at once.
 //
 // Prints only non-secret progress. Creates disposable accounts each run.
 import { execFile } from "node:child_process";
@@ -280,6 +281,28 @@ async function gateOff() {
     edits: [{ type: "append", markdown: "More text." }],
   });
   log("reads and ordinary edits are unaffected");
+  if (process.env.FLIP_GATE === "1") {
+    // The app watches files.capabilities: switching the variable must show
+    // at once, for the same signed-in client, in both directions.
+    const capability = async () =>
+      (await ada.client.query(api.files.capabilities, {})).writes;
+    assert((await capability()) === false, "capabilities: off");
+    for (const value of ["true", "false", "true"]) {
+      await run(
+        "npx",
+        ["convex", "env", "set", "FILES_WRITES_ENABLED", value],
+        {
+          cwd: BACKEND_DIR,
+          env: process.env,
+        },
+      );
+      assert(
+        (await capability()) === (value === "true"),
+        `capabilities follow FILES_WRITES_ENABLED=${value}`,
+      );
+    }
+    log("files.capabilities followed the switch at once, off → on → off → on");
+  }
   log("PASS (files off)");
 }
 
