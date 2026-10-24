@@ -262,8 +262,10 @@ const ALBUM = {
       attrs: {
         id: "doc",
         objectId: FILE,
-        name: "report.pdf",
-        mimeType: "application/pdf",
+        // Not a PDF: PDFs open the reader (B4), so the downloads tested
+        // here use another kind of file.
+        name: "report.zip",
+        mimeType: "application/zip",
         size: 2_516_582,
       },
     },
@@ -274,7 +276,7 @@ const ALBUM = {
     },
   ],
 };
-const REPORT = Buffer.from("%PDF-1.7\n% attachments browser test\n");
+const REPORT = Buffer.from("PK\u0005\u0006 attachments browser test\n");
 
 async function album(page: Page, files = true) {
   const reads: string[] = [];
@@ -856,7 +858,7 @@ test("R2 R2-2: with files off, an attachment image and a file block render as on
   // main's own rendering of these nodes (its schema's toDOM).
   expect(withoutIds(await editor.innerHTML())).toBe(
     `<p>Album</p><img src="attachment:${IMAGE}" alt="photo.png" contenteditable="false" draggable="true">` +
-      `<div data-object-id="${FILE}" data-name="report.pdf" data-mime-type="application/pdf" data-size="2516582" contenteditable="false" draggable="true">report.pdf</div>` +
+      `<div data-object-id="${FILE}" data-name="report.zip" data-mime-type="application/zip" data-size="2516582" contenteditable="false" draggable="true">report.zip</div>` +
       "<p>End.</p>",
   );
   expect(await editor.locator("[tabindex], [role=button]").count()).toBe(0);
@@ -924,8 +926,8 @@ test("a file shows as a chip with its type and size, and downloads", async ({
   const block = editor.locator("[data-object-id]");
   const chip = block.locator(".file-chip");
   await expect(block).toHaveCount(1);
-  await expect(chip.locator(".file-name")).toHaveText("report.pdf");
-  await expect(chip.locator(".file-meta")).toHaveText("PDF · 2.4 MB");
+  await expect(chip.locator(".file-name")).toHaveText("report.zip");
+  await expect(chip.locator(".file-meta")).toHaveText("ZIP · 2.4 MB");
   await expect(chip.locator("svg")).toHaveCount(1);
   // Editable: the first tap selects; a tap on the selected chip downloads.
   await chip.click();
@@ -933,13 +935,13 @@ test("a file shows as a chip with its type and size, and downloads", async ({
   const download = page.waitForEvent("download");
   await chip.click();
   const file = await download;
-  expect(file.suggestedFilename()).toBe("report.pdf");
+  expect(file.suggestedFilename()).toBe("report.zip");
   expect((await readFile(await file.path())).equals(REPORT)).toBe(true);
   // Read-only: one tap downloads.
   await api(page).setEditable(false);
   const again = page.waitForEvent("download");
   await chip.click();
-  expect((await again).suggestedFilename()).toBe("report.pdf");
+  expect((await again).suggestedFilename()).toBe("report.zip");
 });
 
 test("a reference the server does not hold shows Attachment unavailable", async ({
@@ -1359,12 +1361,12 @@ test("R1 F8: pictures and files open from the keyboard; pictures resize with lab
   await expect(chip).toHaveAttribute("role", "button");
   await expect(chip).toHaveAttribute(
     "aria-label",
-    "Download report.pdf, PDF, 2.4 MB",
+    "Download report.zip, ZIP, 2.4 MB",
   );
   const download = page.waitForEvent("download");
   await chip.focus();
   await page.keyboard.press("Enter");
-  expect((await download).suggestedFilename()).toBe("report.pdf");
+  expect((await download).suggestedFilename()).toBe("report.zip");
 });
 
 // ---- Review round 3 of B3: memory only, and the files gate (R3-3) ----
@@ -1617,7 +1619,7 @@ async function expectNoStaleDownload(
   await expect(held.chip.locator(".file-meta")).not.toHaveText("Downloading…");
   // A download asked for afterwards goes through.
   await held.chip.click();
-  await expect.poll(() => held.downloads).toEqual(["report.pdf"]);
+  await expect.poll(() => held.downloads).toEqual(["report.zip"]);
 }
 
 test("R4-1: files off and on again in one task: a held picture read shows nothing; the picture reads again", async ({

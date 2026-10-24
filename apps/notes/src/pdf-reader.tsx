@@ -6,7 +6,12 @@ import {
   useRef,
   useState,
 } from "react";
-import { openPdf, PRIORITY, type OpenedPdf, type PdfPageSize } from "./pdf-engine";
+import {
+  openPdf,
+  PRIORITY,
+  type OpenedPdf,
+  type PdfPageSize,
+} from "./pdf-engine";
 import {
   buildMatches,
   pagePlainText,
@@ -265,9 +270,7 @@ export function PdfReader({ name, data, onDownload }: PdfReaderProps) {
     : -1;
   const activeMatch = current >= 0 ? (matches[current] ?? null) : null;
   const indexing =
-    searching &&
-    !!query.trim() &&
-    texts.some((text) => text === null);
+    searching && !!query.trim() && texts.some((text) => text === null);
 
   /** Show a match: its page, then its line in the middle of the view. */
   const showMatch = useCallback(
@@ -326,7 +329,11 @@ export function PdfReader({ name, data, onDownload }: PdfReaderProps) {
 
   if (phase === "error")
     return (
-      <div className="pdf-reader pdf-reader-error" role="group" aria-label={`PDF: ${name}`}>
+      <div
+        className="pdf-reader pdf-reader-error"
+        role="group"
+        aria-label={`PDF: ${name}`}
+      >
         <p>This PDF could not be opened here.</p>
         <button type="button" className="pdf-download" onClick={onDownload}>
           Download to view
@@ -353,7 +360,9 @@ export function PdfReader({ name, data, onDownload }: PdfReaderProps) {
           type="button"
           className="pdf-tool"
           aria-pressed={showRail}
-          aria-label={showRail ? "Hide page thumbnails" : "Show page thumbnails"}
+          aria-label={
+            showRail ? "Hide page thumbnails" : "Show page thumbnails"
+          }
           title="Page thumbnails"
           disabled={!pdf}
           onClick={() => setRailOpen((open) => !open)}
@@ -424,7 +433,10 @@ export function PdfReader({ name, data, onDownload }: PdfReaderProps) {
           {pdf && (
             <div
               className="pdf-pages"
-              style={{ height: layout.total || undefined, width: pageWidth || undefined }}
+              style={{
+                height: layout.total || undefined,
+                width: pageWidth || undefined,
+              }}
             >
               {Array.from({ length: pdf.pages }, (_, index) => {
                 const number = index + 1;
@@ -640,7 +652,10 @@ function ThumbnailRail({
       aria-label="Page thumbnails"
       onScroll={recompute}
     >
-      <div className="pdf-rail-track" style={{ height: layout.total || undefined }}>
+      <div
+        className="pdf-rail-track"
+        style={{ height: layout.total || undefined }}
+      >
         {Array.from({ length: pdf.pages }, (_, index) => {
           const number = index + 1;
           const scale = layout.scales[index] ?? 0;
@@ -825,7 +840,9 @@ function TextLayer({
                   ) : (
                     <mark
                       key={at}
-                      className={part.kind === "active" ? "is-active" : undefined}
+                      className={
+                        part.kind === "active" ? "is-active" : undefined
+                      }
                     >
                       {part.text}
                     </mark>

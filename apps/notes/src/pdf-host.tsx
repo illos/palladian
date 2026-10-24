@@ -143,8 +143,7 @@ export function openPdfDialog(file: FileInfo, opening: FileOpening) {
     },
     (error: unknown) => {
       if (closed) return;
-      const kind =
-        error instanceof AttachmentReadError ? error.kind : "failed";
+      const kind = error instanceof AttachmentReadError ? error.kind : "failed";
       status.textContent =
         kind === "signed-out"
           ? "Not available offline."

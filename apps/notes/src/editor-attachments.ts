@@ -669,7 +669,11 @@ export class AttachmentRuntime {
             this.hooks.notify("The download failed. Try again."),
           );
         },
-        release: () => void this.opens.delete(abort),
+        // Closed: a read still under way stops too.
+        release: () => {
+          this.opens.delete(abort);
+          abort.abort();
+        },
       });
       return;
     }

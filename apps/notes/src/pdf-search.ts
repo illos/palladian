@@ -65,7 +65,7 @@ export function findPageMatches(
   if (!query) return [];
   const haystack = normalize(pagePlainText(items).text);
   const found: { charStart: number; charEnd: number }[] = [];
-  for (let from = 0; ; ) {
+  for (let from = 0; ;) {
     const at = haystack.indexOf(query, from);
     if (at < 0) break;
     found.push({ charStart: at, charEnd: at + query.length });
@@ -108,7 +108,10 @@ export function splitItemForRender(
   const itemEnd = itemStart + text.length;
   // 0 plain, 1 a match, 2 the active match.
   const flags = new Uint8Array(text.length);
-  const mark = (range: { charStart: number; charEnd: number }, value: 1 | 2) => {
+  const mark = (
+    range: { charStart: number; charEnd: number },
+    value: 1 | 2,
+  ) => {
     const from = Math.max(range.charStart, itemStart);
     const to = Math.min(range.charEnd, itemEnd);
     for (let at = from; at < to; at++) flags[at - itemStart] = value;

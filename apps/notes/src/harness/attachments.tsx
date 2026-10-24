@@ -55,7 +55,10 @@ interface Harness {
    * Show a new file note's title-only document and hand its editor the file
    * (B4), as the app does once it has made the note.
    */
-  fileNote(title: string, file: { name: string; type: string; base64: string }): void;
+  fileNote(
+    title: string,
+    file: { name: string; type: string; base64: string },
+  ): void;
   /** Whether the editor took the file note's file. */
   fileNoteTaken: boolean;
   /** Clear the byte cache, as any clear does (R4-1). */

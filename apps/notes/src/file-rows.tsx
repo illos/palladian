@@ -47,9 +47,7 @@ export function useFileNotes(
     void (async () => {
       let found = false;
       for (const row of missing) {
-        const body = await store
-          .read(accountId, row.id)
-          .catch(() => undefined);
+        const body = await store.read(accountId, row.id).catch(() => undefined);
         if (!alive) return;
         if (!body) continue;
         known.current.set(key(row), fileNoteOf(body.document));
@@ -79,27 +77,35 @@ export function useFileNotes(
  * another account, files off) takes the picture away at once.
  */
 export function FileRowVisual({ file }: { file: FileNoteFile }) {
-  const [url, setUrl] = useState<string | null>(null);
+  const [shown, setShown] = useState<{ blob: Blob; url: string } | null>(null);
   const picture = useRef<HTMLImageElement>(null);
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  // Looked up again whenever the list renders, so bytes this page reads
+  // later (opening the note) show here too: a lookup in memory, never a read.
   useEffect(() => {
-    if (file.kind !== "image") return;
-    const blob = attachmentCache.read(attachmentCache.current(), file.objectId);
-    let made: string | null = blob ? URL.createObjectURL(blob) : null;
-    setUrl(made);
-    const drop = () => {
-      if (made) URL.revokeObjectURL(made);
-      made = null;
-    };
-    const stop = attachmentCache.onClear(() => {
-      picture.current?.removeAttribute("src");
-      drop();
-      setUrl(null);
-    });
-    return () => {
-      stop();
-      drop();
-    };
-  }, [file.kind, file.objectId]);
+    const blob =
+      file.kind === "image"
+        ? attachmentCache.read(attachmentCache.current(), file.objectId)
+        : null;
+    if (blob === (shownRef.current?.blob ?? null)) return;
+    setShown(blob ? { blob, url: URL.createObjectURL(blob) } : null);
+  });
+  // Each picture's address lasts as long as it shows.
+  useEffect(() => {
+    if (!shown) return;
+    return () => URL.revokeObjectURL(shown.url);
+  }, [shown]);
+  // Any clear takes the picture off the page at once.
+  useEffect(
+    () =>
+      attachmentCache.onClear(() => {
+        picture.current?.removeAttribute("src");
+        setShown(null);
+      }),
+    [],
+  );
+  const url = shown?.url ?? null;
   return (
     <span className="row-file-visual" aria-hidden="true">
       {url ? (

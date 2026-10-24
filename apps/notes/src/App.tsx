@@ -2105,7 +2105,9 @@ export function App({
         const { createFileNote } = await import("./note-tools");
         const client = liveRef.current?.client;
         // Files must still be on when the note is made.
-        return client && fileWritesEnabled() ? { createFileNote, client } : null;
+        return client && fileWritesEnabled()
+          ? { createFileNote, client }
+          : null;
       },
       ({ createFileNote, client }) =>
         createFileNote(client, account, start.document, notebookId),
@@ -2319,7 +2321,9 @@ export function App({
                   },
                   onDragLeave: (event: React.DragEvent<HTMLDivElement>) => {
                     const to = event.relatedTarget;
-                    if (!(to instanceof Node && event.currentTarget.contains(to)))
+                    if (!(
+                      to instanceof Node && event.currentTarget.contains(to)
+                    ))
                       setFileDrop(false);
                   },
                   onDrop: (event: React.DragEvent<HTMLDivElement>) => {
@@ -2344,7 +2348,9 @@ export function App({
               const target = targetOf(row);
               const actions = noteActions(target, liveReady, liveConnected);
               /** A file note's file, while files are on (B4). */
-              const file = draftLost(row) ? undefined : visibleFiles.get(row.id);
+              const file = draftLost(row)
+                ? undefined
+                : visibleFiles.get(row.id);
               const book =
                 section.kind === "all" && row.notebookId && !row.trashed
                   ? notebooks.find((n) => n.id === row.notebookId)

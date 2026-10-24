@@ -97,8 +97,10 @@ function png(width, height) {
 }
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const PHOTO = png(480, 320);
+// Not a PDF: a PDF chip opens the reader (B4, file-notes-e2e.mjs), so the
+// chip downloaded here is another kind of file.
 const REPORT = Buffer.from(
-  "%PDF-1.7\n% attachments e2e " + randomBytes(8).toString("hex") + "\n",
+  "PK\u0005\u0006 attachments e2e " + randomBytes(8).toString("hex") + "\n",
 );
 
 function convexCli(args, extra = []) {
@@ -578,19 +580,19 @@ try {
   begin("file chip");
   await caretAfter(a, editorA, "Second line.");
   await choose(a, [
-    { name: "report.pdf", mimeType: "application/pdf", buffer: REPORT },
+    { name: "report.zip", mimeType: "application/zip", buffer: REPORT },
   ]);
   const chip = editorA.locator("[data-object-id]");
-  await expect(chip.locator(".file-name")).toHaveText("report.pdf", {
+  await expect(chip.locator(".file-name")).toHaveText("report.zip", {
     timeout: 30_000,
   });
-  await expect(chip.locator(".file-meta")).toHaveText(/^PDF · \d+ B$/);
+  await expect(chip.locator(".file-meta")).toHaveText(/^ZIP · \d+ B$/);
   await saved(a);
   assert.deepEqual((await serverBlocks(a, noteId)).slice(-1), [
-    "file:report.pdf",
+    "file:report.zip",
   ]);
   const reportObject = await chip.getAttribute("data-object-id");
-  step("a PDF becomes a file chip with its type and size");
+  step("a ZIP file becomes a file chip with its type and size");
 
   begin("another device");
   const deskB = await newContext();
@@ -634,7 +636,7 @@ try {
   const download = b.waitForEvent("download");
   await chipB.click();
   const file = await download;
-  assert.equal(file.suggestedFilename(), "report.pdf");
+  assert.equal(file.suggestedFilename(), "report.zip");
   assert.ok(
     (await readFile(await file.path())).equals(REPORT),
     "downloaded bytes match",
@@ -706,7 +708,7 @@ try {
     `image:${photo}`,
     "Second line. Typed.",
     `image:${second}`,
-    "file:report.pdf",
+    "file:report.zip",
   ]);
   step(
     "an upload lands where the note has moved it: another device's line above, typing in its line",
