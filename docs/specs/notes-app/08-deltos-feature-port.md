@@ -410,7 +410,7 @@ Implemented 2026-10-22; accepted after six independent review rounds and release
 
 ### B3. Inline attachments (M)
 
-Implemented 2026-10-23 without backend or fundamentals changes, accepted after five independent review rounds and released to production on 2026-10-24 with files off (`docs/reviews/notes-attachments-implementation.md`; while files are off the editor behaves exactly as before B3); the iPhone check is pending. Files must not be turned on until copied attachments carry their source note through the channel (review F4, a fundamentals change awaiting approval) and review findings R5-1 and R5-2 are fixed and reviewed. In an editable note the first tap selects an attachment and a tap on the selected one opens it. Closing a note cancels its unfinished uploads. Attachment bytes are cached in memory only for now, so pictures in cached notes are not shown offline until a persistent cache in the notes cache is approved by the owner. "Attachment unavailable" is the placeholder (owner question 8's default).
+Implemented 2026-10-23 without backend or fundamentals changes, accepted after five independent review rounds and released to production on 2026-10-24 with files off (`docs/reviews/notes-attachments-implementation.md`; while files are off the editor behaves exactly as before B3); the iPhone check is pending. Files must not be turned on until copied attachments carry their source note through the channel (review F4, a fundamentals change awaiting approval). Review findings R5-1 and R5-2 were fixed with B4 and passed its review round 2. In an editable note the first tap selects an attachment and a tap on the selected one opens it. Closing a note cancels its unfinished uploads. Attachment bytes are cached in memory only for now, so pictures in cached notes are not shown offline until a persistent cache in the notes cache is approved by the owner. "Attachment unavailable" is the placeholder (owner question 8's default).
 
 **Inserting**
 
@@ -433,7 +433,7 @@ Implemented 2026-10-23 without backend or fundamentals changes, accepted after f
 
 ### B4. File notes and the PDF reader (M)
 
-Implemented 2026-10-24 without backend or fundamentals changes, in review (`docs/reviews/notes-file-notes-implementation.md`). Upload (phones) and a drop on the list (wide screens) make the note through `notes.create`, as Duplicate does, and its editor uploads the file after the title through B3's uploads; a failed or cancelled upload leaves the note with its title. One file at a time. The reader is pdf.js 6.4.299, loaded only when a PDF shows. List labels come from the documents the device caches; no backend field. B3's R5-1 and R5-2 are fixed with it. While files are off the app is as before; files stay off until F4 lands. The iPhone check is pending.
+Implemented 2026-10-24 without backend or fundamentals changes; accepted for release with files off after two independent review rounds (`docs/reviews/notes-file-notes-implementation.md`). Upload (phones) and a drop on the list (wide screens) make the note through `notes.create`, as Duplicate does, and its editor uploads the file after the title through B3's uploads; a failed or cancelled upload leaves the note with its title. One file at a time. The reader is pdf.js 6.4.299, loaded only when a PDF shows. List labels come from the documents the device caches; no backend field. B3's R5-1 and R5-2 are fixed with it. While files are off the app is as before; files stay off until F4 lands. The iPhone check is pending.
 
 Owner decision D103 adopts this model.
 

@@ -167,6 +167,22 @@ Also changed:
 - **The app harness** (`harness/app.html`, `src/harness/app.tsx`, test-only): the real `App`, notes cache and session, signed in and connected to a stand-in for the Convex client that keeps notes, step logs and file objects in the page, built as the unit tests' `fake-server.ts` builds a live layer. It also adds a mocked test of the entry points with files on: "with files on and a connection, the list takes a file (Upload on phones, a drop on wide screens) and makes a file note".
 - **One test** ("the inline reader leaves the page at once: session change") now expects the PDF to be read again under the new generation: the harness keeps its editor open across generations (the app opens a new one), so its old "nothing cached" check raced that re-read.
 
+## Review round 2 responses
+
+Report: `notes-file-notes-round2-astra-review.md` (verbatim). **Accepted for release with files off.** F1 to F5 are resolved, and B3's R5-1 and R5-2 fixes pass. This acceptance does not cover turning files on.
+
+| Finding | Response |
+| --- | --- |
+| R2-1: retry recovery ends with the in-memory operation | **Recorded as a boundary.** The operation is not persisted. **Remove** only stops waiting for the server's answer. If the server later commits the creation, a title-only note remains, and nothing is uploaded or opened. A reload loses the file and its creation key, so adding the file again can create a second note. Recovering retries durably would need a separately designed persistence change. |
+| R2-2: the existing navigation race | **Unchanged.** It is the existing `openRemote` intent race in the fundamentals (F6; "Found during this work", item 8). It is already reported to the owner. |
+| R2-3: B3 provenance | **Unchanged.** This is B3's F4 and needs owner approval. |
+
+**Before files are turned on:**
+
+- B3's F4, provenance for copied attachments: needs owner approval, then a protected change with its own review.
+- Every device runs B3 and B4.
+- The iPhone checks in Safari and the installed app: picker sources, uploads, reader interaction, text selection and downloads.
+
 ## Evidence
 
 | Check | Result | Services |
