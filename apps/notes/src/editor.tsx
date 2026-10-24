@@ -86,7 +86,17 @@ import {
 } from "./file-capability";
 import { attachmentCache } from "./attachment-cache";
 import type { AttachmentContext } from "./attachments";
-import { AttachmentRuntime, type LightboxImage } from "./editor-attachments";
+import {
+  AttachmentRuntime,
+  registerFileOpener,
+  type LightboxImage,
+} from "./editor-attachments";
+import { fileNotePlugin } from "./editor-file-notes";
+import type { FileNoteUpload } from "./file-notes";
+import { openPdfDialog } from "./pdf-host";
+
+// PDFs open in the reader, full screen, from their chip (B4).
+registerFileOpener("application/pdf", openPdfDialog);
 
 export { notesSchema };
 export function validateDocument(document: string) {
@@ -625,6 +635,7 @@ function plugins(
     history(),
     fileHistoryGate(() => hooks.notify(FILE_UNDO_MESSAGE)),
     attachments.plugin(),
+    fileNotePlugin(),
     slashPalette({ enabled: hooks.slashEnabled, openLink: hooks.openLink }),
     linkUi,
     titlePlaceholder,
@@ -705,6 +716,7 @@ export function NoteEditor({
   onChange,
   binding,
   attachments,
+  upload,
 }: {
   document: string;
   editedLabel?: string | undefined;
@@ -713,6 +725,8 @@ export function NoteEditor({
   binding?: EditorBinding | undefined;
   /** The open note's attachments; without them pictures show from the cache only. */
   attachments?: AttachmentContext | undefined;
+  /** A new file note's file, to upload after its title (B4). */
+  upload?: FileNoteUpload | undefined;
 }) {
   const [toolbarState, setToolbarState] = useState<EditorState | null>(null);
   const [mobileGroup, setMobileGroup] = useState<ToolGroup | null>(null);
@@ -934,6 +948,20 @@ export function NoteEditor({
     if (!filesOn) setLightbox(null);
     runtime.current?.refresh();
   }, [filesOn, document, binding]);
+  // A file note made from the list (B4): its file uploads after the title
+  // once this note can take files, as "+ File" would (same fences).
+  useEffect(() => {
+    if (!upload) return;
+    runtime.current?.startFileNote(() => upload.take());
+  }, [
+    upload,
+    editable,
+    filesOn,
+    attachments?.accountId,
+    attachments?.noteId,
+    attachments?.service,
+    attachments?.generation,
+  ]);
   /** "+ File", paste and drop of files: a live note, editable, files on. */
   const canAttach = editable && !!binding && !!attachments?.service && filesOn;
   const pickFiles = () => fileInput.current?.click();

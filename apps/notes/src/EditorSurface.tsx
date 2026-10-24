@@ -3,6 +3,7 @@ import { isPlainDocument, textDocument } from "./document";
 import type { NoteEditor } from "./editor";
 import type { EditorBinding } from "./binding";
 import type { AttachmentContext } from "./attachments";
+import type { FileNoteUpload } from "./file-notes";
 
 let editorModule: Promise<typeof import("./editor")> | undefined;
 export function EditorSurface({
@@ -13,6 +14,7 @@ export function EditorSurface({
   onChange,
   binding,
   attachments,
+  upload,
 }: {
   document: string;
   editedLabel?: string;
@@ -21,6 +23,8 @@ export function EditorSurface({
   onChange: (document: string, text: string) => void;
   binding?: EditorBinding | undefined;
   attachments?: AttachmentContext | undefined;
+  /** A new file note's file, for the editor to upload (B4). */
+  upload?: FileNoteUpload | undefined;
 }) {
   const [Editor, setEditor] = useState<typeof NoteEditor | null>(null);
   const [plainText, setPlainText] = useState(text);
@@ -102,6 +106,7 @@ export function EditorSurface({
           onChange={onChange}
           binding={binding}
           attachments={attachments}
+          upload={upload}
         />
       ) : plainEditable ? (
         <div className="editor-host">

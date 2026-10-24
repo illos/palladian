@@ -8,6 +8,7 @@ import {
 import type { Node as ProseMirrorNode, NodeType } from "prosemirror-model";
 import { NodeSelection } from "prosemirror-state";
 import type {
+  Decoration,
   EditorView,
   NodeView,
   ViewMutationRecord,
@@ -19,11 +20,15 @@ import {
   type FileInfo,
   type ObjectStatus,
 } from "./editor-attachments";
+import { isFileNoteFile } from "./editor-file-notes";
 import { fileWritesEnabled, onFileWritesChange } from "./file-capability";
+import { formatSize, typeLabel } from "./file-notes";
+import { mountPdfReader } from "./pdf-host";
 
 /**
- * How images and file blocks look in the editor (plan 08 B3). Their bytes
- * and status come from the editor's AttachmentRuntime (editor-attachments.ts).
+ * How images and file blocks look in the editor (plan 08 B3), and a file
+ * note's file shown large (B4). Their bytes and status come from the
+ * editor's AttachmentRuntime (editor-attachments.ts).
  */
 
 const image = notesSchema.nodes.image as NodeType;
@@ -31,34 +36,14 @@ const image = notesSchema.nodes.image as NodeType;
 /** The smallest width a drag gives an image. */
 const MIN_DRAG_WIDTH = 48;
 
-/** "2.4 MB", "512 KB", "12 B". */
-export function formatSize(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB"];
-  let value = bytes / 1024;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit++;
-  }
-  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
-}
-
-/** A short type label: "PDF", "PNG", or the extension. */
-export function typeLabel(name: string, mimeType: string) {
-  if (mimeType === "application/pdf") return "PDF";
-  const dot = name.lastIndexOf(".");
-  const extension = dot > 0 ? name.slice(dot + 1) : "";
-  if (/^[A-Za-z0-9]{1,5}$/.test(extension)) return extension.toUpperCase();
-  return mimeType.startsWith("image/") ? "Image" : "File";
-}
+export { formatSize, typeLabel };
 
 const SVG = "http://www.w3.org/2000/svg";
-function glyph(kind: "file" | "image" | "missing") {
+function glyph(kind: "file" | "image" | "missing", size = 22) {
   const svg = document.createElementNS(SVG, "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("width", "22");
-  svg.setAttribute("height", "22");
+  svg.setAttribute("width", String(size));
+  svg.setAttribute("height", String(size));
   svg.setAttribute("fill", "none");
   svg.setAttribute("stroke", "currentColor");
   svg.setAttribute("stroke-width", "1.6");
@@ -106,6 +91,9 @@ function selected(view: EditorView, getPos: () => number | undefined) {
  * control that Enter or Space opens; in an editable note, labelled Smaller,
  * Larger and Natural size buttons (also the -, + and 0 keys on the focused
  * picture) resize it.
+ *
+ * A file note's picture (B4, `fileNote`) is fitted to the width instead,
+ * whatever width is saved, and has no resize controls.
  */
 export class ImageView implements NodeView {
   readonly dom: HTMLElement;
@@ -127,9 +115,11 @@ export class ImageView implements NodeView {
     private readonly view: EditorView,
     private readonly getPos: () => number | undefined,
     private readonly runtime: AttachmentRuntime,
+    /** A file note's picture: fitted to the width (B4). */
+    private readonly fileNote = false,
   ) {
     this.dom = document.createElement("div");
-    this.dom.className = "note-image";
+    this.dom.className = fileNote ? "note-image is-file-note" : "note-image";
     this.dom.contentEditable = "false";
     this.frame = document.createElement("span");
     this.frame.className = "note-image-frame";
@@ -171,8 +161,10 @@ export class ImageView implements NodeView {
     this.show(node);
   }
 
-  update(node: ProseMirrorNode) {
+  update(node: ProseMirrorNode, decorations: readonly Decoration[]) {
     if (node.type !== this.node.type) return false;
+    // Becoming, or no longer being, a file note's picture draws it anew.
+    if (isFileNoteFile(decorations) !== this.fileNote) return false;
     const previous = this.node;
     this.node = node;
     if (node.attrs.src !== previous.attrs.src) this.show(node);
@@ -357,7 +349,8 @@ export class ImageView implements NodeView {
 
   private applyWidth() {
     const width = this.node.attrs.width;
-    const sized = typeof width === "number";
+    // A file note's picture is fitted to the width, whatever is saved.
+    const sized = typeof width === "number" && !this.fileNote;
     for (const element of [this.picture, this.placeholder]) {
       if (!element) continue;
       element.style.width = sized ? `${width}px` : "";
@@ -382,12 +375,17 @@ export class ImageView implements NodeView {
 
   /** Whether the picture can be resized here now (a width is a file feature). */
   private resizable() {
-    return this.loaded() && fileWritesEnabled() && this.view.editable;
+    return (
+      this.loaded() &&
+      fileWritesEnabled() &&
+      this.view.editable &&
+      !this.fileNote
+    );
   }
 
   /** The corner grip and the size buttons, while the image can be resized. */
   private placeGrip() {
-    if (this.loaded() && fileWritesEnabled()) {
+    if (this.loaded() && fileWritesEnabled() && !this.fileNote) {
       if (!this.grip.isConnected) this.frame.append(this.grip);
       if (!this.sizes.isConnected) this.dom.append(this.sizes);
     } else {
@@ -560,8 +558,10 @@ export class FileView implements NodeView {
     );
   }
 
-  update(node: ProseMirrorNode) {
+  update(node: ProseMirrorNode, decorations: readonly Decoration[]) {
     if (node.type !== this.node.type) return false;
+    // A file note's file shows large instead (FileNoteView, B4).
+    if (isFileNoteFile(decorations)) return false;
     const objectChanged = node.attrs.objectId !== this.node.attrs.objectId;
     this.node = node;
     if (objectChanged) this.problem = null;
@@ -639,6 +639,10 @@ export class FileView implements NodeView {
     this.render();
     try {
       await this.runtime.open(info);
+      // The object became unavailable while it was read: nothing was
+      // delivered (R5-1).
+      if (this.runtime.record(info.objectId)?.status === "unavailable")
+        this.runtime.hooks.notify("This attachment is unavailable.");
     } catch (error) {
       const kind = error instanceof AttachmentReadError ? error.kind : "failed";
       const gone = this.runtime.record(info.objectId)?.status === "unavailable";
@@ -654,6 +658,263 @@ export class FileView implements NodeView {
       if (gone) this.runtime.hooks.notify("This attachment is unavailable.");
     } finally {
       this.opening = false;
+      this.render();
+    }
+  }
+}
+
+/** Whether a file opens in the PDF reader (B4). */
+const isPdf = (info: FileInfo) => info.mimeType === "application/pdf";
+
+/**
+ * A file note's file, shown large (B4, D103): a large icon, the name, the
+ * type and size, and Download; a PDF also gets the reader inline, and Full
+ * screen. Renaming means editing the note's first line; the file keeps its
+ * own name here, the one a download gets.
+ *
+ * The reader's bytes come as a picture's do (`watch`, wanting the bytes):
+ * through this editor's fenced reads and the memory cache. Whatever blanks
+ * a picture (any clear of the cache, files turning off, the session moving
+ * on, the object becoming unavailable) takes the reader off the page at
+ * that moment, synchronously; it opens again once the bytes may load again.
+ */
+export class FileNoteView implements NodeView {
+  readonly dom: HTMLElement;
+  private readonly name: HTMLElement;
+  private readonly meta: HTMLElement;
+  private readonly actions: HTMLElement;
+  /** The reader's place, for a PDF. */
+  private readonly stage: HTMLElement | null = null;
+  private placeholder: HTMLElement | null = null;
+  private stopWatch: (() => void) | null = null;
+  /** The reader on the page, and the bytes it shows. */
+  private reader: { blob: Blob; remove: () => void } | null = null;
+  private downloading = false;
+  private problem: string | null = null;
+
+  constructor(
+    private node: ProseMirrorNode,
+    private readonly runtime: AttachmentRuntime,
+  ) {
+    const info = this.info();
+    const pdf = isPdf(info);
+    this.dom = document.createElement("div");
+    this.dom.className = "note-file-large";
+    this.dom.dataset.kind = pdf ? "pdf" : "file";
+    this.dom.contentEditable = "false";
+    const card = document.createElement("div");
+    card.className = "file-large-card";
+    this.name = document.createElement("span");
+    this.name.className = "file-name";
+    this.meta = document.createElement("span");
+    this.meta.className = "file-meta";
+    const text = document.createElement("span");
+    text.className = "file-large-text";
+    text.append(this.name, this.meta);
+    this.actions = document.createElement("div");
+    this.actions.className = "file-large-actions";
+    this.actions.setAttribute("role", "group");
+    this.actions.setAttribute("aria-label", "File");
+    if (pdf)
+      this.actions.append(
+        this.button("Full screen", "Open in full screen", () => this.open()),
+      );
+    this.actions.append(
+      this.button("Download", "Download", () => this.open(true)),
+    );
+    card.append(glyph("file", 44), text, this.actions);
+    this.dom.append(card);
+    if (pdf) {
+      this.stage = document.createElement("div");
+      this.stage.className = "file-reader-stage";
+      this.dom.append(this.stage);
+      // ProseMirror makes the block draggable once this returns. Inside the
+      // reader a drag selects text, so the reader's block is not draggable.
+      queueMicrotask(() => this.dom.removeAttribute("draggable"));
+    }
+    this.show();
+  }
+
+  /** Events in the buttons and the reader are theirs, not the editor's. */
+  stopEvent(event: Event) {
+    const target = event.target;
+    return (
+      target instanceof Node &&
+      (this.actions.contains(target) || !!this.stage?.contains(target))
+    );
+  }
+
+  update(node: ProseMirrorNode, decorations: readonly Decoration[]) {
+    if (node.type !== this.node.type || !isFileNoteFile(decorations))
+      return false;
+    // Another object or type draws anew.
+    if (
+      node.attrs.objectId !== this.node.attrs.objectId ||
+      node.attrs.mimeType !== this.node.attrs.mimeType
+    )
+      return false;
+    this.node = node;
+    this.render();
+    return true;
+  }
+
+  /** Selecting text in the reader is not the editor's selection. */
+  ignoreMutation(mutation: ViewMutationRecord) {
+    if (mutation.type !== "selection") return true;
+    return !!this.stage?.contains(mutation.target);
+  }
+
+  destroy() {
+    this.stopWatch?.();
+    this.stopWatch = null;
+    this.removeReader();
+  }
+
+  private button(text: string, label: string, run: () => void) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = text;
+    button.setAttribute("aria-label", `${label}: ${this.info().name}`);
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", run);
+    return button;
+  }
+
+  private info(): FileInfo {
+    const { objectId, name, mimeType, size } = this.node.attrs;
+    return {
+      objectId: String(objectId),
+      name: String(name),
+      mimeType: String(mimeType ?? ""),
+      size: typeof size === "number" ? size : null,
+    };
+  }
+
+  private show() {
+    const info = this.info();
+    // The attributes tests and the clipboard know file blocks by.
+    this.dom.dataset.objectId = info.objectId;
+    this.dom.dataset.name = info.name;
+    this.dom.dataset.mimeType = info.mimeType;
+    if (info.size === null) delete this.dom.dataset.size;
+    else this.dom.dataset.size = String(info.size);
+    // A PDF's reader wants the bytes, as a picture does; other files only
+    // their status.
+    this.stopWatch = isObjectId(info.objectId)
+      ? this.runtime.watch(info.objectId, () => this.render(), isPdf(info))
+      : null;
+    this.render();
+  }
+
+  private status(): ObjectStatus {
+    const { objectId } = this.info();
+    return isObjectId(objectId)
+      ? (this.runtime.record(objectId)?.status ?? "idle")
+      : "unavailable";
+  }
+
+  private render() {
+    const info = this.info();
+    const status = this.status();
+    this.dom.dataset.status = status;
+    this.name.textContent = info.name;
+    const details = [typeLabel(info.name, info.mimeType)];
+    if (info.size !== null) details.push(formatSize(info.size));
+    this.meta.textContent =
+      status === "unavailable"
+        ? "Attachment unavailable"
+        : this.downloading
+          ? "Downloading…"
+          : (this.problem ?? details.join(" · "));
+    if (!this.stage) return;
+    const record = this.runtime.record(info.objectId);
+    if (status === "shown" && record?.blob) {
+      if (this.reader?.blob === record.blob) return;
+      this.removeReader();
+      this.placeholder?.remove();
+      this.placeholder = null;
+      const blob = record.blob;
+      this.reader = {
+        blob,
+        remove: mountPdfReader(this.stage, {
+          name: info.name,
+          data: blob,
+          onDownload: () => this.open(true),
+        }),
+      };
+      return;
+    }
+    // Off the page at once: nothing the reader drew stays.
+    this.removeReader();
+    this.stagePlaceholder(status);
+  }
+
+  private stagePlaceholder(status: ObjectStatus) {
+    const box = this.placeholder ?? document.createElement("div");
+    box.className = "attachment-placeholder file-reader-placeholder";
+    box.dataset.status = status;
+    box.setAttribute("role", "status");
+    box.replaceChildren(glyph(status === "unavailable" ? "missing" : "file"));
+    const text = document.createElement("span");
+    text.className = "attachment-placeholder-text";
+    text.textContent =
+      status === "unavailable"
+        ? "Attachment unavailable"
+        : status === "offline"
+          ? "Not available offline"
+          : status === "failed"
+            ? "The PDF could not load."
+            : "Loading…";
+    box.append(text);
+    if (status === "failed") {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "attachment-retry";
+      retry.textContent = "Retry";
+      retry.addEventListener("click", () =>
+        this.runtime.retry(this.info().objectId),
+      );
+      box.append(retry);
+    }
+    if (!this.placeholder) this.stage!.append(box);
+    this.placeholder = box;
+  }
+
+  private removeReader() {
+    const reader = this.reader;
+    this.reader = null;
+    reader?.remove();
+  }
+
+  /** Download, or (a PDF) open the reader full screen. */
+  private async open(download = false) {
+    const info = this.info();
+    if (this.downloading) return;
+    if (this.status() === "unavailable") {
+      this.runtime.hooks.notify("This attachment is unavailable.");
+      return;
+    }
+    this.downloading = download;
+    this.problem = null;
+    this.render();
+    try {
+      await this.runtime.open(info, { download });
+      if (this.status() === "unavailable")
+        this.runtime.hooks.notify("This attachment is unavailable.");
+    } catch (error) {
+      const kind = error instanceof AttachmentReadError ? error.kind : "failed";
+      const gone = this.status() === "unavailable";
+      this.problem =
+        kind === "unavailable"
+          ? gone
+            ? null
+            : "Not saved to the server yet. Try again in a moment."
+          : kind === "signed-out"
+            ? "Not available offline"
+            : "The download failed. Try again.";
+      if (gone) this.runtime.hooks.notify("This attachment is unavailable.");
+    } finally {
+      this.downloading = false;
       this.render();
     }
   }

@@ -1,0 +1,212 @@
+/* ---- The PDF reader (plan 08, B4); loads with the reader ---- */
+.pdf-reader-box {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.pdf-reader {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--nav);
+  line-height: 1.3;
+}
+.pdf-dialog .pdf-reader {
+  border: 0;
+  border-radius: 0;
+}
+.pdf-toolbar,
+.pdf-search {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--list);
+}
+.pdf-search-toggle {
+  margin-left: auto;
+}
+.pdf-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 20px;
+  line-height: 1;
+}
+.pdf-tool[aria-pressed="true"] {
+  background: var(--sel);
+  color: var(--accent);
+}
+.pdf-tool:disabled {
+  color: var(--faint);
+}
+.pdf-pageinfo {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--secondary);
+}
+.pdf-page-input,
+.pdf-search-input {
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+}
+.pdf-page-input {
+  width: 3.4em;
+  height: 30px;
+  padding: 0 6px;
+  font: inherit;
+  text-align: center;
+}
+.pdf-search-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  font-size: 14px;
+}
+.pdf-search-count {
+  min-width: 5.5em;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--secondary);
+  text-align: center;
+}
+.pdf-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.pdf-scroll {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  outline: none;
+}
+.pdf-scroll:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.pdf-pages {
+  position: relative;
+  margin: 12px auto;
+}
+.pdf-page {
+  position: absolute;
+  left: 0;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.16);
+}
+.pdf-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+/* The page's text, invisible over the canvas: it can be selected and copied. */
+.pdf-text {
+  position: absolute;
+  inset: 0;
+  line-height: 1;
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+.pdf-text > span {
+  position: absolute;
+  color: transparent;
+  font-family: sans-serif;
+  white-space: pre;
+  transform-origin: 0 0;
+}
+.pdf-text ::selection {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.pdf-text mark {
+  color: transparent;
+  background: rgb(255 214 0 / 0.42);
+  border-radius: 2px;
+}
+.pdf-text mark.is-active {
+  background: rgb(255 140 0 / 0.6);
+}
+.pdf-rail {
+  flex: none;
+  width: 124px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-right: 1px solid var(--border);
+  background: var(--list);
+}
+.pdf-reader.is-narrow .pdf-rail {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  box-shadow: 4px 0 18px rgb(0 0 0 / 0.18);
+}
+.pdf-rail-backdrop {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  background: rgb(0 0 0 / 0.2);
+}
+.pdf-rail-track {
+  position: relative;
+  margin: 10px 14px;
+}
+.pdf-thumb {
+  position: absolute;
+  left: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.14);
+}
+.pdf-thumb[aria-current="page"] {
+  border-color: var(--accent);
+}
+.pdf-thumb-canvas {
+  display: block;
+}
+.pdf-thumb-number {
+  position: absolute;
+  right: 4px;
+  bottom: 3px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgb(0 0 0 / 0.55);
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 10px;
+}
+@media (max-width: 760px) {
+  .pdf-tool {
+    min-width: 40px;
+    height: 40px;
+  }
+  .pdf-page-input,
+  .pdf-search-input {
+    /* 16 px or more: iOS does not zoom into the field (GOTCHA-0003). */
+    font-size: 16px;
+  }
+}

@@ -125,6 +125,21 @@ const paths: Record<string, ReactNode> = {
       <path d="M7 14h10v6H7z" />
     </>
   ),
+  upload: <path d="M12 16V5m-5 5 5-5 5 5M5 20h14" />,
+  file: (
+    <>
+      <path d="M6 3h8l4 4v14H6z" />
+      <path d="M14 3v4h4" />
+      <path d="M9 13h6M9 17h6" />
+    </>
+  ),
+  image: (
+    <>
+      <path d="M4 5h16v14H4z" />
+      <path d="m4 16 5-5 4 4 3-3 4 4" />
+      <path d="M15.5 9.5h.01" />
+    </>
+  ),
 };
 export function Icon({
   name,

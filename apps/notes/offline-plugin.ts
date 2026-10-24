@@ -24,6 +24,20 @@ export function offlineShell(): Plugin {
       const files = Object.keys(bundle).filter(
         (file) => !file.endsWith(".map"),
       );
+      // The PDF reader with pdf.js and its worker (plan 08 B4) load when a
+      // PDF opens; every device need not fetch them with each update.
+      const reader = new Set<string>();
+      for (const [file, item] of Object.entries(bundle))
+        if (item.type === "chunk") {
+          if (!item.moduleIds.some((id) => id.includes("/pdfjs-dist/")))
+            continue;
+          reader.add(file);
+          for (const css of item.viteMetadata?.importedCss ?? [])
+            reader.add(css);
+        } else if (
+          item.originalFileNames.some((name) => name.includes("/pdfjs-dist/"))
+        )
+          reader.add(file);
       const assets = [
         ...new Set([
           "/",
@@ -34,7 +48,9 @@ export function offlineShell(): Plugin {
             .filter((file) => file.endsWith(".woff2"))
             .sort()
             .map((file) => "/fonts/" + file),
-          ...files.map((file) => "/" + file),
+          ...files
+            .filter((file) => !reader.has(file))
+            .map((file) => "/" + file),
         ]),
       ];
       const digest = createHash("sha256");

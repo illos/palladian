@@ -10,6 +10,7 @@ import type { AttachmentService, UploadGrant } from "../attachments";
 import { NoteEditor } from "../editor";
 import { setFileWrites } from "../file-capability";
 import { attachmentCache, type CacheScope } from "../attachment-cache";
+import type { FileNoteUpload } from "../file-notes";
 import "../theme.css";
 import "../styles.css";
 
@@ -50,6 +51,15 @@ interface Harness {
   load(doc: unknown): void;
   /** Close the note (the editor unmounts). */
   close(): void;
+  /**
+   * Show a new file note's title-only document and hand its editor the file
+   * (B4), as the app does once it has made the note.
+   */
+  fileNote(title: string, file: { name: string; type: string; base64: string }): void;
+  /** Whether the editor took the file note's file. */
+  fileNoteTaken: boolean;
+  /** Clear the byte cache, as any clear does (R4-1). */
+  clearCache(): void;
 }
 declare global {
   interface Window {
@@ -106,6 +116,9 @@ const harness: Harness = {
   },
   load: () => undefined,
   close: () => undefined,
+  fileNote: () => undefined,
+  fileNoteTaken: false,
+  clearCache: () => attachmentCache.clear(),
 };
 window.__attachments = harness;
 
@@ -216,6 +229,7 @@ function Harness() {
     move({ accountId, generation: scope.generation + 1 });
   const [editable, setEditable] = useState(true);
   const [open, setOpen] = useState(true);
+  const [upload, setUpload] = useState<FileNoteUpload | undefined>(undefined);
   harness.setEditable = setEditable;
   harness.load = (next) => {
     setDoc(next);
@@ -223,6 +237,42 @@ function Harness() {
     setOpen(true);
   };
   harness.close = () => setOpen(false);
+  harness.fileNote = (title, chosen) => {
+    let waiting: File | null = new File(
+      [Uint8Array.from(atob(chosen.base64), (c) => c.charCodeAt(0))],
+      chosen.name,
+      { type: chosen.type },
+    );
+    harness.fileNoteTaken = false;
+    const next: FileNoteUpload = {
+      accountId: account,
+      generation: session,
+      noteId: NOTE,
+      title,
+      take() {
+        const taken = waiting;
+        waiting = null;
+        if (taken) {
+          harness.fileNoteTaken = true;
+          setUpload(undefined);
+        }
+        return taken;
+      },
+    };
+    setDoc({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          attrs: { id: "title" },
+          content: [{ type: "text", text: title }],
+        },
+      ],
+    });
+    setGeneration((value) => value + 1);
+    setOpen(true);
+    setUpload(next);
+  };
   if (!open) return <p>Closed</p>;
   return (
     <section className="note-content-region">
@@ -232,6 +282,7 @@ function Harness() {
         editable={editable}
         onChange={() => undefined}
         binding={binding}
+        upload={upload}
         attachments={{
           accountId: account,
           noteId: NOTE,

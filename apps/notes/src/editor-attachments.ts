@@ -39,7 +39,9 @@ import {
   type UploadGrant,
 } from "./attachments";
 import { fileWritesEnabled, onFileWritesChange } from "./file-capability";
-import { FileView, ImageView } from "./attachment-views";
+import { FileNoteView, FileView, ImageView } from "./attachment-views";
+import { isFileNoteFile } from "./editor-file-notes";
+import { fileTitle } from "./file-notes";
 import "./attachments.css";
 
 /**
@@ -285,17 +287,36 @@ export interface FileInfo {
   size: number | null;
 }
 
+/**
+ * What an opener gets for one opening of a file (B4). Every B3 fence of a
+ * download applies to it, for as long as it shows the file: the editor
+ * closing, the session moving on, files turning off, any clear of the byte
+ * cache, and the object becoming unavailable abort `signal`, for good.
+ */
+export interface FileOpening {
+  /** The bytes, through the cache or the Worker; rejects once a fence fails. */
+  bytes(): Promise<Blob>;
+  /** Aborted when the bytes may no longer show: close or blank them at once. */
+  readonly signal: AbortSignal;
+  /** Download the file instead, fenced like any download. */
+  download(): void;
+  /** The opener closed: the runtime stops tracking this opening. */
+  release(): void;
+}
+
 /** Opens a file instead of downloading it, for one media type. */
-export type FileOpener = (file: FileInfo, bytes: () => Promise<Blob>) => void;
+export type FileOpener = (file: FileInfo, opening: FileOpening) => void;
 const openers = new Map<string, FileOpener>();
 
 /**
  * Register how a media type opens. B4's PDF reader registers
- * `application/pdf` here; until then every file, PDFs included, downloads.
+ * `application/pdf` here (pdf-host.tsx); every other file downloads.
  */
 export function registerFileOpener(mimeType: string, opener: FileOpener) {
   openers.set(mimeType, opener);
-  return () => void openers.delete(mimeType);
+  return () => {
+    if (openers.get(mimeType) === opener) openers.delete(mimeType);
+  };
 }
 
 /** Whether a media type opens (B4's reader) rather than downloads. */
@@ -340,8 +361,13 @@ export class AttachmentRuntime {
   private session: { accountId: string; generation: number } | null = null;
   /** Whether files were on when the context was last followed. */
   private filesOn = false;
-  /** Downloads under way. */
-  private readonly downloads = new Set<AbortController>();
+  /**
+   * Downloads under way and files an opener shows (B4's reader), with their
+   * objects. Each is aborted for good when its object becomes unavailable
+   * (review round 5, R5-1), whatever the server's list says later, and by
+   * every clear, gate change, session change and the editor closing.
+   */
+  private readonly opens = new Map<AbortController, string>();
   /** What the lightbox shows, while open. */
   private lightbox: { objectId: string | null } | null = null;
   /** Stop following the cache's clears and the files gate. */
@@ -393,10 +419,18 @@ export class AttachmentRuntime {
     );
   }
 
+  /**
+   * Images and file blocks; a file note's file (marked by
+   * editor-file-notes.ts) shows large (B4).
+   */
   nodeViews(): Record<string, NodeViewConstructor> {
     return {
-      image: (node, view, getPos) => new ImageView(node, view, getPos, this),
-      file: (node, view, getPos) => new FileView(node, view, getPos, this),
+      image: (node, view, getPos, decorations) =>
+        new ImageView(node, view, getPos, this, isFileNoteFile(decorations)),
+      file: (node, view, getPos, decorations) =>
+        isFileNoteFile(decorations)
+          ? new FileNoteView(node, this)
+          : new FileView(node, view, getPos, this),
     };
   }
 
@@ -425,6 +459,20 @@ export class AttachmentRuntime {
       files,
       uploadPoint(view.state.doc, view.state.selection.to),
     );
+  }
+
+  /**
+   * A new file note's file (B4): taken only if files can be added here now,
+   * and uploaded after the title line as a file chosen with "+ File" would
+   * be. False if nothing was taken.
+   */
+  startFileNote(take: () => File | null): boolean {
+    const view = this.view;
+    if (!view || !this.canUpload(view)) return false;
+    const file = take();
+    if (!file) return false;
+    this.uploads.start(view, [file], uploadPoint(view.state.doc, 0));
+    return true;
   }
 
   /** The editor's `handlePaste`, for files; false leaves the paste as it was. */
@@ -506,8 +554,7 @@ export class AttachmentRuntime {
     this.alive = false;
     this.unsubscribe();
     for (const record of this.records.values()) this.invalidate(record);
-    for (const abort of this.downloads) abort.abort();
-    this.downloads.clear();
+    this.abortOpens();
     this.uploads.destroy();
     this.stopWatching?.();
     this.stopWatching = null;
@@ -566,14 +613,24 @@ export class AttachmentRuntime {
   }
 
   /**
-   * Open a file: its registered opener, or a download. Nothing happens if,
-   * by the time its bytes arrive, the editor closed, the session moved on
-   * or the object became unavailable. Throws AttachmentReadError.
+   * Open a file: its registered opener (B4's PDF reader), or a download;
+   * `download` always downloads. Nothing is delivered if, by the time its
+   * bytes arrive, the editor closed, the session moved on, files turned off,
+   * the cache was cleared or the object became unavailable; an opener is
+   * told to close at that moment (`FileOpening.signal`). Throws
+   * AttachmentReadError.
    */
-  async open(info: FileInfo): Promise<void> {
+  async open(
+    info: FileInfo,
+    options: { download?: boolean } = {},
+  ): Promise<void> {
     const context = this.context();
     if (!context || !this.alive) throw new AttachmentReadError("signed-out");
-    if (this.gone(info.objectId)) throw new AttachmentReadError("unavailable");
+    if (
+      this.gone(info.objectId) ||
+      this.records.get(info.objectId)?.status === "unavailable"
+    )
+      throw new AttachmentReadError("unavailable");
     // Taken now: any clear before the file is delivered voids it (R4-1).
     const ticket = this.hooks.cache.ticket({
       accountId: context.accountId,
@@ -581,6 +638,9 @@ export class AttachmentRuntime {
     });
     if (!ticket) throw new AttachmentReadError("signed-out");
     const abort = new AbortController();
+    // Tracked from now: the object becoming unavailable aborts it for good
+    // (R5-1), even if the server's list later forgets that it did.
+    this.opens.set(abort, info.objectId);
     const holds = this.fence(context);
     const current = () =>
       holds() &&
@@ -598,12 +658,21 @@ export class AttachmentRuntime {
       if (!current()) throw new AttachmentReadError("unavailable");
       return blob;
     };
-    const opener = openers.get(info.mimeType);
+    const opener = options.download ? undefined : openers.get(info.mimeType);
     if (opener) {
-      opener(info, bytes);
+      opener(info, {
+        bytes,
+        signal: abort.signal,
+        download: () => {
+          if (!current()) return;
+          this.open(info, { download: true }).catch(() =>
+            this.hooks.notify("The download failed. Try again."),
+          );
+        },
+        release: () => void this.opens.delete(abort),
+      });
       return;
     }
-    this.downloads.add(abort);
     let blob: Blob;
     try {
       blob = await bytes();
@@ -611,7 +680,7 @@ export class AttachmentRuntime {
       if (!current()) return;
       throw error;
     } finally {
-      this.downloads.delete(abort);
+      this.opens.delete(abort);
     }
     // Checked once more right before the download begins.
     if (!current()) return;
@@ -798,8 +867,7 @@ export class AttachmentRuntime {
    */
   private dropReads() {
     if (!this.alive) return;
-    for (const abort of this.downloads) abort.abort();
-    this.downloads.clear();
+    this.abortOpens();
     this.closeImage();
     for (const [objectId, record] of this.records) {
       this.invalidate(record);
@@ -830,12 +898,23 @@ export class AttachmentRuntime {
     this.hooks.closeImage();
   }
 
+  /** Stop every download and opening under way, or of one object, for good. */
+  private abortOpens(objectId?: string) {
+    for (const [abort, object] of [...this.opens])
+      if (objectId === undefined || object === objectId) {
+        this.opens.delete(abort);
+        abort.abort();
+      }
+  }
+
   private set(objectId: string, status: ObjectStatus) {
     const record = this.records.get(objectId);
     if (!record) return;
     if (status !== "shown") record.blob = null;
-    if (status === "unavailable" && this.lightbox?.objectId === objectId)
-      this.closeImage();
+    if (status === "unavailable") {
+      if (this.lightbox?.objectId === objectId) this.closeImage();
+      this.abortOpens(objectId);
+    }
     if (record.status === status && status !== "shown") return;
     record.status = status;
     for (const listener of record.listeners) listener();
@@ -910,12 +989,11 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
-/** A file's name as sent: what the system gave it, or a plain default. */
-function uploadName(file: File) {
-  return (
-    file.name.trim() || (file.type.startsWith("image/") ? "image" : "file")
-  );
-}
+/**
+ * A file's name as sent: what the system gave it on one line, or a plain
+ * default. A file note's title is the same name (file-notes.ts).
+ */
+const uploadName = fileTitle;
 
 /** One editor's uploads, from choosing a file to its node in the note. */
 export class UploadController {
@@ -1275,7 +1353,9 @@ export class UploadController {
    * An admission answered. One that answers after its upload was removed,
    * closed or started again is released, through the service that made it;
    * one that answers after the upload stopped waiting gives Remove its
-   * object to release.
+   * object to release. Only the object that landed in the note is kept: an
+   * earlier request's admission answering after a Retry landed is released
+   * too (review round 5, R5-2).
    */
   private admitted(
     task: UploadTask,
@@ -1283,7 +1363,8 @@ export class UploadController {
     request: string,
     grant: UploadGrant,
   ) {
-    if (grant.state === "failed" || task.landed) return;
+    if (grant.state === "failed") return;
+    if (task.landed && grant.objectId === task.objectId) return;
     const current = task.requestId === request;
     if (current && !task.cancelled && this.tasks.has(task.id)) {
       task.objectId ??= grant.objectId;

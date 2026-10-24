@@ -349,3 +349,198 @@
   font-size: 26px;
   line-height: 1;
 }
+
+/* ---- File notes (plan 08, B4): the file of a file note, shown large ---- */
+.note-image.is-file-note .note-image-frame {
+  display: block;
+}
+.note-image.is-file-note img {
+  width: 100%;
+}
+.note-image.is-file-note .attachment-placeholder {
+  display: flex;
+  width: 100%;
+}
+.note-file-large {
+  margin: 0.4em 0 1em;
+  line-height: 1.35;
+}
+.file-large-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--list);
+  -webkit-user-select: none;
+  user-select: none;
+}
+.file-large-card > svg {
+  flex: none;
+  color: var(--accent);
+}
+.file-large-text {
+  display: flex;
+  flex: 1 1 180px;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.file-large-text .file-name {
+  font-size: 16px;
+}
+.file-large-actions {
+  display: flex;
+  gap: 8px;
+}
+.file-large-actions button {
+  min-height: 34px;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.file-large-actions button:last-child {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.note-file-large[data-status="unavailable"] .file-large-card {
+  border-style: dashed;
+}
+.note-file-large[data-status="unavailable"] .file-large-card > svg {
+  color: var(--faint);
+}
+.note-file-large.ProseMirror-selectednode {
+  outline: none;
+}
+.note-file-large.ProseMirror-selectednode .file-large-card {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* The PDF reader, inline: as tall as most of the view; the note scrolls on. */
+.file-reader-stage {
+  margin-top: 10px;
+}
+.file-reader-stage .pdf-reader-box,
+.file-reader-placeholder {
+  height: min(78dvh, 960px);
+}
+.file-reader-placeholder {
+  display: flex;
+  width: 100%;
+}
+@media (max-width: 760px) {
+  .file-large-actions button {
+    min-height: 40px;
+  }
+  .file-reader-stage .pdf-reader-box,
+  .file-reader-placeholder {
+    height: 72dvh;
+  }
+}
+
+/* The PDF reader, full screen (a PDF chip, or Full screen). */
+.pdf-dialog {
+  box-sizing: border-box;
+  display: none;
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: var(--paper);
+  color: var(--body);
+}
+.pdf-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+.pdf-dialog::backdrop {
+  background: rgb(0 0 0 / 0.6);
+}
+.pdf-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: max(10px, env(safe-area-inset-top)) 12px 10px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--list);
+}
+.pdf-dialog-header h2 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+}
+.pdf-dialog-action {
+  min-height: 34px;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--accent);
+  font-size: 13.5px;
+}
+.pdf-dialog-close {
+  width: 40px;
+  height: 40px;
+  border-radius: 20px;
+  color: var(--ink);
+  font-size: 26px;
+  line-height: 1;
+}
+.pdf-dialog-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.pdf-dialog-body .pdf-reader-box {
+  flex: 1;
+  min-height: 0;
+}
+.pdf-status {
+  margin: 24px;
+  color: var(--secondary);
+  font-size: 14px;
+}
+/* Shown before the reader's own styles load, if it cannot load at all. */
+.pdf-reader-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 100%;
+  min-height: 160px;
+  padding: 24px;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--list);
+  color: var(--body);
+  text-align: center;
+}
+.pdf-reader-error p {
+  margin: 0;
+}
+.pdf-download {
+  min-height: 36px;
+  padding: 6px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  color: var(--accent);
+  font-weight: 500;
+}

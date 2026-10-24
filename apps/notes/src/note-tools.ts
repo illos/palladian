@@ -36,6 +36,28 @@ export async function duplicateNote(
   return result.noteId;
 }
 
+/**
+ * A file note's note (B4), before its file uploads: its title line only,
+ * through the same `notes.create` as Duplicate. It names the account it is
+ * made in, which the server checks before anything else, and a retry with
+ * the same `clientKey` returns the note already made. Returns its ID.
+ */
+export async function createFileNote(
+  client: ConvexReactClient,
+  account: string,
+  doc: string,
+  notebookId: string | undefined,
+  clientKey = "file-" + crypto.randomUUID(),
+): Promise<string> {
+  const result = await client.mutation(api.notes.create, {
+    clientKey,
+    doc,
+    ...(notebookId ? { notebookId: notebookId as Id<"notebooks"> } : {}),
+    account,
+  });
+  return result.noteId;
+}
+
 /** Which of these notebooks the person deleted themselves (review round 3). */
 export async function deletedByMe(
   client: ConvexReactClient,

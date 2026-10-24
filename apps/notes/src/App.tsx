@@ -70,9 +70,20 @@ import {
   type SettingsTab,
 } from "./Settings";
 import type { ChannelStatus, NoteChannel } from "./channel";
-import { watchFileCapability } from "./file-capability";
+import {
+  fileWritesEnabled,
+  onFileWritesChange,
+  watchFileCapability,
+} from "./file-capability";
 import { attachmentCache } from "./attachment-cache";
 import { liveAttachmentService } from "./attachments";
+import {
+  fileNoteLabel,
+  fileNoteRest,
+  fileNoteStart,
+  type FileNoteUpload,
+} from "./file-notes";
+import { FileRowVisual, useFileNotes } from "./file-rows";
 import { watchNotebookCapability } from "./notebook-capability";
 import { liveStateSource, type LiveBox } from "./liveBox";
 import type { SearchHit } from "./live";
@@ -161,6 +172,14 @@ const SHEET_SWIPE = 40;
 
 /** The data type a note row carries when dragged onto a notebook (desktop). */
 const NOTE_DRAG = "application/x-palladian-note";
+/**
+ * How long a new file note waits for its editor to start the upload (B4):
+ * opening it and catching up with the server take moments.
+ */
+const FILE_NOTE_WAIT_MS = 20_000;
+/** Whether a drag carries files from outside the app. */
+const carriesFiles = (event: React.DragEvent) =>
+  event.dataTransfer.types.includes("Files");
 /** Settings entries this tab pushed on top of the notes view. */
 function settingsDepth(): number {
   const depth = (history.state as { settingsDepth?: unknown } | null)
@@ -403,6 +422,19 @@ export function App({
         : null,
     [live, liveReady, accountId],
   );
+
+  /**
+   * Whether the server takes files (`files.capabilities`), as it changes.
+   * While not, the list offers no Upload and takes no dropped files, and
+   * its rows look as before B4.
+   */
+  const filesOn = useSyncExternalStore(onFileWritesChange, fileWritesEnabled);
+  /** A new file note waiting for its editor to upload its file (B4). */
+  const [fileNoteUpload, setFileNoteUpload] = useState<FileNoteUpload | null>(
+    null,
+  );
+  const fileNoteInput = useRef<HTMLInputElement>(null);
+  const [fileDrop, setFileDrop] = useState(false);
 
   // Whether owners may delete notebooks here (NOTEBOOK_DELETE_ENABLED;
   // shipped off). While off, the notebook menu has no Delete at all.
@@ -2021,6 +2053,125 @@ export function App({
     !!activeTarget &&
     notebookActions(activeTarget, liveReady, notebookDelete).length > 0;
 
+  /**
+   * File notes from the list (plan 08 B4): Upload in the phone's bottom bar
+   * and a file dropped on the list on wide screens, only while the server
+   * takes files.
+   */
+  const fileNotesOn = filesOn && liveReady && permitted;
+  /** Why a file note cannot be made here now, or null. */
+  const fileNoteBlocked = !liveConnected
+    ? "Connect to the server to upload a file."
+    : section.kind === "trash"
+      ? "Open a notebook or All Notes to upload a file."
+      : activeNotebook?.role === "read"
+        ? "This notebook is read-only for you."
+        : null;
+  const visibleFiles = useFileNotes(
+    store,
+    accountId,
+    visibleRows.slice(0, rowLimit),
+    filesOn && permitted,
+  );
+
+  /**
+   * Make a file note: a note whose first line is the file's name, made
+   * through `notes.create` as Duplicate is (in this account and session
+   * only, `copyInSession`), then opened; its editor uploads the file after
+   * the title through B3's uploads and their fences (FileNoteUpload). If
+   * the upload fails, the open note keeps Retry and Remove; if it is
+   * cancelled or the note closes first, the note stays with its title only.
+   */
+  async function makeFileNote(file: File) {
+    if (!fileNotesOn || !accountId) return;
+    if (fileNoteBlocked) return toast(fileNoteBlocked);
+    const start = fileNoteStart(file);
+    if ("refused" in start) return toast(start.refused);
+    const current = sessionTicket();
+    const account = accountId;
+    const generation = snapshotRef.current.generation;
+    // Where New would put it: this notebook if you can add notes there,
+    // otherwise your default notebook.
+    const notebookId =
+      newNoteNotebook(
+        section.kind === "notebook" ? section.id : null,
+        notebooks,
+      ) ??
+      liveState.profile?.defaultNotebookId ??
+      undefined;
+    await copyInSession(
+      current,
+      async () => {
+        const { createFileNote } = await import("./note-tools");
+        const client = liveRef.current?.client;
+        // Files must still be on when the note is made.
+        return client && fileWritesEnabled() ? { createFileNote, client } : null;
+      },
+      ({ createFileNote, client }) =>
+        createFileNote(client, account, start.document, notebookId),
+      (id) => void openRemote(id),
+      {
+        made: (noteId, open) => {
+          let waiting: File | null = file;
+          const upload: FileNoteUpload = {
+            accountId: account,
+            generation,
+            noteId,
+            title: start.title,
+            take() {
+              const taken = waiting;
+              waiting = null;
+              if (taken)
+                setFileNoteUpload((now) => (now === upload ? null : now));
+              return taken;
+            },
+          };
+          setFileNoteUpload(upload);
+          open();
+        },
+        failed,
+      },
+    );
+  }
+
+  // A new file note's file waits for its editor a short while, in its own
+  // session and while files are on; otherwise it is not uploaded, and the
+  // note keeps its title.
+  useEffect(() => {
+    const upload = fileNoteUpload;
+    if (!upload) return;
+    const lost = () => {
+      setFileNoteUpload((now) => (now === upload ? null : now));
+      if (
+        upload.take() &&
+        snapshotRef.current.accountId === upload.accountId &&
+        snapshotRef.current.generation === upload.generation
+      )
+        toast(
+          `“${upload.title}” was not uploaded. Its note is there; add the file with + File.`,
+        );
+    };
+    if (
+      upload.accountId !== accountId ||
+      upload.generation !== snapshot.generation
+    ) {
+      upload.take();
+      setFileNoteUpload(null);
+      return;
+    }
+    if (!filesOn) return lost();
+    const timer = setTimeout(lost, FILE_NOTE_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [fileNoteUpload, accountId, snapshot.generation, filesOn]);
+
+  /** Files dropped on the list: one makes a file note. */
+  function dropFileNote(files: File[]) {
+    if (!fileNotesOn) return;
+    if (files.length > 1)
+      return toast("Drop one file at a time to make a file note.");
+    if (files[0]) void makeFileNote(files[0]);
+  }
+
   return (
     <div
       className={[
@@ -2154,8 +2305,31 @@ export function App({
           </label>
           <div
             ref={noteList}
-            className="note-list"
+            className={fileDrop ? "note-list file-drop" : "note-list"}
             aria-label="Cached notes"
+            // A file dropped on the list makes a file note (B4, wide
+            // screens, files on). Otherwise drops are left as they were.
+            {...(fileNotesOn && !phone
+              ? {
+                  onDragOver: (event: React.DragEvent<HTMLDivElement>) => {
+                    if (!carriesFiles(event)) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "copy";
+                    setFileDrop(true);
+                  },
+                  onDragLeave: (event: React.DragEvent<HTMLDivElement>) => {
+                    const to = event.relatedTarget;
+                    if (!(to instanceof Node && event.currentTarget.contains(to)))
+                      setFileDrop(false);
+                  },
+                  onDrop: (event: React.DragEvent<HTMLDivElement>) => {
+                    setFileDrop(false);
+                    if (!carriesFiles(event)) return;
+                    event.preventDefault();
+                    dropFileNote(Array.from(event.dataTransfer.files));
+                  },
+                }
+              : {})}
             onScroll={(event) => {
               const list = event.currentTarget;
               // Only ever grows: a scroll event while the list is briefly
@@ -2169,6 +2343,8 @@ export function App({
             {visibleRows.slice(0, rowLimit).map((row) => {
               const target = targetOf(row);
               const actions = noteActions(target, liveReady, liveConnected);
+              /** A file note's file, while files are on (B4). */
+              const file = draftLost(row) ? undefined : visibleFiles.get(row.id);
               const book =
                 section.kind === "all" && row.notebookId && !row.trashed
                   ? notebooks.find((n) => n.id === row.notebookId)
@@ -2197,11 +2373,13 @@ export function App({
                     onMenu={(anchor) => openMenu(target, "row", anchor)}
                   >
                     <button
-                      className={
-                        currentOpen?.id === row.id
-                          ? "note-row selected"
-                          : "note-row"
-                      }
+                      className={[
+                        "note-row",
+                        currentOpen?.id === row.id && "selected",
+                        file && "has-file",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
                       draggable={draggable}
                       onDragStart={(event) => {
                         event.dataTransfer.setData(NOTE_DRAG, row.id);
@@ -2211,6 +2389,7 @@ export function App({
                         void openCachedRow(row);
                       }}
                     >
+                      {file && <FileRowVisual file={file} />}
                       <strong>
                         {pinnedIds.has(row.id) && (
                           <span className="row-pin" title="Pinned">
@@ -2225,11 +2404,20 @@ export function App({
                         <time dateTime={new Date(row.updatedAt).toISOString()}>
                           {smartDate(row.updatedAt)}
                         </time>
-                        <span className="row-preview">
-                          {draftLost(row)
-                            ? "Its notebook no longer takes your notes"
-                            : row.preview || "Empty note"}
-                        </span>
+                        {file ? (
+                          <span className="row-preview">
+                            <span className="row-file">
+                              {fileNoteLabel(file)}
+                            </span>
+                            {fileNoteRest(row.preview, file)}
+                          </span>
+                        ) : (
+                          <span className="row-preview">
+                            {draftLost(row)
+                              ? "Its notebook no longer takes your notes"
+                              : row.preview || "Empty note"}
+                          </span>
+                        )}
                       </span>
                       {draftLost(row) ? (
                         <small className="row-unavailable">Not available</small>
@@ -2417,6 +2605,22 @@ export function App({
           >
             <span />
           </button>
+          {fileNotesOn && (
+            // No `accept` or `capture`, so iOS offers all its sources
+            // (Deltos DEC-0008); one file makes one note.
+            <input
+              ref={fileNoteInput}
+              className="file-note-input"
+              type="file"
+              tabIndex={-1}
+              aria-hidden="true"
+              onChange={(event) => {
+                const chosen = event.target.files?.[0];
+                event.target.value = "";
+                if (chosen) void makeFileNote(chosen);
+              }}
+            />
+          )}
           <div className="mobile-home-actions">
             <button
               aria-label="New note"
@@ -2428,6 +2632,16 @@ export function App({
               <Icon name="compose" size={22} />
               <span>New</span>
             </button>
+            {fileNotesOn && (
+              <button
+                aria-label="Upload a file"
+                disabled={!!fileNoteBlocked}
+                onClick={() => fileNoteInput.current?.click()}
+              >
+                <Icon name="upload" size={22} />
+                <span>Upload</span>
+              </button>
+            )}
             <button onClick={() => navSheet.current?.showModal()}>
               <Icon name="menu" size={22} />
               <span>Menu</span>
@@ -2516,6 +2730,14 @@ export function App({
                 text={currentOpen.text}
                 editable={editable}
                 binding={currentOpen.channel ?? undefined}
+                upload={
+                  fileNoteUpload &&
+                  fileNoteUpload.noteId === currentOpen.id &&
+                  fileNoteUpload.accountId === currentOpen.accountId &&
+                  fileNoteUpload.generation === snapshot.generation
+                    ? fileNoteUpload
+                    : undefined
+                }
                 attachments={{
                   accountId: currentOpen.accountId,
                   noteId: isLocalNoteId(currentOpen.id) ? null : currentOpen.id,
