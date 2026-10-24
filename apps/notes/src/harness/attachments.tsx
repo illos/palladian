@@ -9,7 +9,7 @@ import type { EditorBinding } from "../binding";
 import type { AttachmentService, UploadGrant } from "../attachments";
 import { NoteEditor } from "../editor";
 import { setFileWrites } from "../file-capability";
-import { attachmentCache } from "../attachment-cache";
+import { attachmentCache, type CacheScope } from "../attachment-cache";
 import "../theme.css";
 import "../styles.css";
 
@@ -194,19 +194,26 @@ const album = {
   ],
 };
 
+/** The signed-in account and session generation. */
+let scope: CacheScope = { accountId: ACCOUNT, generation: 1 };
+attachmentCache.follow(scope);
+
 function Harness() {
   const [doc, setDoc] = useState<unknown>(album);
   const [generation, setGeneration] = useState(0);
-  const [session, setSession] = useState(1);
-  const [account, setAccount] = useState(ACCOUNT);
-  harness.nextSession = () => setSession((value) => value + 1);
-  harness.setAccount = (accountId) => {
-    setAccount(accountId);
-    setSession((value) => value + 1);
+  const [{ accountId: account, generation: session }, setScope] =
+    useState(scope);
+  // As the app does from its session listener: the cache follows the new
+  // scope at once, before React renders it.
+  const move = (next: CacheScope) => {
+    scope = next;
+    attachmentCache.follow(scope);
+    setScope(scope);
   };
-  // As the app does from the session: the cache keeps this scope's bytes
-  // only, decided before the editor can read.
-  attachmentCache.follow({ accountId: account, generation: session });
+  harness.nextSession = () =>
+    move({ accountId: scope.accountId, generation: scope.generation + 1 });
+  harness.setAccount = (accountId) =>
+    move({ accountId, generation: scope.generation + 1 });
   const [editable, setEditable] = useState(true);
   const [open, setOpen] = useState(true);
   harness.setEditable = setEditable;

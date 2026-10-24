@@ -1509,3 +1509,188 @@ test("R3-3: a download held when files turn off delivers and caches nothing", as
   expect(downloads).toBe(0);
   expect(await cachedObjects(page)).not.toContain(FILE);
 });
+
+// Review round 4.
+
+/** Clear the page's attachment bytes, as signing out or files off would. */
+function clearCache(page: Page) {
+  return page.evaluate(async () => {
+    const url = "/src/attachment-cache.ts";
+    const { attachmentCache } = (await import(
+      /* @vite-ignore */ url
+    )) as typeof import("../../apps/notes/src/attachment-cache");
+    attachmentCache.clear();
+  });
+}
+
+/** Files off and on again in one task: React renders neither. */
+const flickerFiles = (page: Page) =>
+  page.evaluate(() => {
+    const harness = (window as unknown as HarnessWindow).__attachments;
+    harness.setFiles(false);
+    harness.setFiles(true);
+  });
+
+/**
+ * The album's picture, whose first read is held and answers with other
+ * bytes (30 × 20) than every later one (40 × 30): a picture 30 pixels wide
+ * was delivered by the read that began before the interruption.
+ */
+async function heldPicture(page: Page) {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let reads = 0;
+  const aborted: string[] = [];
+  page.on("requestfailed", (request) => {
+    if (request.url().includes("/files/notes/"))
+      aborted.push(request.url().split("/").pop()!);
+  });
+  await page.route(NOTE_FILES, async (route) => {
+    const objectId = route.request().url().split("/").pop()!;
+    if (objectId !== IMAGE)
+      return route
+        .fulfill({
+          status: 200,
+          contentType: "application/octet-stream",
+          body: REPORT,
+        })
+        .catch(() => undefined);
+    const first = reads++ === 0;
+    if (first) await held;
+    await route
+      .fulfill({
+        status: 200,
+        contentType: "image/png",
+        body: first ? png(30, 20) : SMALL,
+      })
+      .catch(() => undefined);
+  });
+  const editor = await harness(page);
+  await api(page).load(ALBUM);
+  const view = editor.locator(".note-image");
+  await expect(view).toHaveAttribute("data-status", "loading");
+  await expect.poll(() => reads).toBe(1);
+  return { editor, view, release, reads: () => reads, aborted };
+}
+
+async function expectFreshPicture(
+  page: Page,
+  picture: ReturnType<typeof heldPicture> extends Promise<infer T> ? T : never,
+) {
+  picture.release();
+  const img = picture.view.locator("img");
+  await expect(img).toBeVisible();
+  await page.waitForTimeout(500);
+  // Shown from the read begun after the interruption, never the held one.
+  expect(
+    await img.evaluate((element: HTMLImageElement) => element.naturalWidth),
+  ).toBe(40);
+  expect(picture.reads()).toBe(2);
+  expect(picture.aborted).toContain(IMAGE);
+}
+
+/** Start the album's download, held at the Worker. */
+async function heldDownload(page: Page) {
+  const { release } = await heldReads(page, FILE);
+  const editor = await harness(page);
+  await api(page).load(ALBUM);
+  await expect(editor.locator(".note-image img")).toBeVisible();
+  const downloads: string[] = [];
+  page.on("download", (download) =>
+    downloads.push(download.suggestedFilename()),
+  );
+  const chip = editor.locator(".file-chip");
+  await chip.click();
+  await chip.click();
+  await expect(chip.locator(".file-meta")).toHaveText("Downloading…");
+  return { chip, release, downloads };
+}
+
+async function expectNoStaleDownload(
+  page: Page,
+  held: Awaited<ReturnType<typeof heldDownload>>,
+) {
+  held.release();
+  await page.waitForTimeout(1_000);
+  expect(held.downloads).toEqual([]);
+  expect(await cachedObjects(page)).not.toContain(FILE);
+  await expect(held.chip.locator(".file-meta")).not.toHaveText("Downloading…");
+  // A download asked for afterwards goes through.
+  await held.chip.click();
+  await expect.poll(() => held.downloads).toEqual(["report.pdf"]);
+}
+
+test("R4-1: files off and on again in one task: a held picture read shows nothing; the picture reads again", async ({
+  page,
+}) => {
+  const picture = await heldPicture(page);
+  await flickerFiles(page);
+  await expectFreshPicture(page, picture);
+});
+
+test("R4-1: files off and on again in one task: a held download starts nothing", async ({
+  page,
+}) => {
+  const held = await heldDownload(page);
+  await flickerFiles(page);
+  await expectNoStaleDownload(page, held);
+});
+
+test("R4-1: a clear during a picture read shows nothing from it; the picture reads again", async ({
+  page,
+}) => {
+  const picture = await heldPicture(page);
+  await clearCache(page);
+  await expectFreshPicture(page, picture);
+});
+
+test("R4-1: a clear during a download starts nothing", async ({ page }) => {
+  const held = await heldDownload(page);
+  await clearCache(page);
+  await expectNoStaleDownload(page, held);
+});
+
+test("R4-2: an upload held at admission when the session moves on sends no bytes, inserts nothing, and its object is released", async ({
+  page,
+}) => {
+  const editor = await harness(page);
+  const put = await uploads(page);
+  put.open();
+  await configure(page, { admissionDelayMs: 1_000 });
+  await caretAfter(editor, "First line.");
+  await choose(page, [
+    { name: "photo.png", mimeType: "image/png", buffer: PHOTO },
+  ]);
+  const upload = widget(page, "photo.png");
+  await expect(upload.getByRole("status")).toHaveText("Preparing…");
+  await expect.poll(async () => (await api(page).calls()).length).toBe(1);
+  await nextSession(page);
+  // The admission answers after the new session began.
+  await page.waitForTimeout(1_500);
+  expect(put.seen).toHaveLength(0);
+  expect(await blocks(page)).toEqual(["Album", "First line.", "Second line."]);
+  const calls = await api(page).calls();
+  expect(calls.map((call) => call.name)).toEqual([
+    "createUpload",
+    "cancelUpload",
+  ]);
+  expect(calls[1]!.args.objectId).toBe(calls[0]!.objectId);
+  expect(await cachedObjects(page)).toEqual([]);
+  await expect(upload.getByRole("status")).toHaveText(
+    "The session changed. Retry to upload this file.",
+  );
+  // Retry uploads it again in the new session, as a new request.
+  await configure(page, { admissionDelayMs: 0 });
+  await upload.getByRole("button", { name: "Retry" }).click();
+  await expect(upload).toHaveCount(0);
+  const after = await api(page).calls();
+  expect(after.map((call) => call.name)).toEqual([
+    "createUpload",
+    "cancelUpload",
+    "createUpload",
+  ]);
+  expect(after[2]!.args.requestId).not.toBe(after[0]!.args.requestId);
+  expect(await blocks(page)).toContain(
+    `image:attachment:${after[2]!.objectId}`,
+  );
+});

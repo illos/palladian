@@ -540,6 +540,29 @@ describe("the byte cache (memory only)", () => {
     expect(attachmentCache.ticket(ada)).toBeNull();
   });
 
+  test("R4-1: every clear tells its listeners at once, with the new scope in place, and ends live tickets", () => {
+    const memory = cache();
+    const seen: Array<{ live: boolean; bob: boolean }> = [];
+    const ticket = memory.ticket(ada);
+    const stop = memory.onClear(() =>
+      seen.push({
+        live: memory.live(ticket),
+        bob: memory.ticket({ accountId: "bob", generation: 2 }) !== null,
+      }),
+    );
+    expect(memory.live(ticket)).toBe(true);
+    memory.clear();
+    expect(seen).toEqual([{ live: false, bob: false }]);
+    memory.follow({ accountId: "bob", generation: 2 });
+    expect(seen[1]).toEqual({ live: false, bob: true });
+    // No change of scope, no clear.
+    memory.follow({ accountId: "bob", generation: 2 });
+    expect(seen).toHaveLength(2);
+    stop();
+    memory.clear();
+    expect(seen).toHaveLength(2);
+  });
+
   test("least recently used bytes go first past the cap", () => {
     const memory = cache(250);
     const ticket = memory.ticket(ada);

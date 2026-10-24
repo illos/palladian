@@ -21,7 +21,7 @@ import {
   type EditorView,
   type NodeViewConstructor,
 } from "prosemirror-view";
-import type { AttachmentCache } from "./attachment-cache";
+import type { AttachmentCache, CacheTicket } from "./attachment-cache";
 import {
   ADMISSION_WAIT_MS,
   AttachmentReadError,
@@ -38,7 +38,7 @@ import {
   type AttachmentService,
   type UploadGrant,
 } from "./attachments";
-import { fileWritesEnabled } from "./file-capability";
+import { fileWritesEnabled, onFileWritesChange } from "./file-capability";
 import { FileView, ImageView } from "./attachment-views";
 import "./attachments.css";
 
@@ -344,9 +344,25 @@ export class AttachmentRuntime {
   private readonly downloads = new Set<AbortController>();
   /** What the lightbox shows, while open. */
   private lightbox: { objectId: string | null } | null = null;
+  /** Stop following the cache's clears and the files gate. */
+  private readonly unsubscribe: () => void;
 
   constructor(readonly hooks: AttachmentHooks) {
     this.uploads = new UploadController(this);
+    // Both reach the runtime synchronously, not through React rendering:
+    // a clear, or files turning off, stops what is under way at that
+    // moment, even if files are back on before React renders (R4-1).
+    const stopClears = hooks.cache.onClear(() => {
+      this.dropReads();
+      // A clear for a new scope (another account or session generation,
+      // or none): uploads begun under the old one stop (R4-2).
+      if (fileWritesEnabled()) this.uploads.fence();
+    });
+    const stopGate = onFileWritesChange(() => this.refresh());
+    this.unsubscribe = () => {
+      stopClears();
+      stopGate();
+    };
   }
 
   context() {
@@ -386,12 +402,17 @@ export class AttachmentRuntime {
 
   /** Whether files may be added here now: "+ File", paste and drop. */
   canUpload(view = this.view): boolean {
+    const context = this.context();
     return (
       !!view &&
       view.editable &&
       this.hooks.collaborative &&
-      fileWritesEnabled() &&
-      !!this.context()?.service
+      !!context?.service &&
+      // Files on, and the cache follows this account and generation.
+      this.hooks.cache.ticket({
+        accountId: context.accountId,
+        generation: context.generation,
+      }) !== null
     );
   }
 
@@ -448,13 +469,9 @@ export class AttachmentRuntime {
       session?.generation !== this.session?.generation
     ) {
       if (this.session) {
-        for (const abort of this.downloads) abort.abort();
-        this.downloads.clear();
-        this.closeImage();
-        for (const [objectId, record] of this.records) {
-          this.invalidate(record);
-          this.set(objectId, "idle");
-        }
+        this.dropReads();
+        // Uploads belong to the session they began in (R4-2).
+        this.uploads.halt(SESSION_CHANGED);
       }
       this.session = session;
     }
@@ -464,11 +481,8 @@ export class AttachmentRuntime {
     if (filesOn !== this.filesOn) {
       this.filesOn = filesOn;
       if (!filesOn) {
-        for (const abort of this.downloads) abort.abort();
-        this.downloads.clear();
-        this.closeImage();
-        for (const record of this.records.values()) this.invalidate(record);
-        this.uploads.halt();
+        this.dropReads();
+        this.uploads.halt(FILES_OFF);
       } else this.uploads.resume();
     }
     // While files are off nothing here shows attachments (main's rendering
@@ -485,18 +499,12 @@ export class AttachmentRuntime {
           this.setKnown(objects),
         );
     }
-    for (const [objectId, record] of this.records)
-      if (
-        record.wanted &&
-        (record.status === "offline" ||
-          record.status === "failed" ||
-          record.status === "idle")
-      )
-        void this.load(objectId);
+    this.reloadWanted();
   }
 
   destroy() {
     this.alive = false;
+    this.unsubscribe();
     for (const record of this.records.values()) this.invalidate(record);
     for (const abort of this.downloads) abort.abort();
     this.downloads.clear();
@@ -550,7 +558,9 @@ export class AttachmentRuntime {
 
   /** Show a picture full screen. */
   showImage(image: LightboxImage) {
-    if (!this.alive) return;
+    if (!this.alive || !fileWritesEnabled()) return;
+    if (image.objectId && this.records.get(image.objectId)?.status !== "shown")
+      return;
     this.lightbox = { objectId: image.objectId };
     this.hooks.openImage(image);
   }
@@ -564,14 +574,24 @@ export class AttachmentRuntime {
     const context = this.context();
     if (!context || !this.alive) throw new AttachmentReadError("signed-out");
     if (this.gone(info.objectId)) throw new AttachmentReadError("unavailable");
+    // Taken now: any clear before the file is delivered voids it (R4-1).
+    const ticket = this.hooks.cache.ticket({
+      accountId: context.accountId,
+      generation: context.generation,
+    });
+    if (!ticket) throw new AttachmentReadError("signed-out");
     const abort = new AbortController();
     const holds = this.fence(context);
     const current = () =>
-      holds() && !abort.signal.aborted && !this.gone(info.objectId);
+      holds() &&
+      this.hooks.cache.live(ticket) &&
+      !abort.signal.aborted &&
+      !this.gone(info.objectId);
     const bytes = async () => {
       const blob = await this.fetchBytes(
         info.objectId,
         context,
+        ticket,
         abort.signal,
         current,
       );
@@ -695,12 +715,11 @@ export class AttachmentRuntime {
   private async fetchBytes(
     objectId: string,
     context: AttachmentContext,
+    ticket: CacheTicket,
     signal: AbortSignal,
     current: () => boolean,
   ): Promise<Blob> {
-    const { accountId, generation, service, noteId } = context;
-    // Taken before the read: a clear (another session, files off) ends it.
-    const ticket = this.hooks.cache.ticket({ accountId, generation });
+    const { service, noteId } = context;
     const cached = this.hooks.cache.read(ticket, objectId);
     if (cached) return cached;
     if (!service || !noteId) throw new AttachmentReadError("signed-out");
@@ -731,9 +750,19 @@ export class AttachmentRuntime {
     const context = this.context();
     if (!context) return this.set(objectId, "offline");
     if (this.gone(objectId)) return this.set(objectId, "unavailable");
+    // A read needs the cache's current scope: files on, and this account
+    // and session generation. Otherwise the session has moved on and the
+    // next refresh loads again. Any clear before the bytes are shown voids
+    // the read (R4-1).
+    const ticket = this.hooks.cache.ticket({
+      accountId: context.accountId,
+      generation: context.generation,
+    });
+    if (!ticket) return this.set(objectId, "idle");
     const holds = this.fence(context);
     const current = () =>
       holds() &&
+      this.hooks.cache.live(ticket) &&
       this.records.get(objectId) === record &&
       record.attempt === attempt;
     this.set(objectId, "loading");
@@ -741,6 +770,7 @@ export class AttachmentRuntime {
       const blob = await this.fetchBytes(
         objectId,
         context,
+        ticket,
         abort.signal,
         current,
       );
@@ -759,6 +789,39 @@ export class AttachmentRuntime {
     } finally {
       if (record.abort === abort) record.abort = null;
     }
+  }
+
+  /**
+   * The cache was cleared, or files turned off, or the session moved on:
+   * every read and download under way stops now and delivers nothing, and
+   * the lightbox closes. Pictures load again once they may (R4-1).
+   */
+  private dropReads() {
+    if (!this.alive) return;
+    for (const abort of this.downloads) abort.abort();
+    this.downloads.clear();
+    this.closeImage();
+    for (const [objectId, record] of this.records) {
+      this.invalidate(record);
+      record.deferred = false;
+      this.set(objectId, this.gone(objectId) ? "unavailable" : "idle");
+    }
+    // Load again where the cache's scope still matches (a clear alone);
+    // otherwise the next refresh does.
+    queueMicrotask(() => this.reloadWanted());
+  }
+
+  /** Load every wanted picture that is not shown or known to be gone. */
+  private reloadWanted() {
+    if (!this.alive) return;
+    for (const [objectId, record] of this.records)
+      if (
+        record.wanted &&
+        (record.status === "offline" ||
+          record.status === "failed" ||
+          record.status === "idle")
+      )
+        void this.load(objectId);
   }
 
   private closeImage() {
@@ -789,6 +852,8 @@ interface UploadTask {
   seq: number;
   file: File;
   accountId: string;
+  /** The session generation the upload belongs to. */
+  generation: number;
   state: TaskState;
   progress: number | null;
   message: string;
@@ -813,6 +878,8 @@ interface UploadTask {
 
 /** The upload stopped because files were turned off (R3-3). */
 const FILES_OFF = "Files were turned off on the server.";
+/** The upload stopped because the session moved on (R4-2). */
+const SESSION_CHANGED = "The session changed. Retry to upload this file.";
 
 const requestId = () => "upload-" + crypto.randomUUID();
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -868,6 +935,7 @@ export class UploadController {
         seq: ++this.seq,
         file,
         accountId: context.accountId,
+        generation: context.generation,
         state: "waiting",
         progress: null,
         message: "",
@@ -924,32 +992,63 @@ export class UploadController {
 
   retry(id: string) {
     const task = this.tasks.get(id);
-    // No Retry while files are off (R3-3).
-    if (!task || task.state !== "failed" || !fileWritesEnabled()) return;
+    // No Retry while files are off (R3-3), and only in the same account,
+    // once the app shows the session the cache follows (R4-2).
+    const context = this.runtime.context();
+    if (
+      !task ||
+      task.state !== "failed" ||
+      context?.accountId !== task.accountId ||
+      !this.runtime.hooks.cache.ticket({
+        accountId: context.accountId,
+        generation: context.generation,
+      })
+    )
+      return;
+    // A retry belongs to the session it is made in.
+    task.generation = context.generation;
     this.show(task, "waiting");
     this.pump();
   }
 
   /**
-   * Files were turned off: every unfinished upload stops at once. Its
-   * request is aborted, the object it made is released (a late admission
-   * through the service that makes it), and it shows as stopped with
-   * Remove only until files are on again (review round 3, R3-3).
+   * Files were turned off (R3-3), or the session moved on (R4-2): every
+   * unfinished upload stops at once. Its request is aborted, the object it
+   * made is released (a late admission through the service that makes
+   * it), and it shows `message`, with Retry only while files are on.
    */
-  halt() {
-    for (const task of this.tasks.values()) {
-      if (task.landed) continue;
-      task.attempt++;
-      task.abort?.abort();
-      task.abort = null;
-      this.release(task);
-      // A later Retry starts a new upload: this one's object is released.
-      task.requestId = requestId();
-      task.objectId = null;
-      task.grant = null;
-      task.released = false;
-      this.fail(task, FILES_OFF, true);
-    }
+  halt(message: string) {
+    for (const task of this.tasks.values()) this.stop(task, message);
+  }
+
+  /**
+   * The cache follows another scope: uploads that began under another
+   * account or session generation stop, as `halt` stops them (R4-2).
+   */
+  fence() {
+    const { cache } = this.runtime.hooks;
+    for (const task of this.tasks.values())
+      if (
+        !cache.ticket({
+          accountId: task.accountId,
+          generation: task.generation,
+        })
+      )
+        this.stop(task, SESSION_CHANGED);
+  }
+
+  private stop(task: UploadTask, message: string) {
+    if (task.landed) return;
+    task.attempt++;
+    task.abort?.abort();
+    task.abort = null;
+    this.release(task);
+    // A later Retry starts a new upload: this one's object is released.
+    task.requestId = requestId();
+    task.objectId = null;
+    task.grant = null;
+    task.released = false;
+    this.fail(task, message, true);
   }
 
   /** Files are on again: stopped uploads offer Retry. */
@@ -983,9 +1082,13 @@ export class UploadController {
   private async run(task: UploadTask) {
     const attempt = ++task.attempt;
     // Checked after every wait: the upload was removed, stopped or run
-    // again, or files were turned off.
+    // again, files were turned off, or the session moved on (the cache's
+    // current scope is the signed-in account and session generation).
+    const scope = { accountId: task.accountId, generation: task.generation };
     const current = () =>
-      !task.cancelled && task.attempt === attempt && fileWritesEnabled();
+      !task.cancelled &&
+      task.attempt === attempt &&
+      this.runtime.hooks.cache.ticket(scope) !== null;
     try {
       const grant = await this.send(task, current);
       if (!current()) return;
@@ -1031,6 +1134,8 @@ export class UploadController {
   private service(task: UploadTask) {
     const context = this.runtime.context();
     const service = context?.service;
+    if (context && context.generation !== task.generation)
+      throw new DOMException("Another session", "AbortError");
     if (
       !context ||
       !service ||
@@ -1059,13 +1164,10 @@ export class UploadController {
     this.service(task);
     // Taken now: the bytes are kept only if nothing cleared the cache (a new
     // session, files turned off) while the upload ran.
-    const context = this.runtime.context();
-    const ticket = context
-      ? this.runtime.hooks.cache.ticket({
-          accountId: task.accountId,
-          generation: context.generation,
-        })
-      : null;
+    const ticket = this.runtime.hooks.cache.ticket({
+      accountId: task.accountId,
+      generation: task.generation,
+    });
     task.sha256 ??= await sha256Hex(file);
     check();
     const noteId = await this.noteId(task);

@@ -13,7 +13,9 @@ import { fileWritesEnabled, onFileWritesChange } from "./file-capability";
  * at once, before anything can read again: bytes are read and stored only
  * under a ticket for the current scope, and every clear ends every ticket.
  * So the same page going from Ada to Bob and back to Ada never sees Ada's
- * earlier bytes.
+ * earlier bytes. A clear also tells its listeners at once (the editors'
+ * runtimes), so reads and downloads under way stop delivering (review
+ * round 4, R4-1).
  *
  * Least recently used bytes go first once the total passes the cap.
  */
@@ -47,6 +49,7 @@ export class AttachmentCache {
   /** Bytes by object, least recently used first. */
   private readonly entries = new Map<string, Blob>();
   private total = 0;
+  private readonly cleared = new Set<() => void>();
 
   constructor(limit = CACHE_LIMIT_BYTES) {
     this.limit = limit;
@@ -58,15 +61,31 @@ export class AttachmentCache {
    */
   follow(scope: CacheScope | null) {
     if (same(scope, this.scope)) return;
-    this.clear();
+    // The new scope first, so the clear's listeners see it.
     this.scope = scope ? { ...scope } : null;
+    this.clear();
   }
 
-  /** Forget every byte; tickets taken before stop working. */
+  /**
+   * Forget every byte; tickets taken before stop working, and every
+   * listener hears of it before this returns.
+   */
   clear() {
     this.entries.clear();
     this.total = 0;
     this.epoch++;
+    for (const listener of [...this.cleared]) listener();
+  }
+
+  /** Call `listener` synchronously on every clear. */
+  onClear(listener: () => void): () => void {
+    this.cleared.add(listener);
+    return () => void this.cleared.delete(listener);
+  }
+
+  /** Whether a ticket is still current: no clear, same scope, files on. */
+  live(ticket: CacheTicket | null): ticket is CacheTicket {
+    return this.valid(ticket);
   }
 
   /** A ticket for `scope` if it is the current one and files are on. */
