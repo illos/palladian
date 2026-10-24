@@ -35,6 +35,8 @@ interface Harness {
   connected: boolean;
   /** The session moves to its next generation (a new sign-in, say). */
   nextSession(): void;
+  /** Another account signs in (a new session generation too). */
+  setAccount(accountId: string): void;
   doc(): unknown;
   setFiles(on: boolean): void;
   setEditable(editable: boolean): void;
@@ -71,6 +73,7 @@ const harness: Harness = {
   admissionWaitMs: 30_000,
   connected: true,
   nextSession: () => undefined,
+  setAccount: () => undefined,
   doc: () => view?.state.doc.toJSON() ?? null,
   setFiles: setFileWrites,
   setEditable: () => undefined,
@@ -191,13 +194,19 @@ const album = {
   ],
 };
 
-attachmentCache.retain(ACCOUNT).catch(() => undefined);
-
 function Harness() {
   const [doc, setDoc] = useState<unknown>(album);
   const [generation, setGeneration] = useState(0);
   const [session, setSession] = useState(1);
+  const [account, setAccount] = useState(ACCOUNT);
   harness.nextSession = () => setSession((value) => value + 1);
+  harness.setAccount = (accountId) => {
+    setAccount(accountId);
+    setSession((value) => value + 1);
+  };
+  // As the app does from the session: the cache keeps this scope's bytes
+  // only, decided before the editor can read.
+  attachmentCache.follow({ accountId: account, generation: session });
   const [editable, setEditable] = useState(true);
   const [open, setOpen] = useState(true);
   harness.setEditable = setEditable;
@@ -217,7 +226,7 @@ function Harness() {
         onChange={() => undefined}
         binding={binding}
         attachments={{
-          accountId: ACCOUNT,
+          accountId: account,
           noteId: NOTE,
           service,
           generation: session,

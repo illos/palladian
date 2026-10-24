@@ -48,6 +48,7 @@ interface HarnessWindow {
     admissionDelayMs: number;
     admissionWaitMs: number;
     nextSession(): void;
+    setAccount(accountId: string): void;
   };
 }
 const api = (page: Page) => ({
@@ -1025,136 +1026,44 @@ test("a copied attachment the server has not seen yet waits instead of showing u
   await expect(view.locator("img")).toBeVisible();
 });
 
-test("the byte cache keeps one account's bytes and drops the least recently used past its cap", async ({
-  page,
-}) => {
-  await harness(page);
-  const result = await page.evaluate(async () => {
+/** The attachment bytes this page keeps in memory (object IDs). */
+function cachedObjects(page: Page) {
+  return page.evaluate(async () => {
     const url = "/src/attachment-cache.ts";
-    const { AttachmentCache } = (await import(
+    const { attachmentCache } = (await import(
       /* @vite-ignore */ url
     )) as typeof import("../../apps/notes/src/attachment-cache");
-    const cache = new AttachmentCache(
-      "palladian-attachments-eviction-test",
-      300,
-    );
-    const bytes = (n: number) =>
-      new Blob([new Uint8Array(n)], { type: "image/png" });
-    const pause = () => new Promise((resolve) => setTimeout(resolve, 5));
-    await cache.retain("ada");
-    const ticket = await cache.ticket("ada");
-    await cache.store("ada", "o1", bytes(120), ticket);
-    await pause();
-    await cache.store("ada", "o2", bytes(120), ticket);
-    await pause();
-    await cache.read("ada", "o1"); // o1 is now the more recently used
-    await pause();
-    await cache.store("ada", "o3", bytes(120), ticket);
-    const kept = await cache.objects("ada");
-    const total = await cache.size();
-    // Another account reads nothing; retaining it deletes Ada's bytes.
-    const other = await cache.read("bob", "o1");
-    await cache.retain("bob");
-    const afterSwitch = await cache.objects("ada");
-    // Bytes fetched for Ada before that are not stored afterwards.
-    await cache.store("ada", "late", bytes(10), ticket);
-    const late = await cache.objects("ada");
-    cache.close();
-    return { kept, total, other, afterSwitch, late };
+    return attachmentCache.objects();
   });
-  expect(result.kept.sort()).toEqual(["o1", "o3"]);
-  expect(result.total).toBe(240);
-  expect(result.other).toBeNull();
-  expect(result.afterSwitch).toEqual([]);
-  expect(result.late).toEqual([]);
-});
-
-/** The app's attachment bytes in IndexedDB: account and object only. */
-function cachedRows(page: Page) {
-  return page.evaluate(
-    () =>
-      new Promise<{ accountId: string; objectId: string }[]>(
-        (resolve, reject) => {
-          const open = indexedDB.open("palladian-attachments");
-          open.onerror = () => reject(open.error);
-          open.onsuccess = () => {
-            const db = open.result;
-            if (!db.objectStoreNames.contains("bytes")) {
-              db.close();
-              resolve([]);
-              return;
-            }
-            const request = db
-              .transaction("bytes")
-              .objectStore("bytes")
-              .getAll();
-            request.onsuccess = () => {
-              db.close();
-              resolve(
-                (
-                  request.result as { accountId: string; objectId: string }[]
-                ).map(({ accountId, objectId }) => ({ accountId, objectId })),
-              );
-            };
-            request.onerror = () => reject(request.error);
-          };
-        },
-      ),
-  );
 }
 
-test("signing out deletes the account's attachment bytes; another account's go at start", async ({
-  page,
-}) => {
+test("signing out clears the attachment bytes in memory", async ({ page }) => {
   await page.goto("/?fixture=seed&session=ready");
   await expect(
     page.getByRole("button", { name: /Welcome to your notes/ }),
   ).toBeVisible();
-  // Bytes another account left behind, then bytes of this account, as
-  // showing a picture keeps them.
-  await page.evaluate(async () => {
+  // Files on, and bytes of this account, as showing a picture keeps them.
+  await page.evaluate(async (objectId) => {
+    const capability = "/src/file-capability.ts";
+    const { setFileWrites } = (await import(
+      /* @vite-ignore */ capability
+    )) as typeof import("../../apps/notes/src/file-capability");
+    setFileWrites(true);
     const url = "/src/attachment-cache.ts";
-    const { AttachmentCache, attachmentCache } = (await import(
+    const { attachmentCache } = (await import(
       /* @vite-ignore */ url
     )) as typeof import("../../apps/notes/src/attachment-cache");
-    const other = new AttachmentCache();
-    await other.retain("someone-else");
-    await other.store(
-      "someone-else",
-      "m57a1b2c3d4e5f6g7h8j9k0m1n2p3q4r",
-      new Blob([new Uint8Array(8)]),
-    );
-    other.close();
-    await attachmentCache.store(
-      "fixture-account",
-      "k57a1b2c3d4e5f6g7h8j9k0m1n2p3q4r",
+    attachmentCache.store(
+      attachmentCache.current(),
+      objectId,
       new Blob([new Uint8Array(64)], { type: "image/png" }),
     );
-  });
-  const mine = {
-    accountId: "fixture-account",
-    objectId: "k57a1b2c3d4e5f6g7h8j9k0m1n2p3q4r",
-  };
-  expect(await cachedRows(page)).toEqual(
-    expect.arrayContaining([
-      mine,
-      {
-        accountId: "someone-else",
-        objectId: "m57a1b2c3d4e5f6g7h8j9k0m1n2p3q4r",
-      },
-    ]),
-  );
-  // Starting again as this account removes the other account's bytes.
-  await page.reload();
-  await expect(
-    page.getByRole("button", { name: /Welcome to your notes/ }),
-  ).toBeVisible();
-  await expect.poll(() => cachedRows(page)).toEqual([mine]);
-  // Signing out removes this account's bytes with its notes (D28).
+  }, IMAGE);
+  expect(await cachedObjects(page)).toEqual([IMAGE]);
   await page.locator(".connection-status").click();
   await page.getByRole("button", { name: "Sign out…" }).click();
   await page.getByRole("button", { name: "Sign out of this device" }).click();
-  await expect.poll(() => cachedRows(page)).toEqual([]);
+  await expect.poll(() => cachedObjects(page)).toEqual([]);
 });
 
 // ---- Review round 1 of B3: regression tests (fail on 85a42c7) ----
@@ -1220,9 +1129,7 @@ test("R1 F3: a picture read that finishes after the server took the object away 
   await page.waitForTimeout(500);
   await expect(view.locator("img")).toHaveCount(0);
   await expect(view).toHaveAttribute("data-status", "unavailable");
-  expect((await cachedRows(page)).map((row) => row.objectId)).not.toContain(
-    IMAGE,
-  );
+  expect(await cachedObjects(page)).not.toContain(IMAGE);
 });
 
 test("R1 F3: a download that finishes after the note closed starts nothing", async ({
@@ -1460,130 +1367,145 @@ test("R1 F8: pictures and files open from the keyboard; pictures resize with lab
   expect((await download).suggestedFilename()).toBe("report.pdf");
 });
 
-/** The agent consent request the connect page asks the Worker for. */
-const REQUEST = {
-  clientId: "agent",
-  clientName: "Test agent",
-  clientUri: null,
-  logoUri: null,
-  clientDomain: null,
-  redirectHost: "agent.example",
-  redirectIsLoopback: false,
-  scopes: [],
-};
-interface PagesWindow {
-  __pages: {
-    answer(next: { kind: string; accountId?: string }): void;
-    status(): string;
-  };
-}
+// ---- Review round 3 of B3: memory only, and the files gate (R3-3) ----
 
-/** A page outside the app, signed in as Ada, with bytes of hers cached. */
-async function sessionPage(page: Page, which: string) {
-  await page.route("**/oauth/request/*", (route) =>
-    route.fulfill({ json: REQUEST }),
-  );
-  await page.goto(
-    `/harness/pages.html?page=${which}&request=${"r".repeat(24)}#${"t".repeat(24)}`,
-  );
-  await expect
-    .poll(() =>
-      page.evaluate(() => (window as unknown as PagesWindow).__pages.status()),
-    )
-    .toBe("ready");
-  // Bytes Ada's notes left in the cache (as viewing a picture does).
-  await page.evaluate(async (objectId) => {
-    const url = "/src/attachment-cache.ts";
-    const { attachmentCache } = (await import(
-      /* @vite-ignore */ url
-    )) as typeof import("../../apps/notes/src/attachment-cache");
-    await attachmentCache.retain("ada");
-    await attachmentCache.store(
-      "ada",
-      objectId,
-      new Blob([new Uint8Array(64)], { type: "image/png" }),
-    );
-  }, IMAGE);
-  expect(await cachedRows(page)).toEqual([
-    { accountId: "ada", objectId: IMAGE },
-  ]);
-}
-const answer = (page: Page, next: { kind: string; accountId?: string }) =>
-  page.evaluate(
-    (value) => (window as unknown as PagesWindow).__pages.answer(value),
-    next,
-  );
-
-for (const which of ["connect", "invite", "reset"])
-  test(`R1 F1: the ${which} page clears attachment bytes when its session is revoked`, async ({
-    page,
-  }) => {
-    await sessionPage(page, which);
-    await answer(page, { kind: "revoked", accountId: "ada" });
-    await expect
-      .poll(() =>
-        page.evaluate(() =>
-          (window as unknown as PagesWindow).__pages.status(),
-        ),
-      )
-      .toBe("revoked");
-    await expect.poll(() => cachedRows(page)).toEqual([]);
-  });
-
-test("R1 F1: switching accounts on the connect page clears the previous account's bytes", async ({
+test("R3: nothing persists attachment bytes; a reload reads the picture again", async ({
   page,
 }) => {
-  await sessionPage(page, "connect");
-  await answer(page, { kind: "ready", accountId: "bob" });
-  await expect.poll(() => cachedRows(page)).toEqual([]);
+  const { reads } = await heldReads(page, "none");
+  const editor = await harness(page);
+  await api(page).load(ALBUM);
+  await expect(editor.locator(".note-image img")).toBeVisible();
+  expect(reads.filter((id) => id === IMAGE)).toHaveLength(1);
+  expect(await cachedObjects(page)).toContain(IMAGE);
+  const stored = await page.evaluate(async () => ({
+    databases: (await indexedDB.databases()).map((db) => db.name),
+    keys: Object.keys(localStorage),
+  }));
+  expect(stored.databases).not.toContain("palladian-attachments");
+  expect(stored.keys.filter((key) => key.includes("attachment"))).toEqual([]);
+  await page.reload();
+  await api(page).setFiles(true);
+  await api(page).load(ALBUM);
+  await expect(editor.locator(".note-image img")).toBeVisible();
+  expect(reads.filter((id) => id === IMAGE)).toHaveLength(2);
 });
 
-// ---- Review round 2 of B3, R2-1 and R2-3 ----
-
-const pageStatus = (page: Page) =>
-  page.evaluate(() => (window as unknown as PagesWindow).__pages.status());
-
-test("R2 R2-1: a mark that cannot be written, then revoked, the same account back, a reload: unreadable, then cleared", async ({
+test("R3: Ada, then Bob, then Ada in one page never shows bytes kept before", async ({
   page,
 }) => {
-  const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(error.message));
-  await sessionPage(page, "connect");
-  // From here, IndexedDB refuses to record lifecycle marks, as the
-  // reviewer injected.
-  await page.evaluate(() => {
-    const original = IDBObjectStore.prototype.put;
-    IDBObjectStore.prototype.put = function (
-      this: IDBObjectStore,
-      ...args: Parameters<IDBObjectStore["put"]>
-    ) {
-      if (this.name === "accounts")
-        throw new DOMException("Injected", "QuotaExceededError");
-      return original.apply(this, args);
-    };
-  });
-  await answer(page, { kind: "revoked", accountId: "ada" });
-  await expect.poll(() => pageStatus(page)).toBe("revoked");
-  await answer(page, { kind: "ready", accountId: "ada" });
-  await expect.poll(() => pageStatus(page)).toBe("ready");
-  // Two scheduled retries fail meanwhile (R2-3): nothing goes unhandled.
-  await page.waitForTimeout(3_300);
-  expect(errors).toEqual([]);
-  // A reload, signed in as Ada again (the harness's first answer).
-  await page.reload();
-  await expect.poll(() => pageStatus(page)).toBe("ready");
-  const unreadable = await page.evaluate(async (objectId) => {
-    const url = "/src/attachment-cache.ts";
-    const { attachmentCache } = (await import(
-      /* @vite-ignore */ url
-    )) as typeof import("../../apps/notes/src/attachment-cache");
-    return (await attachmentCache.read("ada", objectId)) === null;
-  }, IMAGE);
-  expect(unreadable).toBe(true);
-  await expect.poll(() => cachedRows(page)).toEqual([]);
-  expect(
-    await page.evaluate(() =>
-      localStorage.getItem("palladian.notes.attachment-cleanup.v1"),
+  const { reads } = await heldReads(page, "none");
+  const editor = await harness(page);
+  await api(page).load(ALBUM);
+  const picture = editor.locator(".note-image img");
+  await expect(picture).toBeVisible();
+  const count = () => reads.filter((id) => id === IMAGE).length;
+  expect(count()).toBe(1);
+  await page.evaluate(() =>
+    (window as unknown as HarnessWindow).__attachments.setAccount("bob"),
+  );
+  await expect.poll(count).toBe(2);
+  await expect(picture).toBeVisible();
+  await page.evaluate(() =>
+    (window as unknown as HarnessWindow).__attachments.setAccount(
+      "harness-account",
     ),
-  ).toBeNull();
+  );
+  // Read again from the Worker: nothing from Ada's earlier session is kept.
+  await expect.poll(count).toBe(3);
+  await expect(picture).toBeVisible();
+});
+
+test("R3-3: an upload held at admission when files turn off sends no bytes, and its late admission is released", async ({
+  page,
+}) => {
+  const editor = await harness(page);
+  const put = await uploads(page);
+  put.open();
+  await configure(page, { admissionDelayMs: 1_000 });
+  await caretAfter(editor, "First line.");
+  await choose(page, [
+    { name: "photo.png", mimeType: "image/png", buffer: PHOTO },
+  ]);
+  const upload = widget(page, "photo.png");
+  await expect(upload.getByRole("status")).toHaveText("Preparing…");
+  await expect.poll(async () => (await api(page).calls()).length).toBe(1);
+  await api(page).setFiles(false);
+  await expect(upload.getByRole("status")).toHaveText(
+    "Files were turned off on the server.",
+  );
+  await expect(upload.getByRole("button", { name: "Retry" })).toBeHidden();
+  await expect(upload.getByRole("button", { name: "Remove" })).toBeVisible();
+  await page.waitForTimeout(1_500);
+  expect(put.seen).toHaveLength(0);
+  const calls = await api(page).calls();
+  expect(calls.map((call) => call.name)).toEqual([
+    "createUpload",
+    "cancelUpload",
+  ]);
+  expect(calls[1]!.args.objectId).toBe(calls[0]!.objectId);
+  expect(await cachedObjects(page)).toEqual([]);
+  expect(await blocks(page)).toEqual(["Album", "First line.", "Second line."]);
+});
+
+test("R3-3: no Retry while files are off; once on, Retry starts a new upload", async ({
+  page,
+}) => {
+  const editor = await harness(page);
+  const put = await uploads(page);
+  put.respond(503);
+  put.open();
+  await caretAfter(editor, "First line.");
+  await choose(page, [
+    { name: "photo.png", mimeType: "image/png", buffer: PHOTO },
+  ]);
+  const upload = widget(page, "photo.png");
+  const retry = upload.getByRole("button", { name: "Retry" });
+  await expect(retry).toBeVisible();
+  await api(page).setFiles(false);
+  await expect(retry).toBeHidden();
+  await expect(upload.getByRole("button", { name: "Remove" })).toBeVisible();
+  await page.waitForTimeout(300);
+  // Nothing was asked of the server while off beyond releasing the object.
+  const before = await api(page).calls();
+  expect(before.map((call) => call.name)).toEqual([
+    "createUpload",
+    "cancelUpload",
+  ]);
+  put.respond(200);
+  await api(page).setFiles(true);
+  await expect(retry).toBeVisible();
+  await retry.click();
+  await expect(upload).toHaveCount(0);
+  const calls = await api(page).calls();
+  expect(calls.map((call) => call.name)).toEqual([
+    "createUpload",
+    "cancelUpload",
+    "createUpload",
+  ]);
+  // The released object is not reused: a new request.
+  expect(calls[2]!.args.requestId).not.toBe(calls[0]!.args.requestId);
+  expect(await blocks(page)).toContain(
+    `image:attachment:${calls[2]!.objectId}`,
+  );
+});
+
+test("R3-3: a download held when files turn off delivers and caches nothing", async ({
+  page,
+}) => {
+  const { release } = await heldReads(page, FILE);
+  const editor = await harness(page);
+  await api(page).load(ALBUM);
+  await expect(editor.locator(".note-image img")).toBeVisible();
+  let downloads = 0;
+  page.on("download", () => downloads++);
+  const chip = editor.locator(".file-chip");
+  await chip.click();
+  await chip.click();
+  await expect(chip.locator(".file-meta")).toHaveText("Downloading…");
+  await api(page).setFiles(false);
+  release();
+  await page.waitForTimeout(1_000);
+  expect(downloads).toBe(0);
+  expect(await cachedObjects(page)).not.toContain(FILE);
 });

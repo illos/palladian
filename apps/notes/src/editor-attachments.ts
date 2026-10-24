@@ -48,14 +48,16 @@ import "./attachments.css";
  * Uploads are decorations, never document content: collaborators see nothing
  * until the object is ready, and then one ordinary step inserts the image or
  * file block where the upload's mark has been mapped to by everything typed
- * meanwhile, here or by others. Closing the note cancels its unfinished
- * uploads; the server fails or deletes the objects and sweeps their bytes.
+ * meanwhile, here or by others. Closing the note, or files turning off,
+ * stops its unfinished uploads; the server fails or deletes the objects and
+ * sweeps their bytes.
  *
- * Images and file blocks are drawn by node views (attachment-views.ts) that
- * load bytes through the per-account cache (attachment-cache.ts) and the
- * Worker. A reference the server does not list for the note
- * (`files.noteObjects`: it grants nothing, or the object was permanently
- * deleted) shows "Attachment unavailable".
+ * While files are on, images and file blocks are drawn by node views
+ * (attachment-views.ts) that load bytes through this page's memory cache
+ * (attachment-cache.ts) and the Worker. A reference the server does not
+ * list for the note (`files.noteObjects`: it grants nothing, or the object
+ * was permanently deleted) shows "Attachment unavailable". While files are
+ * off, the editor draws them as before B3.
  */
 
 const { image, file: fileNode } = notesSchema.nodes as Record<string, NodeType>;
@@ -336,6 +338,8 @@ export class AttachmentRuntime {
   private stopWatching: (() => void) | null = null;
   /** The account and session generation reads last began under. */
   private session: { accountId: string; generation: number } | null = null;
+  /** Whether files were on when the context was last followed. */
+  private filesOn = false;
   /** Downloads under way. */
   private readonly downloads = new Set<AbortController>();
   /** What the lightbox shows, while open. */
@@ -453,6 +457,19 @@ export class AttachmentRuntime {
         }
       }
       this.session = session;
+    }
+    // Files turned off: every read, download and upload under way stops
+    // (review round 3, R3-3). Pictures and files show as before B3.
+    const filesOn = fileWritesEnabled();
+    if (filesOn !== this.filesOn) {
+      this.filesOn = filesOn;
+      if (!filesOn) {
+        for (const abort of this.downloads) abort.abort();
+        this.downloads.clear();
+        this.closeImage();
+        for (const record of this.records.values()) this.invalidate(record);
+        this.uploads.halt();
+      } else this.uploads.resume();
     }
     // While files are off nothing here shows attachments (main's rendering
     // does): no list of the note's objects is followed.
@@ -607,7 +624,6 @@ export class AttachmentRuntime {
   private reconcile() {
     const known = this.known;
     if (!known || !this.alive) return;
-    const context = this.context();
     let unsent: Set<string> | null = null;
     for (const [objectId, record] of this.records) {
       const listed = known.has(objectId);
@@ -617,7 +633,7 @@ export class AttachmentRuntime {
         if (record.status === "unavailable") continue;
         record.deferred = false;
         this.invalidate(record);
-        if (context) void this.hooks.cache.drop(context.accountId, objectId);
+        this.hooks.cache.drop(objectId);
         this.set(objectId, "unavailable");
       } else if (record.status === "unavailable" || record.deferred) {
         record.deferred = false;
@@ -657,7 +673,7 @@ export class AttachmentRuntime {
   private fence(context: AttachmentContext): () => boolean {
     const { accountId, generation } = context;
     return () => {
-      if (!this.alive) return false;
+      if (!this.alive || !fileWritesEnabled()) return false;
       const now = this.context();
       return (
         !!now && now.accountId === accountId && now.generation === generation
@@ -682,9 +698,10 @@ export class AttachmentRuntime {
     signal: AbortSignal,
     current: () => boolean,
   ): Promise<Blob> {
-    const { accountId, service, noteId } = context;
-    const ticket = await this.hooks.cache.ticket(accountId);
-    const cached = await this.hooks.cache.read(accountId, objectId);
+    const { accountId, generation, service, noteId } = context;
+    // Taken before the read: a clear (another session, files off) ends it.
+    const ticket = this.hooks.cache.ticket({ accountId, generation });
+    const cached = this.hooks.cache.read(ticket, objectId);
     if (cached) return cached;
     if (!service || !noteId) throw new AttachmentReadError("signed-out");
     let blob: Blob;
@@ -699,8 +716,8 @@ export class AttachmentRuntime {
         this.unreadable(objectId);
       throw error;
     }
-    if (ticket && current() && !this.gone(objectId))
-      void this.hooks.cache.store(accountId, objectId, blob, ticket);
+    if (current() && !this.gone(objectId))
+      this.hooks.cache.store(ticket, objectId, blob);
     return blob;
   }
 
@@ -788,9 +805,14 @@ interface UploadTask {
   cancelled: boolean;
   /** In the note: its object is never released. */
   landed: boolean;
+  /** Each run, and each stop, ends the runs before it. */
+  attempt: number;
   abort: AbortController | null;
   dom: HTMLElement;
 }
+
+/** The upload stopped because files were turned off (R3-3). */
+const FILES_OFF = "Files were turned off on the server.";
 
 const requestId = () => "upload-" + crypto.randomUUID();
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -858,6 +880,7 @@ export class UploadController {
         released: false,
         cancelled: false,
         landed: false,
+        attempt: 0,
         abort: null,
         dom: document.createElement("div"),
       };
@@ -901,9 +924,37 @@ export class UploadController {
 
   retry(id: string) {
     const task = this.tasks.get(id);
-    if (!task || task.state !== "failed") return;
+    // No Retry while files are off (R3-3).
+    if (!task || task.state !== "failed" || !fileWritesEnabled()) return;
     this.show(task, "waiting");
     this.pump();
+  }
+
+  /**
+   * Files were turned off: every unfinished upload stops at once. Its
+   * request is aborted, the object it made is released (a late admission
+   * through the service that makes it), and it shows as stopped with
+   * Remove only until files are on again (review round 3, R3-3).
+   */
+  halt() {
+    for (const task of this.tasks.values()) {
+      if (task.landed) continue;
+      task.attempt++;
+      task.abort?.abort();
+      task.abort = null;
+      this.release(task);
+      // A later Retry starts a new upload: this one's object is released.
+      task.requestId = requestId();
+      task.objectId = null;
+      task.grant = null;
+      task.released = false;
+      this.fail(task, FILES_OFF, true);
+    }
+  }
+
+  /** Files are on again: stopped uploads offer Retry. */
+  resume() {
+    for (const task of this.tasks.values()) this.render(task);
   }
 
   /** The note closed: every unfinished upload is cancelled. */
@@ -917,6 +968,7 @@ export class UploadController {
   }
 
   private pump() {
+    if (!fileWritesEnabled()) return;
     for (const task of this.tasks.values()) {
       if (this.running >= PARALLEL_UPLOADS) return;
       if (task.state !== "waiting") continue;
@@ -929,13 +981,18 @@ export class UploadController {
   }
 
   private async run(task: UploadTask) {
+    const attempt = ++task.attempt;
+    // Checked after every wait: the upload was removed, stopped or run
+    // again, or files were turned off.
+    const current = () =>
+      !task.cancelled && task.attempt === attempt && fileWritesEnabled();
     try {
-      const grant = await this.send(task);
-      if (task.cancelled) return;
+      const grant = await this.send(task, current);
+      if (!current()) return;
       this.insert(task, grant);
     } catch (error) {
       if (
-        task.cancelled ||
+        !current() ||
         (error instanceof DOMException && error.name === "AbortError")
       )
         return;
@@ -949,7 +1006,7 @@ export class UploadController {
       }
       this.fail(task, failure.message, failure.retryable);
     } finally {
-      task.abort = null;
+      if (task.attempt === attempt) task.abort = null;
       // Cancelled while asking the server: release what it made.
       if (task.cancelled) this.release(task);
     }
@@ -987,20 +1044,35 @@ export class UploadController {
     return service;
   }
 
-  private async send(task: UploadTask): Promise<UploadGrant> {
+  private async send(
+    task: UploadTask,
+    current: () => boolean,
+  ): Promise<UploadGrant> {
     const { file } = task;
+    const check = () => {
+      if (!current()) throw new DOMException("Stopped", "AbortError");
+    };
     if (file.size === 0) throw new UploadError("This file is empty.", false);
     if (file.size > MAX_FILE_BYTES)
       throw new UploadError("Files can be at most 25 MB.", false);
     this.show(task, "preparing");
     this.service(task);
-    // Taken now: the bytes are kept only if the account's cache was not
-    // cleared while the upload ran.
-    const ticket = await this.runtime.hooks.cache.ticket(task.accountId);
+    // Taken now: the bytes are kept only if nothing cleared the cache (a new
+    // session, files turned off) while the upload ran.
+    const context = this.runtime.context();
+    const ticket = context
+      ? this.runtime.hooks.cache.ticket({
+          accountId: task.accountId,
+          generation: context.generation,
+        })
+      : null;
     task.sha256 ??= await sha256Hex(file);
+    check();
     const noteId = await this.noteId(task);
-    if (task.cancelled) throw new DOMException("Cancelled", "AbortError");
+    check();
     const ask = () => {
+      // Files must still be on when the server is asked (R3-3).
+      check();
       const service = this.service(task);
       const request = task.requestId;
       task.service = service;
@@ -1021,38 +1093,41 @@ export class UploadController {
       return within(admission, service.admissionWaitMs ?? ADMISSION_WAIT_MS);
     };
     let grant = await ask();
+    check();
     task.objectId = grant.objectId;
     if (grant.state === "failed") {
       // An earlier attempt expired or was cancelled: a new request.
       task.requestId = requestId();
       grant = await ask();
+      check();
       task.objectId = grant.objectId;
     }
-    if (task.cancelled) throw new DOMException("Cancelled", "AbortError");
     if (grant.state === "failed")
       throw new UploadError("The upload could not start. Retry.", true, true);
     task.grant = grant;
     if (grant.state === "pending") {
       if (!grant.ticket)
         throw new UploadError("The upload could not start. Retry.", true, true);
+      // And still on when the bytes go (R3-3).
+      check();
       this.show(task, "sending", 0);
       task.abort = new AbortController();
       await putAttachment(grant.objectId, grant.ticket, file, {
         signal: task.abort.signal,
         progress: (fraction) => {
-          if (!task.cancelled) this.show(task, "sending", fraction);
+          if (current()) this.show(task, "sending", fraction);
         },
       });
+      check();
     }
     this.show(task, "finishing");
-    // The bytes are here already: keep them so the picture shows at once.
-    if (ticket)
-      void this.runtime.hooks.cache.store(
-        task.accountId,
-        grant.objectId,
-        file.slice(0, file.size, displayType(grant.mimeType)),
-        ticket,
-      );
+    // The bytes are here already: keep them so the picture shows at once
+    // (the ticket is void if files were turned off or the session moved on).
+    this.runtime.hooks.cache.store(
+      ticket,
+      grant.objectId,
+      file.slice(0, file.size, displayType(grant.mimeType)),
+    );
     return grant;
   }
 
@@ -1204,7 +1279,8 @@ export class UploadController {
       const action = button.dataset.action;
       button.hidden =
         task.state === "failed"
-          ? action === "cancel" || (action === "retry" && !task.retryable)
+          ? action === "cancel" ||
+            (action === "retry" && (!task.retryable || !fileWritesEnabled()))
           : action !== "cancel";
     }
   }

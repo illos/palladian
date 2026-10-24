@@ -11,10 +11,8 @@ import type { Node as ProseMirrorNode } from "prosemirror-model";
 import { EditorState, NodeSelection, TextSelection } from "prosemirror-state";
 import { ReplaceStep, Step } from "prosemirror-transform";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import {
-  AttachmentCache,
-  type CleanupIntents,
-} from "../../src/attachment-cache";
+import { AttachmentCache } from "../../src/attachment-cache";
+import { setFileWrites } from "../../src/file-capability";
 import {
   AttachmentReadError,
   displayType,
@@ -479,113 +477,89 @@ describe("the live service's token", () => {
   });
 });
 
-/** The durable cleanup list, in memory here (localStorage in the app). */
-function cleanupList(): CleanupIntents {
-  let accounts: string[] = [];
-  return {
-    read: () => [...accounts],
-    write: (next) => {
-      accounts = [...next];
-    },
-  };
-}
-
-describe("the byte cache", () => {
-  let count = 0;
-  const fresh = (limit?: number) =>
-    new AttachmentCache(`attachments-test-${++count}`, limit, cleanupList());
+describe("the byte cache (memory only)", () => {
   const bytes = (n: number) =>
     new Blob([new Uint8Array(n)], { type: "image/png" });
+  const ada = { accountId: "ada", generation: 1 };
+  afterEach(() => setFileWrites(false));
+  const cache = (limit?: number) => {
+    setFileWrites(true);
+    const made = new AttachmentCache(limit);
+    made.follow(ada);
+    return made;
+  };
 
-  test("one account at a time: reads and writes for any other do nothing", async () => {
-    const cache = fresh();
-    await cache.retain("ada");
-    await cache.store("ada", OBJECT_A, bytes(4));
-    await cache.store("bob", OBJECT_A, bytes(4));
-    expect(await cache.read("bob", OBJECT_A)).toBeNull();
-    expect((await cache.read("ada", OBJECT_A))?.size).toBe(4);
-    expect(await cache.objects("bob")).toEqual([]);
-    cache.close();
+  test("only the current account and session generation read and store", () => {
+    const memory = cache();
+    memory.store(memory.ticket(ada), OBJECT_A, bytes(4));
+    expect(memory.read(memory.ticket(ada), OBJECT_A)?.size).toBe(4);
+    expect(memory.ticket({ accountId: "bob", generation: 1 })).toBeNull();
+    expect(memory.ticket({ accountId: "ada", generation: 2 })).toBeNull();
+    memory.store(null, OBJECT_B, bytes(4));
+    expect(memory.objects()).toEqual([OBJECT_A]);
   });
 
-  test("retaining another account, or none, deletes the bytes; so does forget", async () => {
-    const cache = fresh();
-    await cache.retain("ada");
-    await cache.store("ada", OBJECT_A, bytes(4));
-    await cache.retain("bob");
-    expect(await cache.objects("ada")).toEqual([]);
-    await cache.store("bob", OBJECT_B, bytes(4));
-    await cache.forget("bob");
-    expect(await cache.objects("bob")).toEqual([]);
-    expect(await cache.read("bob", OBJECT_B)).toBeNull();
-    await cache.store("bob", OBJECT_B, bytes(4));
-    await cache.retain(null);
-    expect(await cache.size()).toBe(0);
-    cache.close();
+  test("Ada, then Bob, then Ada again in one page: none of Ada's earlier bytes", () => {
+    const memory = cache();
+    const first = memory.ticket(ada);
+    memory.store(first, OBJECT_A, bytes(4));
+    memory.follow({ accountId: "bob", generation: 2 });
+    expect(memory.objects()).toEqual([]);
+    memory.follow({ accountId: "ada", generation: 3 });
+    const again = memory.ticket({ accountId: "ada", generation: 3 });
+    expect(memory.read(again, OBJECT_A)).toBeNull();
+    // A read begun in Ada's first session neither reads nor stores now.
+    expect(memory.read(first, OBJECT_A)).toBeNull();
+    memory.store(first, OBJECT_A, bytes(4));
+    expect(memory.objects()).toEqual([]);
   });
 
-  test("a fetch that finishes after its account's bytes were cleared stores nothing", async () => {
-    const cache = fresh();
-    await cache.retain("ada");
-    const ticket = await cache.ticket("ada");
-    const clearing = cache.forget("ada");
-    await cache.store("ada", OBJECT_A, bytes(4), ticket);
-    await clearing;
-    expect(await cache.objects("ada")).toEqual([]);
-    // Signed out and in again: the old mark is still refused.
-    await cache.retain(null);
-    await cache.retain("ada");
-    await cache.store("ada", OBJECT_A, bytes(4), ticket);
-    expect(await cache.read("ada", OBJECT_A)).toBeNull();
-    cache.close();
+  test("signing out, a revoked session and a clear end every ticket", () => {
+    const memory = cache();
+    const ticket = memory.ticket(ada);
+    memory.store(ticket, OBJECT_A, bytes(4));
+    memory.follow(null);
+    expect(memory.objects()).toEqual([]);
+    memory.follow(ada);
+    memory.store(ticket, OBJECT_A, bytes(4));
+    expect(memory.objects()).toEqual([]);
+    const fresh = memory.ticket(ada);
+    memory.store(fresh, OBJECT_A, bytes(4));
+    memory.clear();
+    expect(memory.read(fresh, OBJECT_A)).toBeNull();
   });
 
-  test("a clear that starts while a write is under way removes it too", async () => {
-    const cache = fresh();
-    await cache.retain("ada");
-    const writing = cache.store("ada", OBJECT_A, bytes(4));
-    const clearing = cache.forget("ada");
-    await writing;
-    // Unreadable at once; gone once the clear has run.
-    expect(await cache.read("ada", OBJECT_A)).toBeNull();
-    await clearing;
-    expect(await cache.objects("ada")).toEqual([]);
-    cache.close();
+  test("files off: no tickets, and turning them off clears the app's bytes", async () => {
+    const { attachmentCache } = await import("../../src/attachment-cache");
+    setFileWrites(true);
+    attachmentCache.follow(ada);
+    attachmentCache.store(attachmentCache.ticket(ada), OBJECT_A, bytes(4));
+    expect(attachmentCache.objects()).toEqual([OBJECT_A]);
+    setFileWrites(false);
+    expect(attachmentCache.objects()).toEqual([]);
+    expect(attachmentCache.ticket(ada)).toBeNull();
   });
 
-  test("least recently used bytes go first past the cap", async () => {
-    const cache = fresh(250);
-    await cache.retain("ada");
-    const tick = () => new Promise((resolve) => setTimeout(resolve, 3));
-    await cache.store("ada", "o1", bytes(100));
-    await tick();
-    await cache.store("ada", "o2", bytes(100));
-    await tick();
-    await cache.read("ada", "o1");
-    await tick();
-    await cache.store("ada", "o3", bytes(100));
-    expect((await cache.objects("ada")).sort()).toEqual(["o1", "o3"]);
-    expect(await cache.size()).toBe(200);
+  test("least recently used bytes go first past the cap", () => {
+    const memory = cache(250);
+    const ticket = memory.ticket(ada);
+    memory.store(ticket, "o1", bytes(100));
+    memory.store(ticket, "o2", bytes(100));
+    memory.read(ticket, "o1");
+    memory.store(ticket, "o3", bytes(100));
+    expect(memory.objects()).toEqual(["o1", "o3"]);
+    expect(memory.size()).toBe(200);
     // Anything larger than an upload can be is never kept.
-    await cache.store(
-      "ada",
+    memory.store(
+      ticket,
       "huge",
       new Blob([new Uint8Array(25 * 1024 * 1024 + 1)]),
     );
-    expect(await cache.objects("ada")).not.toContain("huge");
-    cache.close();
+    expect(memory.objects()).not.toContain("huge");
   });
+});
 
-  test("without IndexedDB it keeps bytes in memory for the page only", async () => {
-    const cache = fresh();
-    cache.close(); // a database that cannot be used
-    await cache.retain("ada").catch(() => undefined);
-    await cache.store("ada", OBJECT_A, bytes(4));
-    expect((await cache.read("ada", OBJECT_A))?.size).toBe(4);
-    await cache.forget("ada").catch(() => undefined);
-    expect(await cache.read("ada", OBJECT_A)).toBeNull();
-  });
-
+describe("the server's rules", () => {
   test("a step bringing in an object is recorded by the server's own rules", () => {
     // The insertion step is an ordinary, valid step (applySafeStep), so the
     // server records the uploader's reference with it.

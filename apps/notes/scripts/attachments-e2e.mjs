@@ -445,32 +445,16 @@ async function fileService(page, persist, issuer) {
   };
 }
 
-/** The attachment bytes the app keeps in this page's IndexedDB. */
+/**
+ * The attachment bytes the app keeps in this page's memory (object IDs),
+ * read through the app's own module (the app runs from the dev server).
+ */
 function cachedObjects(page) {
-  return page.evaluate(
-    () =>
-      new Promise((resolve, reject) => {
-        const open = indexedDB.open("palladian-attachments");
-        open.onerror = () => reject(open.error);
-        open.onsuccess = () => {
-          const db = open.result;
-          if (!db.objectStoreNames.contains("entries")) {
-            db.close();
-            resolve([]);
-            return;
-          }
-          const request = db
-            .transaction("entries")
-            .objectStore("entries")
-            .getAll();
-          request.onsuccess = () => {
-            db.close();
-            resolve(request.result.map((entry) => entry.objectId));
-          };
-          request.onerror = () => reject(request.error);
-        };
-      }),
-  );
+  return page.evaluate(async () => {
+    const url = "/src/attachment-cache.ts";
+    const { attachmentCache } = await import(/* @vite-ignore */ url);
+    return attachmentCache.objects();
+  });
 }
 
 let stopWorker = async () => undefined;
@@ -668,7 +652,7 @@ try {
   await expect
     .poll(() => cachedObjects(b))
     .toEqual(expect.arrayContaining([photo, reportObject]));
-  step("the second device keeps the bytes it showed in its attachment cache");
+  step("the second device keeps the bytes it showed, in memory only");
 
   begin("resize");
   const pictureA = editorA.locator(".note-image img");
@@ -801,7 +785,7 @@ try {
     (await cachedObjects(a)).includes(photo),
     "the first device keeps its own",
   );
-  step("signing out empties that device's attachment cache");
+  step("signing out empties that device's attachment bytes");
 
   await deskA.close();
   await deskB.close();

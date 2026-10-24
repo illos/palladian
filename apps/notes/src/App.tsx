@@ -72,7 +72,6 @@ import {
 import type { ChannelStatus, NoteChannel } from "./channel";
 import { watchFileCapability } from "./file-capability";
 import { attachmentCache } from "./attachment-cache";
-import { useAttachmentCache } from "./attachment-cache-lifecycle";
 import { liveAttachmentService } from "./attachments";
 import { watchNotebookCapability } from "./notebook-capability";
 import { liveStateSource, type LiveBox } from "./liveBox";
@@ -377,19 +376,25 @@ export function App({
     return watchFileCapability(live.client);
   }, [live, liveReady]);
 
-  // Attachment bytes stay only for the account the app may show (B3, D28):
-  // signing out, a revoked session and switching accounts delete them, as
-  // does any clear of the account's notes, in this tab or another. The
-  // pages outside the app install the same lifecycle.
-  useAttachmentCache(session);
-  useEffect(
-    () =>
-      store.subscribe((event) => {
-        if (event.invalidated && event.accountId)
-          void attachmentCache.forget(event.accountId).catch(() => undefined);
-      }),
-    [store],
-  );
+  // Attachment bytes live in this page's memory for one account and session
+  // generation (B3): a new sign-in, another account, signing out and a
+  // revoked session clear them inside the session's own update, before
+  // anything can read again. Another tab's sign-out reaches this session
+  // too.
+  useEffect(() => {
+    const follow = () => {
+      const now = session.getSnapshot();
+      attachmentCache.follow(
+        now.accountId !== null &&
+          now.status !== "revoked" &&
+          now.status !== "signed-out"
+          ? { accountId: now.accountId, generation: now.generation }
+          : null,
+      );
+    };
+    follow();
+    return session.subscribe(follow);
+  }, [session]);
   /** Uploads and attachment reads for the signed-in account (B3). */
   const attachmentService = useMemo(
     () =>

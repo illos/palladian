@@ -1,699 +1,142 @@
-import Dexie, { type Table } from "dexie";
+import { fileWritesEnabled, onFileWritesChange } from "./file-capability";
 
 /**
- * Attachment bytes this device has shown, per account (plan 08 B3, after
- * Deltos CONV-0007). An object ID never changes content, so a cached copy
- * stays right for as long as it is kept. Reopening a note shows its pictures
- * without a network request; nothing is fetched ahead of time, and there are
- * no offline downloads (D84).
+ * Attachment bytes this page has shown, in memory only (plan 08 B3; review
+ * round 3). Nothing is written to IndexedDB, localStorage or anywhere else
+ * that outlives the page, so nothing needs clearing at sign-out beyond
+ * this page's memory, and a reload starts empty. A persistent cache needs
+ * the notes cache's own account lifecycle and waits for the owner (see the
+ * implementation report).
  *
- * Only the account the app shows right now (`retain`) may read or store
- * bytes. Leaving an account clears its bytes, as does `forget`
- * (attachment-cache-lifecycle.ts drives both from the session and the
- * shared account hint on every page; D28).
+ * The bytes belong to one account and session generation (a scope). Any
+ * change of scope, the session ending, and files turning off clear them
+ * at once, before anything can read again: bytes are read and stored only
+ * under a ticket for the current scope, and every clear ends every ticket.
+ * So the same page going from Ada to Bob and back to Ada never sees Ada's
+ * earlier bytes.
  *
- * Clears fail closed (review rounds 1 and 2, F2 and R2-1):
- * - The intent to clear an account is recorded first, synchronously, in a
- *   list of its own in localStorage (`CLEANUP_KEY`), before anything
- *   asynchronous. While an account is listed, no tab reads or writes its
- *   bytes, and every start finishes its clear before any read. It leaves
- *   the list only once a clear has committed and been read back.
- * - If even that list cannot be written, the page seals itself: no cached
- *   bytes are read or written at all, in memory or IndexedDB, until the
- *   intent is recorded or the clear verified; both are retried.
- * - In IndexedDB, each account has a lifecycle. A clear records the next
- *   one as unfinished, then deletes the account's bytes and sizes and the
- *   mark in one transaction. Bytes are written only into the lifecycle the
- *   fetch began in, checked in the writing transaction.
- * - A database that cannot open never counts as a clear done.
- *
- * Least recently used bytes go first once the total passes the cap. If
- * IndexedDB is unavailable the cache works in memory only.
+ * Least recently used bytes go first once the total passes the cap.
  */
 
-/** Largest total of cached bytes on this device: Deltos's budget. */
-export const CACHE_LIMIT_BYTES = 200 * 1024 * 1024;
+/** Largest total of bytes kept in memory. */
+export const CACHE_LIMIT_BYTES = 64 * 1024 * 1024;
 /** Uploads are at most 25 MB, so every object fits. */
 export const ENTRY_LIMIT_BYTES = 25 * 1024 * 1024;
-/** Bytes also kept in memory for this page, so a redrawn picture never waits. */
-const MEMORY_LIMIT_BYTES = 48 * 1024 * 1024;
-/** Waits before retrying a failed clear. */
-const RETRY_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
-/** Where accounts with an unfinished clear are listed (R2-1). */
-export const CLEANUP_KEY = "palladian.notes.attachment-cleanup.v1";
 
-interface Entry {
+/** Whose bytes these are: an account, in one session generation. */
+export interface CacheScope {
   accountId: string;
-  objectId: string;
-  size: number;
-  /** When the bytes were last stored or shown: the eviction order. */
-  usedAt: number;
-  /** The account's lifecycle the bytes were stored in. */
-  lifecycle: number;
-}
-interface Bytes {
-  accountId: string;
-  objectId: string;
-  blob: Blob;
-}
-/** How many times an account's bytes were cleared, and whether a clear is unfinished. */
-interface AccountRow {
-  accountId: string;
-  lifecycle: number;
-  clearing: boolean;
+  generation: number;
 }
 
-class AttachmentDatabase extends Dexie {
-  /** Sizes and use times only, so eviction never reads any bytes. */
-  entries!: Table<Entry, [string, string]>;
-  bytes!: Table<Bytes, [string, string]>;
-  accounts!: Table<AccountRow, string>;
-  constructor(name: string) {
-    super(name);
-    this.version(1).stores({
-      entries: "[accountId+objectId], accountId, usedAt",
-      bytes: "[accountId+objectId], accountId",
-      accounts: "accountId",
-    });
-  }
-}
-
-/**
- * The durable list of accounts whose bytes must be cleared before they are
- * read again. Both calls are synchronous and throw when storage fails.
- */
-export interface CleanupIntents {
-  read(): string[];
-  write(accounts: string[]): void;
-}
-
-/** The list in this origin's localStorage, shared by every tab. */
-export function storageIntents(
-  storage: () => Pick<Storage, "getItem" | "setItem" | "removeItem"> = () =>
-    localStorage,
-): CleanupIntents {
-  return {
-    read() {
-      const raw = storage().getItem(CLEANUP_KEY);
-      if (raw === null) return [];
-      const value: unknown = JSON.parse(raw);
-      if (!Array.isArray(value)) throw new Error("Unreadable cleanup list.");
-      return value.filter(
-        (entry): entry is string => typeof entry === "string",
-      );
-    },
-    write(accounts) {
-      if (accounts.length)
-        storage().setItem(CLEANUP_KEY, JSON.stringify(accounts));
-      else storage().removeItem(CLEANUP_KEY);
-    },
-  };
-}
-
-/**
- * What a fetch carries from its start: its bytes are stored only if the
- * account's bytes were not cleared since, in this tab or any other.
- */
+/** Taken when a read starts; it reads and stores only while still current. */
 export interface CacheTicket {
-  accountId: string;
-  /** This tab's clears of the account. */
-  local: number;
-  /** The account's persisted lifecycle; -1 when bytes stay in memory only. */
-  lifecycle: number;
+  scope: CacheScope;
+  epoch: number;
 }
 
-const key = (accountId: string, objectId: string) =>
-  accountId + "\u0000" + objectId;
-const ignore = () => undefined;
+const same = (a: CacheScope | null, b: CacheScope | null) =>
+  a === b ||
+  (!!a && !!b && a.accountId === b.accountId && a.generation === b.generation);
 
 export class AttachmentCache {
-  private readonly db: AttachmentDatabase;
   private readonly limit: number;
-  private readonly intents: CleanupIntents;
-  /** False once IndexedDB fails to open: memory only from then on. */
-  private persistent = true;
-  /**
-   * A clear's intent could not be recorded: until it is, or the clear is
-   * verified, no cached bytes are read or written at all (R2-1).
-   */
-  private readonly unrecorded = new Set<string>();
-  private closed = false;
-  private active: string | null = null;
-  /** Whether `retain` has named the shown account (or none) yet. */
-  private decided = false;
-  /** Clears asked for in this tab and not finished: reads and writes refused. */
-  private readonly pending = new Map<string, number>();
-  /** This tab's clears per account, so a fetch can tell one happened. */
-  private readonly local = new Map<string, number>();
-  /** Each account's persisted lifecycle, as this tab last read it. */
-  private readonly lifecycles = new Map<string, number>();
-  private readonly memory = new Map<
-    string,
-    { blob: Blob; lifecycle: number }
-  >();
-  private memoryBytes = 0;
-  /** Clears and sweeps run one after another, in the order asked. */
-  private queue: Promise<unknown> = Promise.resolve();
-  private retry: ReturnType<typeof setTimeout> | null = null;
-  private attempts = 0;
+  private scope: CacheScope | null = null;
+  /** Bumped by every clear: tickets from before it are void. */
+  private epoch = 0;
+  /** Bytes by object, least recently used first. */
+  private readonly entries = new Map<string, Blob>();
+  private total = 0;
 
-  constructor(
-    name = "palladian-attachments",
-    limit = CACHE_LIMIT_BYTES,
-    intents: CleanupIntents = storageIntents(),
-  ) {
-    this.db = new AttachmentDatabase(name);
+  constructor(limit = CACHE_LIMIT_BYTES) {
     this.limit = limit;
-    this.intents = intents;
-    // Clears an earlier page left unfinished come before any read.
-    this.background(this.enqueue(() => this.sweep(false)));
   }
 
   /**
-   * The account whose bytes may be kept and read: the account the app
-   * shows, or null while it shows none. The account shown before is
-   * cleared, and so is every other account's bytes still on the device.
+   * The scope whose bytes may be kept: the signed-in account and session
+   * generation the app shows, or null. Any change clears every byte.
    */
-  retain(accountId: string | null): Promise<void> {
-    const previous = this.active;
-    this.active = accountId;
-    this.decided = true;
-    this.dropMemory((owner) => owner !== accountId);
-    const left =
-      previous !== null && previous !== accountId
-        ? this.forget(previous)
-        : Promise.resolve();
-    const swept = this.enqueue(() => this.sweep(true));
-    return Promise.all([left, swept]).then(ignore);
+  follow(scope: CacheScope | null) {
+    if (same(scope, this.scope)) return;
+    this.clear();
+    this.scope = scope ? { ...scope } : null;
   }
 
-  /** Clear one account's bytes (sign-out, revocation, invalidation). */
-  forget(accountId: string): Promise<void> {
-    // Recorded before anything asynchronous, so no later step can lose it.
-    this.record(accountId);
-    this.bump(accountId);
-    const request = (this.pending.get(accountId) ?? 0) + 1;
-    this.pending.set(accountId, request);
-    return this.enqueue(() => this.clear(accountId, true)).then(() => {
-      if (this.pending.get(accountId) === request)
-        this.pending.delete(accountId);
-    });
+  /** Forget every byte; tickets taken before stop working. */
+  clear() {
+    this.entries.clear();
+    this.total = 0;
+    this.epoch++;
   }
 
-  /** Delete one object's bytes, for example once it is known to be gone. */
-  async drop(accountId: string, objectId: string): Promise<void> {
-    this.forgetMemory(key(accountId, objectId));
-    if (!this.persistent) return;
-    await this.run(() =>
-      this.db.transaction("rw", [this.db.entries, this.db.bytes], async () => {
-        await this.db.entries.delete([accountId, objectId]);
-        await this.db.bytes.delete([accountId, objectId]);
-      }),
-    ).catch(ignore);
+  /** A ticket for `scope` if it is the current one and files are on. */
+  ticket(scope: CacheScope): CacheTicket | null {
+    if (!fileWritesEnabled() || !this.scope || !same(scope, this.scope))
+      return null;
+    return { scope: this.scope, epoch: this.epoch };
   }
 
-  /**
-   * Taken when a fetch starts, and passed to `store` with its bytes. Null
-   * when the account may not keep bytes now.
-   */
-  async ticket(accountId: string): Promise<CacheTicket | null> {
-    if (!(await this.ready(accountId))) return null;
-    const local = this.local.get(accountId) ?? 0;
-    if (!this.durable()) return { accountId, local, lifecycle: -1 };
-    const row = await this.run(() => this.db.accounts.get(accountId)).catch(
-      () => null,
-    );
-    if (row === null || !this.usable(accountId)) return null;
-    if (row?.clearing) {
-      this.background(this.finishLater(accountId));
-      return null;
-    }
-    const lifecycle = row?.lifecycle ?? 0;
-    this.lifecycles.set(accountId, lifecycle);
-    return { accountId, local, lifecycle };
+  /** A ticket for the current scope, if there is one and files are on. */
+  current(): CacheTicket | null {
+    return this.scope ? this.ticket(this.scope) : null;
   }
 
-  /**
-   * The cached bytes, or null. Only the retained account has any, and none
-   * while a clear of it is unfinished or listed, here or in another tab.
-   */
-  async read(accountId: string, objectId: string): Promise<Blob | null> {
-    if (!(await this.ready(accountId))) return null;
-    const id = key(accountId, objectId);
-    const remembered = this.memory.get(id);
-    if (!this.durable()) return remembered?.blob ?? null;
-    let found: { row: AccountRow | undefined; stored: Bytes | undefined };
-    try {
-      found = await this.run(() =>
-        this.db.transaction(
-          "r",
-          [this.db.accounts, this.db.bytes],
-          async () => ({
-            row: await this.db.accounts.get(accountId),
-            stored: remembered
-              ? undefined
-              : await this.db.bytes.get([accountId, objectId]),
-          }),
-        ),
-      );
-    } catch {
-      return null;
-    }
-    if (!this.usable(accountId) || !this.durable()) return null;
-    if (found.row?.clearing) {
-      this.background(this.finishLater(accountId));
-      return null;
-    }
-    const lifecycle = found.row?.lifecycle ?? 0;
-    this.lifecycles.set(accountId, lifecycle);
-    if (remembered && remembered.lifecycle !== lifecycle) {
-      // Kept from a lifecycle that has ended since.
-      this.forgetMemory(id);
-      return null;
-    }
-    const blob = remembered?.blob ?? found.stored?.blob ?? null;
+  /** The cached bytes, or null; only under a current ticket. */
+  read(ticket: CacheTicket | null, objectId: string): Blob | null {
+    if (!this.valid(ticket)) return null;
+    const blob = this.entries.get(objectId);
     if (!blob) return null;
-    this.remember(id, blob, lifecycle);
-    void this.touch(accountId, objectId);
+    // Most recently used last.
+    this.entries.delete(objectId);
+    this.entries.set(objectId, blob);
     return blob;
   }
 
-  /**
-   * Keep bytes fetched under `ticket` (by default, the account as this tab
-   * knows it now), unless the account's bytes were cleared since, in this
-   * tab or another. Then trim to the cap.
-   */
-  async store(
-    accountId: string,
-    objectId: string,
-    blob: Blob,
-    ticket: CacheTicket | null = this.currentTicket(accountId),
-  ): Promise<void> {
-    if (
-      !ticket ||
-      ticket.accountId !== accountId ||
-      blob.size > ENTRY_LIMIT_BYTES ||
-      !this.valid(ticket)
-    )
-      return;
-    const id = key(accountId, objectId);
-    if (!this.durable() || ticket.lifecycle < 0) {
-      this.remember(id, blob, ticket.lifecycle);
-      return;
-    }
-    let stored = false;
-    try {
-      stored = await this.run(() =>
-        this.db.transaction(
-          "rw",
-          [this.db.accounts, this.db.entries, this.db.bytes],
-          async () => {
-            // Checked where the write happens: a clear that began since the
-            // fetch did, in any tab, ended its lifecycle.
-            const row = await this.db.accounts.get(accountId);
-            if (
-              !this.writable(accountId) ||
-              row?.clearing ||
-              (row?.lifecycle ?? 0) !== ticket.lifecycle
-            )
-              return false;
-            await this.db.bytes.put({ accountId, objectId, blob });
-            await this.db.entries.put({
-              accountId,
-              objectId,
-              size: blob.size,
-              usedAt: Date.now(),
-              lifecycle: ticket.lifecycle,
-            });
-            return true;
-          },
-        ),
-      );
-    } catch {
-      return;
-    }
-    if (!stored) return;
-    if (this.valid(ticket)) this.remember(id, blob, ticket.lifecycle);
-    await this.run(() => this.evict()).catch(ignore);
-  }
-
-  /** Resolves once the clears asked for so far have run (for tests). */
-  settled(): Promise<void> {
-    return this.queue.then(ignore, ignore);
-  }
-
-  /** The total size kept in IndexedDB (for tests and diagnostics). */
-  async size(): Promise<number> {
-    const entries = await this.run(() => this.db.entries.toArray());
-    return entries.reduce((total, entry) => total + entry.size, 0);
-  }
-
-  /** Object IDs kept for an account, least recently used first (for tests). */
-  async objects(accountId: string): Promise<string[]> {
-    const entries = await this.run(() =>
-      this.db.entries.orderBy("usedAt").toArray(),
-    );
-    return entries
-      .filter((entry) => entry.accountId === accountId)
-      .map((entry) => entry.objectId);
-  }
-
-  close() {
-    this.closed = true;
-    if (this.retry) clearTimeout(this.retry);
-    this.db.close();
-  }
-
-  /** Whether an account is in the durable list (unreadable list: yes). */
-  private listed(accountId: string) {
-    try {
-      return this.intents.read().includes(accountId);
-    } catch {
-      return true;
+  /** Keep bytes read under `ticket`, if it is still current; trim to the cap. */
+  store(ticket: CacheTicket | null, objectId: string, blob: Blob) {
+    if (!this.valid(ticket) || blob.size > ENTRY_LIMIT_BYTES) return;
+    this.drop(objectId);
+    this.entries.set(objectId, blob);
+    this.total += blob.size;
+    for (const [oldest, kept] of this.entries) {
+      if (this.total <= this.limit) break;
+      this.entries.delete(oldest);
+      this.total -= kept.size;
     }
   }
 
-  /** Put an account in the durable list; if that fails, seal the page. */
-  private record(accountId: string) {
-    try {
-      const accounts = this.intents.read();
-      if (!accounts.includes(accountId))
-        this.intents.write([...accounts, accountId]);
-      this.unrecorded.delete(accountId);
-    } catch {
-      this.unrecorded.add(accountId);
-    }
+  /** Forget one object's bytes, for example once it is known to be gone. */
+  drop(objectId: string) {
+    const blob = this.entries.get(objectId);
+    if (!blob) return;
+    this.entries.delete(objectId);
+    this.total -= blob.size;
   }
 
-  /** A clear of the account was verified: it leaves the list. */
-  private settle(accountId: string) {
-    // The bytes are gone, whether or not the list can be written.
-    this.unrecorded.delete(accountId);
-    const accounts = this.intents.read();
-    if (accounts.includes(accountId))
-      this.intents.write(accounts.filter((entry) => entry !== accountId));
+  /** Object IDs kept, least recently used first (for tests). */
+  objects(): string[] {
+    return [...this.entries.keys()];
   }
 
-  /** Whether IndexedDB holds the cache (otherwise memory only). */
-  private durable() {
-    return this.persistent;
+  /** The bytes kept, in total (for tests). */
+  size() {
+    return this.total;
   }
 
-  /** May this account read and write now (synchronous part). */
-  private usable(accountId: string) {
+  private valid(ticket: CacheTicket | null): ticket is CacheTicket {
     return (
-      this.unrecorded.size === 0 &&
-      accountId === this.active &&
-      !this.pending.has(accountId) &&
-      !this.listed(accountId)
+      !!ticket &&
+      ticket.epoch === this.epoch &&
+      same(ticket.scope, this.scope) &&
+      fileWritesEnabled()
     );
-  }
-
-  /** Checked inside a writing transaction: the same, with the durable state. */
-  private writable(accountId: string) {
-    return this.usable(accountId) && this.durable();
-  }
-
-  /** Usable once every clear asked for before has run. */
-  private async ready(accountId: string) {
-    if (!this.usable(accountId)) return false;
-    await this.settled();
-    return this.usable(accountId);
-  }
-
-  private valid(ticket: CacheTicket) {
-    return (
-      this.usable(ticket.accountId) &&
-      (this.local.get(ticket.accountId) ?? 0) === ticket.local
-    );
-  }
-
-  private currentTicket(accountId: string): CacheTicket | null {
-    if (!this.usable(accountId)) return null;
-    const lifecycle = this.durable() ? this.lifecycles.get(accountId) : -1;
-    if (lifecycle === undefined) return null;
-    return { accountId, local: this.local.get(accountId) ?? 0, lifecycle };
-  }
-
-  private bump(accountId: string) {
-    this.local.set(accountId, (this.local.get(accountId) ?? 0) + 1);
-    this.dropMemory((owner) => owner === accountId);
-  }
-
-  /** Run cleanup work in order; a failure keeps its state and is retried. */
-  private enqueue(work: () => Promise<void>): Promise<void> {
-    const run = this.queue.then(work, work);
-    this.queue = run.then(
-      () => {
-        this.attempts = 0;
-      },
-      () => this.retryLater(),
-    );
-    return run;
-  }
-
-  /** Background cleanup: its failure is already pending and retried (R2-3). */
-  private background(work: Promise<unknown>) {
-    work.catch(ignore);
-  }
-
-  /** A failed clear stays pending and is tried again, with growing waits. */
-  private retryLater() {
-    if (this.closed || this.retry) return;
-    const wait = RETRY_MS[Math.min(this.attempts++, RETRY_MS.length - 1)]!;
-    this.retry = setTimeout(() => {
-      this.retry = null;
-      for (const accountId of [...this.unrecorded]) this.record(accountId);
-      for (const [accountId, request] of this.pending)
-        this.background(
-          this.enqueue(() => this.clear(accountId, true)).then(() => {
-            if (this.pending.get(accountId) === request)
-              this.pending.delete(accountId);
-          }),
-        );
-      this.background(this.enqueue(() => this.sweep(this.decided)));
-    }, wait);
-  }
-
-  /**
-   * End an account's lifecycle: record the next one as unfinished, then
-   * delete its bytes and sizes and the mark in one transaction, read it
-   * back, and only then take the account off the durable list. `advance`
-   * false finishes a clear recorded earlier without starting another.
-   */
-  private async clear(accountId: string, advance: boolean) {
-    if (!this.persistent)
-      throw new Error("The attachment cache cannot open; the clear waits.");
-    await this.run(async () => {
-      const lifecycle = await this.db.transaction(
-        "rw",
-        this.db.accounts,
-        async () => {
-          const row = await this.db.accounts.get(accountId);
-          // Finished meanwhile (another tab): nothing left to do.
-          if (!advance && !row?.clearing) return null;
-          const next = (row?.lifecycle ?? 0) + (advance ? 1 : 0);
-          await this.db.accounts.put({
-            accountId,
-            lifecycle: next,
-            clearing: true,
-          });
-          return next;
-        },
-      );
-      if (lifecycle === null) return;
-      await this.finish(accountId);
-      await this.verify(accountId, lifecycle);
-      this.settle(accountId);
-    });
-  }
-
-  /** Delete an account's bytes and sizes, and its unfinished mark, at once. */
-  private async finish(accountId: string) {
-    await this.db.transaction(
-      "rw",
-      [this.db.accounts, this.db.entries, this.db.bytes],
-      async () => {
-        await this.db.entries.where("accountId").equals(accountId).delete();
-        await this.db.bytes.where("accountId").equals(accountId).delete();
-        const row = await this.db.accounts.get(accountId);
-        if (row?.clearing)
-          await this.db.accounts.put({ ...row, clearing: false });
-      },
-    );
-  }
-
-  /**
-   * Read back a committed clear: the mark is gone, the lifecycle is the
-   * cleared one or later, and nothing from an earlier lifecycle remains.
-   */
-  private async verify(accountId: string, lifecycle: number) {
-    const clean = await this.db.transaction(
-      "r",
-      [this.db.accounts, this.db.entries, this.db.bytes],
-      async () => {
-        const row = await this.db.accounts.get(accountId);
-        if (!row || row.clearing || row.lifecycle < lifecycle) return false;
-        const entries = await this.db.entries
-          .where("accountId")
-          .equals(accountId)
-          .toArray();
-        if (entries.some((entry) => !(entry.lifecycle >= lifecycle)))
-          return false;
-        // Bytes without a current size record would escape the check.
-        const kept = new Set(entries.map((entry) => entry.objectId));
-        const bytes = await this.db.bytes
-          .where("accountId")
-          .equals(accountId)
-          .primaryKeys();
-        return bytes.every(([, objectId]) => kept.has(objectId));
-      },
-    );
-    if (!clean) throw new Error("The clear could not be verified.");
-  }
-
-  /** An unfinished clear found while reading: finish it before any read. */
-  private finishLater(accountId: string): Promise<void> {
-    if (this.pending.has(accountId)) return this.settled();
-    this.bump(accountId);
-    this.pending.set(accountId, 1);
-    return this.enqueue(() => this.clear(accountId, false)).then(() => {
-      if (this.pending.get(accountId) === 1) this.pending.delete(accountId);
-    });
-  }
-
-  /**
-   * Finish every unfinished or listed clear, the retained account's
-   * included, and with `others`, clear every account's bytes but the
-   * retained one's. Each is marked before anything is deleted.
-   */
-  private async sweep(others: boolean) {
-    let listed: string[];
-    try {
-      listed = this.intents.read();
-    } catch {
-      listed = [];
-    }
-    if (!this.persistent) {
-      // Nothing can be deleted: listed clears wait for a database.
-      if (listed.length || this.unrecorded.size)
-        throw new Error("The attachment cache cannot open; clears wait.");
-      return;
-    }
-    const keep = this.active;
-    await this.run(async () => {
-      const marked = await this.db.transaction(
-        "rw",
-        [this.db.accounts, this.db.entries, this.db.bytes],
-        async () => {
-          const owners = new Set<string>([...listed, ...this.unrecorded]);
-          for (const owner of [
-            ...(await this.db.entries.orderBy("accountId").uniqueKeys()),
-            ...(await this.db.bytes.orderBy("accountId").uniqueKeys()),
-          ])
-            owners.add(String(owner));
-          const rows = await this.db.accounts.toArray();
-          for (const row of rows) if (row.clearing) owners.add(row.accountId);
-          const marks: [string, number][] = [];
-          for (const owner of owners) {
-            const row = rows.find((candidate) => candidate.accountId === owner);
-            const owed =
-              row?.clearing ||
-              listed.includes(owner) ||
-              this.unrecorded.has(owner);
-            if (!owed && (!others || owner === keep)) continue;
-            const lifecycle = (row?.lifecycle ?? 0) + (row?.clearing ? 0 : 1);
-            if (!row?.clearing)
-              await this.db.accounts.put({
-                accountId: owner,
-                lifecycle,
-                clearing: true,
-              });
-            marks.push([owner, lifecycle]);
-          }
-          return marks;
-        },
-      );
-      for (const [owner, lifecycle] of marked) {
-        await this.finish(owner);
-        await this.verify(owner, lifecycle);
-        this.settle(owner);
-      }
-      if (keep !== null) {
-        const row = await this.db.accounts.get(keep);
-        this.lifecycles.set(keep, row?.lifecycle ?? 0);
-      }
-    });
-  }
-
-  /** IndexedDB work; if the database cannot open, the cache is memory only. */
-  private async run<T>(work: () => Promise<T>): Promise<T> {
-    if (!this.persistent) throw new Error("Attachment cache is memory only.");
-    try {
-      return await work();
-    } catch (error) {
-      if (
-        error instanceof Dexie.OpenFailedError ||
-        error instanceof Dexie.MissingAPIError ||
-        error instanceof Dexie.DatabaseClosedError
-      )
-        this.persistent = false;
-      throw error;
-    }
-  }
-
-  private async touch(accountId: string, objectId: string) {
-    try {
-      await this.run(() =>
-        this.db.entries.update([accountId, objectId], { usedAt: Date.now() }),
-      );
-    } catch {
-      // Recency only; the bytes are still right.
-    }
-  }
-
-  /** Delete the least recently used bytes until the total is within the cap. */
-  private async evict() {
-    await this.db.transaction(
-      "rw",
-      [this.db.entries, this.db.bytes],
-      async () => {
-        const entries = await this.db.entries.orderBy("usedAt").toArray();
-        let total = entries.reduce((sum, entry) => sum + entry.size, 0);
-        for (const entry of entries) {
-          if (total <= this.limit) break;
-          await this.db.entries.delete([entry.accountId, entry.objectId]);
-          await this.db.bytes.delete([entry.accountId, entry.objectId]);
-          total -= entry.size;
-        }
-      },
-    );
-  }
-
-  private remember(id: string, blob: Blob, lifecycle: number) {
-    this.forgetMemory(id);
-    if (blob.size > MEMORY_LIMIT_BYTES) return;
-    this.memory.set(id, { blob, lifecycle });
-    this.memoryBytes += blob.size;
-    for (const [oldest, value] of this.memory) {
-      if (this.memoryBytes <= MEMORY_LIMIT_BYTES) break;
-      this.memory.delete(oldest);
-      this.memoryBytes -= value.blob.size;
-    }
-  }
-
-  private forgetMemory(id: string) {
-    const previous = this.memory.get(id);
-    if (!previous) return;
-    this.memory.delete(id);
-    this.memoryBytes -= previous.blob.size;
-  }
-
-  private dropMemory(matches: (accountId: string) => boolean) {
-    for (const id of [...this.memory.keys()])
-      if (matches(id.slice(0, id.indexOf("\u0000")))) this.forgetMemory(id);
   }
 }
 
 /** The app's attachment cache. */
 export const attachmentCache = new AttachmentCache();
+
+// Turning files off clears the bytes (R3-3).
+onFileWritesChange(() => {
+  if (!fileWritesEnabled()) attachmentCache.clear();
+});
