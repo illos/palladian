@@ -15,15 +15,15 @@ import { Icon } from "./Icons";
 const NONE: ReadonlyMap<string, FileNoteFile> = new Map();
 /**
  * A note's text can reach the device cache after its new summary (another
- * device's edit): a row is read again whenever the list renders, until its
- * edit is this old.
+ * device's edit): a row edited this recently is read again whenever the
+ * list renders, for this long after it first showed.
  */
 const SETTLE_MS = 60_000;
 
 /**
  * The file notes among `rows`, from their cached documents, while `enabled`
  * (files on). Each row is read when it first shows and after each edit, and
- * again while that edit is recent.
+ * again while that edit is recent; one pass at a time, never all at once.
  */
 export function useFileNotes(
   store: Pick<NotesStore, "read">,
@@ -35,7 +35,9 @@ export function useFileNotes(
   const known = useRef(
     new Map<string, { file: FileNoteFile | null; since: number }>(),
   );
-  const reading = useRef(new Set<string>());
+  /** A read pass under way, and whether rows came due meanwhile. */
+  const reading = useRef(false);
+  const again = useRef(false);
   const [, setRead] = useState(0);
   const key = (row: NoteSummary) =>
     `${row.accountId}\n${row.id}\n${row.updatedAt}\n${row.kind}`;
@@ -49,30 +51,39 @@ export function useFileNotes(
         if (!keep.has(entry)) known.current.delete(entry);
     }
     const now = Date.now();
+    // Not read yet, or edited in the last minute and first seen less than
+    // a minute ago (its text may still be on its way).
     const due = rows.filter((row) => {
+      if (row.accountId !== accountId) return false;
       const entry = known.current.get(key(row));
       return (
-        row.accountId === accountId &&
-        !reading.current.has(key(row)) &&
-        (!entry || now - entry.since < SETTLE_MS)
+        !entry ||
+        (now - entry.since < SETTLE_MS && now - row.updatedAt < SETTLE_MS)
       );
     });
-    for (const row of due) {
-      const at = key(row);
-      reading.current.add(at);
-      void store
-        .read(accountId, row.id)
-        .catch(() => undefined)
-        .then((body) => {
-          reading.current.delete(at);
-          if (!body) return;
-          const file = fileNoteOf(body.document);
-          const entry = known.current.get(at);
-          known.current.set(at, { file, since: entry?.since ?? now });
-          if (JSON.stringify(file) !== JSON.stringify(entry?.file ?? null))
-            setRead((count) => count + 1);
-        });
+    if (!due.length) return;
+    if (reading.current) {
+      again.current = true;
+      return;
     }
+    reading.current = true;
+    void (async () => {
+      let changed = false;
+      for (const row of due) {
+        const at = key(row);
+        const body = await store.read(accountId, row.id).catch(() => undefined);
+        if (!body) continue;
+        const file = fileNoteOf(body.document);
+        const entry = known.current.get(at);
+        known.current.set(at, { file, since: entry?.since ?? now });
+        if (JSON.stringify(file) !== JSON.stringify(entry?.file ?? null))
+          changed = true;
+      }
+      reading.current = false;
+      // Rows that came due during the pass are read on the next render.
+      if (changed || again.current) setRead((count) => count + 1);
+      again.current = false;
+    })();
   });
   if (!enabled || !accountId) return NONE;
   const files = new Map<string, FileNoteFile>();

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { serviceWorkerSource } from "../../offline-plugin";
+import type { Rollup } from "vite";
+import { offlineShell, serviceWorkerSource } from "../../offline-plugin";
 
 type Listener = (event: Record<string, unknown>) => void;
 
@@ -86,5 +87,63 @@ describe("service worker", () => {
     await worker.dispatch("install");
     await worker.dispatch("activate");
     expect([...caches.keys()]).toEqual([NEW]);
+  });
+});
+
+describe("the offline shell's file list (plan 08 B4)", () => {
+  /** The paths the generated worker precaches, for a bundle of these files. */
+  function precached(bundle: Record<string, unknown>) {
+    const hook = offlineShell().generateBundle;
+    const generate = typeof hook === "function" ? hook : hook?.handler;
+    let source = "";
+    generate?.call(
+      {
+        emitFile: (file: { source: string }) => {
+          source = file.source;
+          return "sw.js";
+        },
+      } as unknown as Rollup.PluginContext,
+      {} as Rollup.NormalizedOutputOptions,
+      bundle as Rollup.OutputBundle,
+      false,
+    );
+    return JSON.parse(
+      /const ASSETS = (\[.*?\]);/.exec(source)![1]!,
+    ) as string[];
+  }
+
+  test("the PDF reader, its styles and pdf.js's worker are not precached", () => {
+    const chunk = (code: string, moduleIds: string[], css: string[] = []) => ({
+      type: "chunk",
+      code,
+      moduleIds,
+      viteMetadata: { importedCss: new Set(css), importedAssets: new Set() },
+    });
+    const asset = (source: string, originalFileNames: string[]) => ({
+      type: "asset",
+      source,
+      originalFileNames,
+    });
+    const paths = precached({
+      "assets/index-a.js": chunk("app", ["/repo/apps/notes/src/App.tsx"]),
+      "assets/editor-b.js": chunk("editor", [
+        "/repo/apps/notes/src/editor.tsx",
+      ]),
+      "assets/pdf-reader-c.js": chunk(
+        "reader",
+        [
+          "/repo/node_modules/.pnpm/pdfjs-dist@6.4.299/node_modules/pdfjs-dist/build/pdf.mjs",
+          "/repo/apps/notes/src/pdf-reader.tsx",
+        ],
+        ["assets/pdf-reader-d.css"],
+      ),
+      "assets/pdf-reader-d.css": asset("css", ["src/pdf-reader.tsx"]),
+      "assets/pdf.worker.min-e.mjs": asset("worker", [
+        "../../node_modules/.pnpm/pdfjs-dist@6.4.299/node_modules/pdfjs-dist/build/pdf.worker.min.mjs",
+      ]),
+    });
+    expect(paths).toContain("/assets/index-a.js");
+    expect(paths).toContain("/assets/editor-b.js");
+    expect(paths.filter((path) => path.includes("pdf"))).toEqual([]);
   });
 });

@@ -708,12 +708,12 @@ for (const fence of FENCES)
         "report.pdf",
       );
       expect(await cachedObjects(page)).toEqual([]);
-    } else if (fence === "cache clear") {
-      // Read again under a new ticket, then shown again.
+    } else {
+      // A clear, or the next session generation with the note still open
+      // (the app opens a new editor; this harness keeps its own): nothing
+      // from before is shown; the PDF is read again, then shown again.
       await drawn(page);
       expect(reads.filter((id) => id === PDF_ID)).toHaveLength(2);
-    } else {
-      expect(await cachedObjects(page)).toEqual([]);
     }
   });
 
