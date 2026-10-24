@@ -454,7 +454,9 @@ export class AttachmentRuntime {
       }
       this.session = session;
     }
-    const service = context?.service ?? null;
+    // While files are off nothing here shows attachments (main's rendering
+    // does): no list of the note's objects is followed.
+    const service = fileWritesEnabled() ? (context?.service ?? null) : null;
     const noteId = context?.noteId ?? null;
     if (service !== this.watching.service || noteId !== this.watching.noteId) {
       this.stopWatching?.();

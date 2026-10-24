@@ -191,7 +191,7 @@ const album = {
   ],
 };
 
-void attachmentCache.retain(ACCOUNT);
+attachmentCache.retain(ACCOUNT).catch(() => undefined);
 
 function Harness() {
   const [doc, setDoc] = useState<unknown>(album);

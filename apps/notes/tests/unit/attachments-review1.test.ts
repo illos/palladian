@@ -1,6 +1,9 @@
 import "fake-indexeddb/auto";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { AttachmentCache } from "../../src/attachment-cache";
+import {
+  AttachmentCache,
+  type CleanupIntents,
+} from "../../src/attachment-cache";
 import { liveAttachmentService } from "../../src/attachments";
 import type { LiveController } from "../../src/live";
 
@@ -16,6 +19,17 @@ let count = 0;
 const name = () => `attachments-review1-${++count}`;
 const bytes = (n: number) =>
   new Blob([new Uint8Array(n)], { type: "image/png" });
+
+/** The durable cleanup list, in memory here (localStorage in the app). */
+function cleanupList(): CleanupIntents {
+  let accounts: string[] = [];
+  return {
+    read: () => [...accounts],
+    write: (next) => {
+      accounts = [...next];
+    },
+  };
+}
 
 /** Make the next deletion from the `bytes` store fail, once. */
 function failNextBytesDelete() {
@@ -42,7 +56,8 @@ afterEach(() => {
 describe("F2: clears that fail or are cut short leave nothing readable", () => {
   test("a clear interrupted between deletions: after reopening, the bytes are unreadable and then gone", async () => {
     const db = name();
-    const first = new AttachmentCache(db);
+    const list = cleanupList();
+    const first = new AttachmentCache(db, undefined, list);
     await first.retain("ada");
     await first.store("ada", OBJECT, bytes(32));
     const restore = failNextBytesDelete();
@@ -50,7 +65,7 @@ describe("F2: clears that fail or are cut short leave nothing readable", () => {
     restore();
     // The page closes before any retry.
     first.close();
-    const reopened = new AttachmentCache(db);
+    const reopened = new AttachmentCache(db, undefined, list);
     await reopened.retain("ada");
     expect(await reopened.read("ada", OBJECT)).toBeNull();
     await reopened.settled();
@@ -60,7 +75,7 @@ describe("F2: clears that fail or are cut short leave nothing readable", () => {
   });
 
   test("a failed clear stays pending, refuses reads and is retried", async () => {
-    const cache = new AttachmentCache(name());
+    const cache = new AttachmentCache(name(), undefined, cleanupList());
     await cache.retain("ada");
     await cache.store("ada", OBJECT, bytes(32));
     const restore = failNextBytesDelete();
@@ -79,8 +94,10 @@ describe("F2: clears that fail or are cut short leave nothing readable", () => {
 
   test("a write from another tab that has not heard of a clear stores nothing", async () => {
     const db = name();
-    const here = new AttachmentCache(db);
-    const there = new AttachmentCache(db);
+    // Two tabs share the database and the cleanup list.
+    const list = cleanupList();
+    const here = new AttachmentCache(db, undefined, list);
+    const there = new AttachmentCache(db, undefined, list);
     await here.retain("ada");
     await there.retain("ada");
     await here.forget("ada");

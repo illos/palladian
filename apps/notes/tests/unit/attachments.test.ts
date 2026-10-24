@@ -11,7 +11,10 @@ import type { Node as ProseMirrorNode } from "prosemirror-model";
 import { EditorState, NodeSelection, TextSelection } from "prosemirror-state";
 import { ReplaceStep, Step } from "prosemirror-transform";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { AttachmentCache } from "../../src/attachment-cache";
+import {
+  AttachmentCache,
+  type CleanupIntents,
+} from "../../src/attachment-cache";
 import {
   AttachmentReadError,
   displayType,
@@ -476,10 +479,21 @@ describe("the live service's token", () => {
   });
 });
 
+/** The durable cleanup list, in memory here (localStorage in the app). */
+function cleanupList(): CleanupIntents {
+  let accounts: string[] = [];
+  return {
+    read: () => [...accounts],
+    write: (next) => {
+      accounts = [...next];
+    },
+  };
+}
+
 describe("the byte cache", () => {
   let count = 0;
   const fresh = (limit?: number) =>
-    new AttachmentCache(`attachments-test-${++count}`, limit);
+    new AttachmentCache(`attachments-test-${++count}`, limit, cleanupList());
   const bytes = (n: number) =>
     new Blob([new Uint8Array(n)], { type: "image/png" });
 

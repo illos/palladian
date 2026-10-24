@@ -1,6 +1,9 @@
 import "fake-indexeddb/auto";
 import { describe, expect, test } from "vitest";
-import { AttachmentCache } from "../../src/attachment-cache";
+import {
+  AttachmentCache,
+  type CleanupIntents,
+} from "../../src/attachment-cache";
 import { followAttachmentCache } from "../../src/attachment-cache-lifecycle";
 import {
   browserAccountHints,
@@ -20,6 +23,17 @@ let count = 0;
 const name = () => `attachments-lifecycle-${++count}`;
 const bytes = (n: number) =>
   new Blob([new Uint8Array(n)], { type: "image/png" });
+
+/** The durable cleanup list, in memory here (localStorage in the app). */
+function cleanupList(): CleanupIntents {
+  let accounts: string[] = [];
+  return {
+    read: () => [...accounts],
+    write: (next) => {
+      accounts = [...next];
+    },
+  };
+}
 
 /** A storage area for the account hint, shared like localStorage. */
 function storageArea() {
@@ -67,7 +81,7 @@ const ready = (accountId: string): SessionCheck => ({
 
 describe("F1: the lifecycle on any page that owns a session", () => {
   test("a revoked session clears the bytes", async () => {
-    const cache = new AttachmentCache(name());
+    const cache = new AttachmentCache(name(), undefined, cleanupList());
     const on = page(cache, ready("ada"));
     await new Promise((resolve) => setTimeout(resolve, 20));
     await cache.store("ada", OBJECT, bytes(8), await cache.ticket("ada"));
@@ -80,7 +94,7 @@ describe("F1: the lifecycle on any page that owns a session", () => {
   });
 
   test("switching accounts clears the previous account's bytes", async () => {
-    const cache = new AttachmentCache(name());
+    const cache = new AttachmentCache(name(), undefined, cleanupList());
     const on = page(cache, ready("ada"));
     await new Promise((resolve) => setTimeout(resolve, 20));
     await cache.store("ada", OBJECT, bytes(8), await cache.ticket("ada"));
@@ -97,7 +111,7 @@ describe("F1: the lifecycle on any page that owns a session", () => {
   });
 
   test("another tab's sign-out, through the shared hint, clears the bytes", async () => {
-    const cache = new AttachmentCache(name());
+    const cache = new AttachmentCache(name(), undefined, cleanupList());
     const on = page(cache, ready("ada"));
     await new Promise((resolve) => setTimeout(resolve, 20));
     await cache.store("ada", OBJECT, bytes(8), await cache.ticket("ada"));
@@ -118,12 +132,13 @@ describe("F1: the lifecycle on any page that owns a session", () => {
 
   test("a clean-up a closed page left unfinished is finished at the next start", async () => {
     const db = name();
-    const before = new AttachmentCache(db);
+    const list = cleanupList();
+    const before = new AttachmentCache(db, undefined, list);
     await before.retain("ada");
     await before.store("ada", OBJECT, bytes(8));
     before.close();
     // The hint says Ada was being cleaned up when the page went away.
-    const cache = new AttachmentCache(db);
+    const cache = new AttachmentCache(db, undefined, list);
     const hints = browserAccountHints(storageArea());
     hints.hideForCleanup("ada");
     const session = new SessionController({

@@ -9,11 +9,12 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const OBJECT = "k57a1b2c3d4e5f6g7h8j9k0m1n2p3q4r";
 /**
- * An attachment image in the editor. Since B3 a node view draws it (the
- * picture loads through the Worker), so it is found by its source rather
- * than by an <img> showing `attachment:`.
+ * An attachment image in the editor, however it is drawn: while files are
+ * off, as before B3 (an <img> showing `attachment:`); while on, by B3's
+ * node view, found by its source.
  */
-const ATTACHMENT_IMAGE = '.note-image[data-src^="attachment:"]';
+const ATTACHMENT_IMAGE =
+  'img[src^="attachment:"], .note-image[data-src^="attachment:"]';
 
 async function newNote(page: Page) {
   await page.goto("/?fixture=seed&session=stall");

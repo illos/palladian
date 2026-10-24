@@ -732,6 +732,15 @@ export function NoteEditor({
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
   const runtime = useRef<AttachmentRuntime | null>(null);
+  /**
+   * The editor's node views with files on, and without: while files are
+   * off, images and file blocks render exactly as before B3 (review round
+   * 2, R2-2).
+   */
+  const nodeViewSets = useRef<{
+    on: Record<string, NodeViewConstructor>;
+    off: Record<string, NodeViewConstructor>;
+  } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [lightbox, setLightbox] = useState<LightboxImage | null>(null);
   const [filesOn, setFilesOn] = useState(fileWritesEnabled);
@@ -776,6 +785,11 @@ export function NoteEditor({
       closeImage: () => setLightbox(null),
     });
     runtime.current = files;
+    const views = {
+      on: { task_item: taskView, ...files.nodeViews() },
+      off: { task_item: taskView },
+    };
+    nodeViewSets.current = views;
     const editor: EditorView = new EditorView(host.current, {
       state: EditorState.create({
         schema: notesSchema,
@@ -792,7 +806,7 @@ export function NoteEditor({
         ...(end ? { selection: end } : {}),
       }),
       editable: () => editable,
-      nodeViews: { task_item: taskView, ...files.nodeViews() },
+      nodeViews: fileWritesEnabled() ? views.on : views.off,
       attributes: {
         "aria-label": "Note content",
         role: "textbox",
@@ -911,6 +925,15 @@ export function NoteEditor({
     () => onFileWritesChange(() => setFilesOn(fileWritesEnabled())),
     [],
   );
+  // Files turned on or off: swap the node views in place, keeping the
+  // editor's state, selection and history.
+  useEffect(() => {
+    const sets = nodeViewSets.current;
+    if (!sets) return;
+    view.current?.setProps({ nodeViews: filesOn ? sets.on : sets.off });
+    if (!filesOn) setLightbox(null);
+    runtime.current?.refresh();
+  }, [filesOn, document, binding]);
   /** "+ File", paste and drop of files: a live note, editable, files on. */
   const canAttach = editable && !!binding && !!attachments?.service && filesOn;
   const pickFiles = () => fileInput.current?.click();

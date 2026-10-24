@@ -766,12 +766,121 @@ test("dragging an image's corner saves its width; double-clicking it resets", as
   await expect(picture).not.toHaveAttribute("width");
 });
 
-test("without files on, an image has no resize corner", async ({ page }) => {
-  const { editor } = await album(page, false);
-  const picture = editor.locator(".note-image img");
+// ---- Review round 2 of B3, R2-2: with files off, images are as on main ----
+
+/** Strip block IDs, which are random, from the editor's HTML. */
+const withoutIds = (html: string) =>
+  html.replace(/ data-block-id="[^"]*"/g, "");
+
+/**
+ * Recorded from `main` at 8e7088a with the same steps (fixture app, files
+ * off): a pasted web image, then a click on it, then Enter.
+ */
+const MAIN = {
+  html: '<p>Album</p><img src="https://example.com/w.png" alt="web" title="A title" contenteditable="false" draggable="true"><p>After</p>',
+  selected:
+    '<p>Album</p><img src="https://example.com/w.png" alt="web" title="A title" contenteditable="false" draggable="true" class="ProseMirror-selectednode"><p>After</p>',
+  afterEnter:
+    '<p>Album</p><img src="https://example.com/w.png" alt="web" title="A title" contenteditable="false" draggable="true" class=""><p><br class="ProseMirror-trailingBreak"></p><p>After</p>',
+};
+
+test("R2 R2-2: with files off, a web image renders and behaves exactly as on main", async ({
+  page,
+}) => {
+  await page.route("https://example.com/**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "image/png",
+      body: png(200, 100),
+    }),
+  );
+  await page.goto("/?fixture=seed&session=stall");
+  await page
+    .getByRole("button", { name: "New note", exact: true })
+    .first()
+    .click();
+  const editor = page.getByRole("textbox", { name: "Note content" });
+  await expect(editor).toHaveClass(/ProseMirror/);
+  await page.waitForFunction(() =>
+    performance
+      .getEntriesByType("resource")
+      .some((entry) => entry.name.includes("notes-core/src/markdown.ts")),
+  );
+  await editor.click();
+  await editor.pressSequentially("Album");
+  await editor.press("Enter");
+  await editor.evaluate((element) => {
+    const data = new DataTransfer();
+    data.setData(
+      "text/plain",
+      '![web](https://example.com/w.png "A title")\n\nAfter',
+    );
+    element.dispatchEvent(
+      new ClipboardEvent("paste", {
+        clipboardData: data,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+  const picture = editor.locator("img");
+  await expect(picture).toHaveCount(1);
+  expect(withoutIds(await editor.innerHTML())).toBe(MAIN.html);
+  expect(await editor.locator("[tabindex], [role=button]").count()).toBe(0);
+  await expect
+    .poll(() => picture.evaluate((img: HTMLImageElement) => img.naturalWidth))
+    .toBe(200);
   await picture.click();
-  await expect(picture).toHaveClass(/ProseMirror-selectednode/);
-  await expect(editor.locator(".image-grip")).toHaveCount(0);
+  await expect(picture).toHaveClass("ProseMirror-selectednode");
+  expect(withoutIds(await editor.innerHTML())).toBe(MAIN.selected);
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(await page.evaluate(() => document.activeElement?.className)).toBe(
+    "ProseMirror ProseMirror-focused",
+  );
+  expect(withoutIds(await editor.innerHTML())).toBe(MAIN.afterEnter);
+});
+
+test("R2 R2-2: with files off, an attachment image and a file block render as on main, and nothing is read", async ({
+  page,
+}) => {
+  const reads: string[] = [];
+  await page.route(NOTE_FILES, (route) => {
+    reads.push(route.request().url());
+    return route.fulfill({ status: 404, body: "{}" });
+  });
+  const editor = await harness(page, false);
+  await api(page).load(ALBUM);
+  await expect(editor.locator("[data-object-id]")).toHaveCount(1);
+  // main's own rendering of these nodes (its schema's toDOM).
+  expect(withoutIds(await editor.innerHTML())).toBe(
+    `<p>Album</p><img src="attachment:${IMAGE}" alt="photo.png" contenteditable="false" draggable="true">` +
+      `<div data-object-id="${FILE}" data-name="report.pdf" data-mime-type="application/pdf" data-size="2516582" contenteditable="false" draggable="true">report.pdf</div>` +
+      "<p>End.</p>",
+  );
+  expect(await editor.locator("[tabindex], [role=button]").count()).toBe(0);
+  await page.waitForTimeout(300);
+  expect(reads).toEqual([]);
+});
+
+test("R2 R2-2: turning files on and off swaps the rendering in place, keeping the editor's state", async ({
+  page,
+}) => {
+  const { editor } = await album(page);
+  await caretAfter(editor, "End.");
+  await editor.pressSequentially(" Typed");
+  await expect(editor.locator(".note-image")).toHaveCount(1);
+  await api(page).setFiles(false);
+  await expect(editor.locator(".note-image")).toHaveCount(0);
+  await expect(editor.locator(`img[src="attachment:${IMAGE}"]`)).toHaveCount(1);
+  await expect(editor).toContainText("End. Typed");
+  // The history survives the swap: Undo takes back the typing.
+  await editor.press("ControlOrMeta+z");
+  await expect(editor).not.toContainText("Typed");
+  await expect(editor).toContainText("End.");
+  await api(page).setFiles(true);
+  await expect(editor.locator(".note-image img")).toBeVisible();
+  await expect(editor.locator(`img[src="attachment:${IMAGE}"]`)).toHaveCount(0);
 });
 
 test("a tap opens the lightbox; Escape, the backdrop and × close it", async ({
@@ -1427,4 +1536,54 @@ test("R1 F1: switching accounts on the connect page clears the previous account'
   await sessionPage(page, "connect");
   await answer(page, { kind: "ready", accountId: "bob" });
   await expect.poll(() => cachedRows(page)).toEqual([]);
+});
+
+// ---- Review round 2 of B3, R2-1 and R2-3 ----
+
+const pageStatus = (page: Page) =>
+  page.evaluate(() => (window as unknown as PagesWindow).__pages.status());
+
+test("R2 R2-1: a mark that cannot be written, then revoked, the same account back, a reload: unreadable, then cleared", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await sessionPage(page, "connect");
+  // From here, IndexedDB refuses to record lifecycle marks, as the
+  // reviewer injected.
+  await page.evaluate(() => {
+    const original = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (
+      this: IDBObjectStore,
+      ...args: Parameters<IDBObjectStore["put"]>
+    ) {
+      if (this.name === "accounts")
+        throw new DOMException("Injected", "QuotaExceededError");
+      return original.apply(this, args);
+    };
+  });
+  await answer(page, { kind: "revoked", accountId: "ada" });
+  await expect.poll(() => pageStatus(page)).toBe("revoked");
+  await answer(page, { kind: "ready", accountId: "ada" });
+  await expect.poll(() => pageStatus(page)).toBe("ready");
+  // Two scheduled retries fail meanwhile (R2-3): nothing goes unhandled.
+  await page.waitForTimeout(3_300);
+  expect(errors).toEqual([]);
+  // A reload, signed in as Ada again (the harness's first answer).
+  await page.reload();
+  await expect.poll(() => pageStatus(page)).toBe("ready");
+  const unreadable = await page.evaluate(async (objectId) => {
+    const url = "/src/attachment-cache.ts";
+    const { attachmentCache } = (await import(
+      /* @vite-ignore */ url
+    )) as typeof import("../../apps/notes/src/attachment-cache");
+    return (await attachmentCache.read("ada", objectId)) === null;
+  }, IMAGE);
+  expect(unreadable).toBe(true);
+  await expect.poll(() => cachedRows(page)).toEqual([]);
+  expect(
+    await page.evaluate(() =>
+      localStorage.getItem("palladian.notes.attachment-cleanup.v1"),
+    ),
+  ).toBeNull();
 });

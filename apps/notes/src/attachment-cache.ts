@@ -12,16 +12,20 @@ import Dexie, { type Table } from "dexie";
  * (attachment-cache-lifecycle.ts drives both from the session and the
  * shared account hint on every page; D28).
  *
- * Clears fail closed (review round 1, F2):
- * - Each account has a persisted lifecycle. A clear first records a later
- *   lifecycle marked unfinished, then deletes the account's bytes and their
- *   sizes in one transaction and clears the mark. A clear that never
- *   finishes leaves the mark, and no tab reads the account's bytes while it
- *   is there: the next read, or the next start, finishes it first.
- * - A failed clear stays pending and is retried while the page lives.
- * - Bytes are written only into the lifecycle the fetch began in, checked
- *   in the writing transaction, so a write from a tab that has not heard of
- *   a clear yet stores nothing.
+ * Clears fail closed (review rounds 1 and 2, F2 and R2-1):
+ * - The intent to clear an account is recorded first, synchronously, in a
+ *   list of its own in localStorage (`CLEANUP_KEY`), before anything
+ *   asynchronous. While an account is listed, no tab reads or writes its
+ *   bytes, and every start finishes its clear before any read. It leaves
+ *   the list only once a clear has committed and been read back.
+ * - If even that list cannot be written, the page seals itself: no cached
+ *   bytes are read or written at all, in memory or IndexedDB, until the
+ *   intent is recorded or the clear verified; both are retried.
+ * - In IndexedDB, each account has a lifecycle. A clear records the next
+ *   one as unfinished, then deletes the account's bytes and sizes and the
+ *   mark in one transaction. Bytes are written only into the lifecycle the
+ *   fetch began in, checked in the writing transaction.
+ * - A database that cannot open never counts as a clear done.
  *
  * Least recently used bytes go first once the total passes the cap. If
  * IndexedDB is unavailable the cache works in memory only.
@@ -35,6 +39,8 @@ export const ENTRY_LIMIT_BYTES = 25 * 1024 * 1024;
 const MEMORY_LIMIT_BYTES = 48 * 1024 * 1024;
 /** Waits before retrying a failed clear. */
 const RETRY_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+/** Where accounts with an unfinished clear are listed (R2-1). */
+export const CLEANUP_KEY = "palladian.notes.attachment-cleanup.v1";
 
 interface Entry {
   accountId: string;
@@ -42,6 +48,8 @@ interface Entry {
   size: number;
   /** When the bytes were last stored or shown: the eviction order. */
   usedAt: number;
+  /** The account's lifecycle the bytes were stored in. */
+  lifecycle: number;
 }
 interface Bytes {
   accountId: string;
@@ -71,6 +79,38 @@ class AttachmentDatabase extends Dexie {
 }
 
 /**
+ * The durable list of accounts whose bytes must be cleared before they are
+ * read again. Both calls are synchronous and throw when storage fails.
+ */
+export interface CleanupIntents {
+  read(): string[];
+  write(accounts: string[]): void;
+}
+
+/** The list in this origin's localStorage, shared by every tab. */
+export function storageIntents(
+  storage: () => Pick<Storage, "getItem" | "setItem" | "removeItem"> = () =>
+    localStorage,
+): CleanupIntents {
+  return {
+    read() {
+      const raw = storage().getItem(CLEANUP_KEY);
+      if (raw === null) return [];
+      const value: unknown = JSON.parse(raw);
+      if (!Array.isArray(value)) throw new Error("Unreadable cleanup list.");
+      return value.filter(
+        (entry): entry is string => typeof entry === "string",
+      );
+    },
+    write(accounts) {
+      if (accounts.length)
+        storage().setItem(CLEANUP_KEY, JSON.stringify(accounts));
+      else storage().removeItem(CLEANUP_KEY);
+    },
+  };
+}
+
+/**
  * What a fetch carries from its start: its bytes are stored only if the
  * account's bytes were not cleared since, in this tab or any other.
  */
@@ -78,20 +118,29 @@ export interface CacheTicket {
   accountId: string;
   /** This tab's clears of the account. */
   local: number;
-  /** The account's persisted lifecycle; -1 when the cache is memory only. */
+  /** The account's persisted lifecycle; -1 when bytes stay in memory only. */
   lifecycle: number;
 }
 
 const key = (accountId: string, objectId: string) =>
   accountId + "\u0000" + objectId;
+const ignore = () => undefined;
 
 export class AttachmentCache {
   private readonly db: AttachmentDatabase;
   private readonly limit: number;
+  private readonly intents: CleanupIntents;
   /** False once IndexedDB fails to open: memory only from then on. */
   private persistent = true;
+  /**
+   * A clear's intent could not be recorded: until it is, or the clear is
+   * verified, no cached bytes are read or written at all (R2-1).
+   */
+  private readonly unrecorded = new Set<string>();
   private closed = false;
   private active: string | null = null;
+  /** Whether `retain` has named the shown account (or none) yet. */
+  private decided = false;
   /** Clears asked for in this tab and not finished: reads and writes refused. */
   private readonly pending = new Map<string, number>();
   /** This tab's clears per account, so a fetch can tell one happened. */
@@ -108,9 +157,16 @@ export class AttachmentCache {
   private retry: ReturnType<typeof setTimeout> | null = null;
   private attempts = 0;
 
-  constructor(name = "palladian-attachments", limit = CACHE_LIMIT_BYTES) {
+  constructor(
+    name = "palladian-attachments",
+    limit = CACHE_LIMIT_BYTES,
+    intents: CleanupIntents = storageIntents(),
+  ) {
     this.db = new AttachmentDatabase(name);
     this.limit = limit;
+    this.intents = intents;
+    // Clears an earlier page left unfinished come before any read.
+    this.background(this.enqueue(() => this.sweep(false)));
   }
 
   /**
@@ -121,17 +177,20 @@ export class AttachmentCache {
   retain(accountId: string | null): Promise<void> {
     const previous = this.active;
     this.active = accountId;
+    this.decided = true;
     this.dropMemory((owner) => owner !== accountId);
     const left =
       previous !== null && previous !== accountId
         ? this.forget(previous)
         : Promise.resolve();
-    const swept = this.enqueue(() => this.sweep());
-    return Promise.all([left, swept]).then(() => undefined);
+    const swept = this.enqueue(() => this.sweep(true));
+    return Promise.all([left, swept]).then(ignore);
   }
 
   /** Clear one account's bytes (sign-out, revocation, invalidation). */
   forget(accountId: string): Promise<void> {
+    // Recorded before anything asynchronous, so no later step can lose it.
+    this.record(accountId);
     this.bump(accountId);
     const request = (this.pending.get(accountId) ?? 0) + 1;
     this.pending.set(accountId, request);
@@ -150,7 +209,7 @@ export class AttachmentCache {
         await this.db.entries.delete([accountId, objectId]);
         await this.db.bytes.delete([accountId, objectId]);
       }),
-    );
+    ).catch(ignore);
   }
 
   /**
@@ -160,13 +219,13 @@ export class AttachmentCache {
   async ticket(accountId: string): Promise<CacheTicket | null> {
     if (!(await this.ready(accountId))) return null;
     const local = this.local.get(accountId) ?? 0;
-    if (!this.persistent) return { accountId, local, lifecycle: -1 };
+    if (!this.durable()) return { accountId, local, lifecycle: -1 };
     const row = await this.run(() => this.db.accounts.get(accountId)).catch(
       () => null,
     );
     if (row === null || !this.usable(accountId)) return null;
     if (row?.clearing) {
-      void this.finishLater(accountId);
+      this.background(this.finishLater(accountId));
       return null;
     }
     const lifecycle = row?.lifecycle ?? 0;
@@ -176,13 +235,13 @@ export class AttachmentCache {
 
   /**
    * The cached bytes, or null. Only the retained account has any, and none
-   * while a clear of it is unfinished, here or in another tab.
+   * while a clear of it is unfinished or listed, here or in another tab.
    */
   async read(accountId: string, objectId: string): Promise<Blob | null> {
     if (!(await this.ready(accountId))) return null;
     const id = key(accountId, objectId);
     const remembered = this.memory.get(id);
-    if (!this.persistent) return remembered?.blob ?? null;
+    if (!this.durable()) return remembered?.blob ?? null;
     let found: { row: AccountRow | undefined; stored: Bytes | undefined };
     try {
       found = await this.run(() =>
@@ -200,9 +259,9 @@ export class AttachmentCache {
     } catch {
       return null;
     }
-    if (!this.usable(accountId)) return null;
+    if (!this.usable(accountId) || !this.durable()) return null;
     if (found.row?.clearing) {
-      void this.finishLater(accountId);
+      this.background(this.finishLater(accountId));
       return null;
     }
     const lifecycle = found.row?.lifecycle ?? 0;
@@ -238,7 +297,7 @@ export class AttachmentCache {
     )
       return;
     const id = key(accountId, objectId);
-    if (!this.persistent) {
+    if (!this.durable() || ticket.lifecycle < 0) {
       this.remember(id, blob, ticket.lifecycle);
       return;
     }
@@ -252,7 +311,11 @@ export class AttachmentCache {
             // Checked where the write happens: a clear that began since the
             // fetch did, in any tab, ended its lifecycle.
             const row = await this.db.accounts.get(accountId);
-            if (row?.clearing || (row?.lifecycle ?? 0) !== ticket.lifecycle)
+            if (
+              !this.writable(accountId) ||
+              row?.clearing ||
+              (row?.lifecycle ?? 0) !== ticket.lifecycle
+            )
               return false;
             await this.db.bytes.put({ accountId, objectId, blob });
             await this.db.entries.put({
@@ -260,6 +323,7 @@ export class AttachmentCache {
               objectId,
               size: blob.size,
               usedAt: Date.now(),
+              lifecycle: ticket.lifecycle,
             });
             return true;
           },
@@ -270,15 +334,12 @@ export class AttachmentCache {
     }
     if (!stored) return;
     if (this.valid(ticket)) this.remember(id, blob, ticket.lifecycle);
-    await this.run(() => this.evict()).catch(() => undefined);
+    await this.run(() => this.evict()).catch(ignore);
   }
 
   /** Resolves once the clears asked for so far have run (for tests). */
   settled(): Promise<void> {
-    return this.queue.then(
-      () => undefined,
-      () => undefined,
-    );
+    return this.queue.then(ignore, ignore);
   }
 
   /** The total size kept in IndexedDB (for tests and diagnostics). */
@@ -303,9 +364,54 @@ export class AttachmentCache {
     this.db.close();
   }
 
+  /** Whether an account is in the durable list (unreadable list: yes). */
+  private listed(accountId: string) {
+    try {
+      return this.intents.read().includes(accountId);
+    } catch {
+      return true;
+    }
+  }
+
+  /** Put an account in the durable list; if that fails, seal the page. */
+  private record(accountId: string) {
+    try {
+      const accounts = this.intents.read();
+      if (!accounts.includes(accountId))
+        this.intents.write([...accounts, accountId]);
+      this.unrecorded.delete(accountId);
+    } catch {
+      this.unrecorded.add(accountId);
+    }
+  }
+
+  /** A clear of the account was verified: it leaves the list. */
+  private settle(accountId: string) {
+    // The bytes are gone, whether or not the list can be written.
+    this.unrecorded.delete(accountId);
+    const accounts = this.intents.read();
+    if (accounts.includes(accountId))
+      this.intents.write(accounts.filter((entry) => entry !== accountId));
+  }
+
+  /** Whether IndexedDB holds the cache (otherwise memory only). */
+  private durable() {
+    return this.persistent;
+  }
+
   /** May this account read and write now (synchronous part). */
   private usable(accountId: string) {
-    return accountId === this.active && !this.pending.has(accountId);
+    return (
+      this.unrecorded.size === 0 &&
+      accountId === this.active &&
+      !this.pending.has(accountId) &&
+      !this.listed(accountId)
+    );
+  }
+
+  /** Checked inside a writing transaction: the same, with the durable state. */
+  private writable(accountId: string) {
+    return this.usable(accountId) && this.durable();
   }
 
   /** Usable once every clear asked for before has run. */
@@ -324,7 +430,7 @@ export class AttachmentCache {
 
   private currentTicket(accountId: string): CacheTicket | null {
     if (!this.usable(accountId)) return null;
-    const lifecycle = this.persistent ? this.lifecycles.get(accountId) : -1;
+    const lifecycle = this.durable() ? this.lifecycles.get(accountId) : -1;
     if (lifecycle === undefined) return null;
     return { accountId, local: this.local.get(accountId) ?? 0, lifecycle };
   }
@@ -334,6 +440,7 @@ export class AttachmentCache {
     this.dropMemory((owner) => owner === accountId);
   }
 
+  /** Run cleanup work in order; a failure keeps its state and is retried. */
   private enqueue(work: () => Promise<void>): Promise<void> {
     const run = this.queue.then(work, work);
     this.queue = run.then(
@@ -345,44 +452,59 @@ export class AttachmentCache {
     return run;
   }
 
+  /** Background cleanup: its failure is already pending and retried (R2-3). */
+  private background(work: Promise<unknown>) {
+    work.catch(ignore);
+  }
+
   /** A failed clear stays pending and is tried again, with growing waits. */
   private retryLater() {
     if (this.closed || this.retry) return;
     const wait = RETRY_MS[Math.min(this.attempts++, RETRY_MS.length - 1)]!;
     this.retry = setTimeout(() => {
       this.retry = null;
+      for (const accountId of [...this.unrecorded]) this.record(accountId);
       for (const [accountId, request] of this.pending)
-        void this.enqueue(() => this.clear(accountId, true)).then(() => {
-          if (this.pending.get(accountId) === request)
-            this.pending.delete(accountId);
-        });
-      void this.enqueue(() => this.sweep());
+        this.background(
+          this.enqueue(() => this.clear(accountId, true)).then(() => {
+            if (this.pending.get(accountId) === request)
+              this.pending.delete(accountId);
+          }),
+        );
+      this.background(this.enqueue(() => this.sweep(this.decided)));
     }, wait);
   }
 
   /**
    * End an account's lifecycle: record the next one as unfinished, then
-   * delete its bytes and sizes and the mark in one transaction. `advance`
+   * delete its bytes and sizes and the mark in one transaction, read it
+   * back, and only then take the account off the durable list. `advance`
    * false finishes a clear recorded earlier without starting another.
    */
   private async clear(accountId: string, advance: boolean) {
-    await this.durable(async () => {
-      const marked = await this.db.transaction(
+    if (!this.persistent)
+      throw new Error("The attachment cache cannot open; the clear waits.");
+    await this.run(async () => {
+      const lifecycle = await this.db.transaction(
         "rw",
         this.db.accounts,
         async () => {
           const row = await this.db.accounts.get(accountId);
           // Finished meanwhile (another tab): nothing left to do.
-          if (!advance && !row?.clearing) return false;
+          if (!advance && !row?.clearing) return null;
+          const next = (row?.lifecycle ?? 0) + (advance ? 1 : 0);
           await this.db.accounts.put({
             accountId,
-            lifecycle: (row?.lifecycle ?? 0) + (advance ? 1 : 0),
+            lifecycle: next,
             clearing: true,
           });
-          return true;
+          return next;
         },
       );
-      if (marked) await this.finish(accountId);
+      if (lifecycle === null) return;
+      await this.finish(accountId);
+      await this.verify(accountId, lifecycle);
+      this.settle(accountId);
     });
   }
 
@@ -401,6 +523,35 @@ export class AttachmentCache {
     );
   }
 
+  /**
+   * Read back a committed clear: the mark is gone, the lifecycle is the
+   * cleared one or later, and nothing from an earlier lifecycle remains.
+   */
+  private async verify(accountId: string, lifecycle: number) {
+    const clean = await this.db.transaction(
+      "r",
+      [this.db.accounts, this.db.entries, this.db.bytes],
+      async () => {
+        const row = await this.db.accounts.get(accountId);
+        if (!row || row.clearing || row.lifecycle < lifecycle) return false;
+        const entries = await this.db.entries
+          .where("accountId")
+          .equals(accountId)
+          .toArray();
+        if (entries.some((entry) => !(entry.lifecycle >= lifecycle)))
+          return false;
+        // Bytes without a current size record would escape the check.
+        const kept = new Set(entries.map((entry) => entry.objectId));
+        const bytes = await this.db.bytes
+          .where("accountId")
+          .equals(accountId)
+          .primaryKeys();
+        return bytes.every(([, objectId]) => kept.has(objectId));
+      },
+    );
+    if (!clean) throw new Error("The clear could not be verified.");
+  }
+
   /** An unfinished clear found while reading: finish it before any read. */
   private finishLater(accountId: string): Promise<void> {
     if (this.pending.has(accountId)) return this.settled();
@@ -412,18 +563,30 @@ export class AttachmentCache {
   }
 
   /**
-   * Clear every account's bytes but the retained one's, and finish any
-   * unfinished clear, the retained account's included. Each is marked
-   * before anything is deleted.
+   * Finish every unfinished or listed clear, the retained account's
+   * included, and with `others`, clear every account's bytes but the
+   * retained one's. Each is marked before anything is deleted.
    */
-  private async sweep() {
+  private async sweep(others: boolean) {
+    let listed: string[];
+    try {
+      listed = this.intents.read();
+    } catch {
+      listed = [];
+    }
+    if (!this.persistent) {
+      // Nothing can be deleted: listed clears wait for a database.
+      if (listed.length || this.unrecorded.size)
+        throw new Error("The attachment cache cannot open; clears wait.");
+      return;
+    }
     const keep = this.active;
-    await this.durable(async () => {
-      const stale = await this.db.transaction(
+    await this.run(async () => {
+      const marked = await this.db.transaction(
         "rw",
         [this.db.accounts, this.db.entries, this.db.bytes],
         async () => {
-          const owners = new Set<string>();
+          const owners = new Set<string>([...listed, ...this.unrecorded]);
           for (const owner of [
             ...(await this.db.entries.orderBy("accountId").uniqueKeys()),
             ...(await this.db.bytes.orderBy("accountId").uniqueKeys()),
@@ -431,40 +594,36 @@ export class AttachmentCache {
             owners.add(String(owner));
           const rows = await this.db.accounts.toArray();
           for (const row of rows) if (row.clearing) owners.add(row.accountId);
-          const marked: string[] = [];
+          const marks: [string, number][] = [];
           for (const owner of owners) {
             const row = rows.find((candidate) => candidate.accountId === owner);
-            if (owner === keep && !row?.clearing) continue;
+            const owed =
+              row?.clearing ||
+              listed.includes(owner) ||
+              this.unrecorded.has(owner);
+            if (!owed && (!others || owner === keep)) continue;
+            const lifecycle = (row?.lifecycle ?? 0) + (row?.clearing ? 0 : 1);
             if (!row?.clearing)
               await this.db.accounts.put({
                 accountId: owner,
-                lifecycle: (row?.lifecycle ?? 0) + 1,
+                lifecycle,
                 clearing: true,
               });
-            marked.push(owner);
+            marks.push([owner, lifecycle]);
           }
-          return marked;
+          return marks;
         },
       );
-      for (const owner of stale) await this.finish(owner);
+      for (const [owner, lifecycle] of marked) {
+        await this.finish(owner);
+        await this.verify(owner, lifecycle);
+        this.settle(owner);
+      }
       if (keep !== null) {
         const row = await this.db.accounts.get(keep);
         this.lifecycles.set(keep, row?.lifecycle ?? 0);
       }
     });
-  }
-
-  /**
-   * A clear's IndexedDB work. Without a usable database there is nothing
-   * stored to clear (nothing can be read from it either): done.
-   */
-  private async durable(work: () => Promise<void>) {
-    if (!this.persistent) return;
-    try {
-      await this.run(work);
-    } catch (error) {
-      if (this.persistent) throw error;
-    }
   }
 
   /** IndexedDB work; if the database cannot open, the cache is memory only. */
