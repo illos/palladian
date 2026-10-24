@@ -237,6 +237,22 @@ Review: [notes-attachments-round4-astra-review.md](notes-attachments-round4-astr
 
 Also changed: the harness follows a session change in the cache synchronously, as `App.tsx` does from its session listener, instead of while rendering; a clear keeps an object that is known to be gone unavailable instead of showing it as ready until the next list.
 
+## Release
+
+Released on 2026-10-24 from `main` `39c6f94`, with **files off**, after review round 5 accepted it for that.
+
+**Deployment**
+- Worker `palladian`, version `99fd95c0`, at 100% from 01:12 UTC.
+- The custom domain and the cron `23 4 * * *` were confirmed through the Cloudflare API. The routes call gave its known "No access" message first.
+- No backend, Worker-source or shared-package code changed since the previous release, so Convex was not redeployed.
+- Before deploying, the names of production's environment variables were listed: neither `FILES_WRITES_ENABLED` nor `NOTEBOOK_DELETE_ENABLED` is set.
+- After deploying, production `files:capabilities` returns `{ "writes": false }`.
+
+**Checks**
+- Before merging, six suites passed against dev Convex on `39c6f94`: `attachments-e2e.mjs`, `history-e2e.mjs`, `actions-e2e.mjs`, `live-e2e.mjs`, `arrange-e2e.mjs` and `notebooks-e2e.mjs`.
+- After deploying, `live-e2e.mjs` and `apps/notes-edge/scripts/browser-e2e.mjs` passed against production.
+- Still pending: WebKit and the iPhone checks.
+
 ## Review round 5 responses
 
 Report: `notes-attachments-round5-astra-review.md` (verbatim). **Accepted for release with files off.** The reviewer found no new visible behaviour, no reachable upload or byte-persistence path, and no other blocker while files stay off. Rendering matches main, and gate swaps keep the editor's state. R4-1 is resolved, and R4-2's generation fencing passes.
