@@ -9,28 +9,37 @@ import { Icon } from "./Icons";
  * "PDF · 2.4 MB" label. Derived on this device from the note documents it
  * already caches (the live layer caches every note's text), so the server's
  * summaries are unchanged. Only the rows shown are read, after the list is
- * on screen, and each note once per edit; never attachment bytes.
+ * on screen; never attachment bytes.
  */
 
 const NONE: ReadonlyMap<string, FileNoteFile> = new Map();
+/**
+ * A note's text can reach the device cache after its new summary (another
+ * device's edit): a row is read again whenever the list renders, until its
+ * edit is this old.
+ */
+const SETTLE_MS = 60_000;
 
 /**
  * The file notes among `rows`, from their cached documents, while `enabled`
- * (files on). A row whose text is not cached yet is read again when the
- * list next changes.
+ * (files on). Each row is read when it first shows and after each edit, and
+ * again while that edit is recent.
  */
 export function useFileNotes(
-  store: NotesStore,
+  store: Pick<NotesStore, "read">,
   accountId: string | null,
   rows: readonly NoteSummary[],
   enabled: boolean,
 ): ReadonlyMap<string, FileNoteFile> {
   /** What each note's document was, by account, note, edit time and kind. */
-  const known = useRef(new Map<string, FileNoteFile | null>());
+  const known = useRef(
+    new Map<string, { file: FileNoteFile | null; since: number }>(),
+  );
+  const reading = useRef(new Set<string>());
   const [, setRead] = useState(0);
   const key = (row: NoteSummary) =>
     `${row.accountId}\n${row.id}\n${row.updatedAt}\n${row.kind}`;
-  const shown = rows.map(key).join("\n");
+  // After every render: the list renders when the device cache changes.
   useEffect(() => {
     if (!enabled || !accountId) return;
     // Each edit makes a new key; keep only the rows shown once it grows.
@@ -39,32 +48,37 @@ export function useFileNotes(
       for (const entry of known.current.keys())
         if (!keep.has(entry)) known.current.delete(entry);
     }
-    const missing = rows.filter(
-      (row) => row.accountId === accountId && !known.current.has(key(row)),
-    );
-    if (!missing.length) return;
-    let alive = true;
-    void (async () => {
-      let found = false;
-      for (const row of missing) {
-        const body = await store.read(accountId, row.id).catch(() => undefined);
-        if (!alive) return;
-        if (!body) continue;
-        known.current.set(key(row), fileNoteOf(body.document));
-        found = true;
-      }
-      if (alive && found) setRead((count) => count + 1);
-    })();
-    return () => {
-      alive = false;
-    };
-    // `shown` stands for `rows`, which is a new array on every render.
-  }, [enabled, accountId, shown, store]);
+    const now = Date.now();
+    const due = rows.filter((row) => {
+      const entry = known.current.get(key(row));
+      return (
+        row.accountId === accountId &&
+        !reading.current.has(key(row)) &&
+        (!entry || now - entry.since < SETTLE_MS)
+      );
+    });
+    for (const row of due) {
+      const at = key(row);
+      reading.current.add(at);
+      void store
+        .read(accountId, row.id)
+        .catch(() => undefined)
+        .then((body) => {
+          reading.current.delete(at);
+          if (!body) return;
+          const file = fileNoteOf(body.document);
+          const entry = known.current.get(at);
+          known.current.set(at, { file, since: entry?.since ?? now });
+          if (JSON.stringify(file) !== JSON.stringify(entry?.file ?? null))
+            setRead((count) => count + 1);
+        });
+    }
+  });
   if (!enabled || !accountId) return NONE;
   const files = new Map<string, FileNoteFile>();
   for (const row of rows) {
     const file =
-      row.accountId === accountId ? known.current.get(key(row)) : null;
+      row.accountId === accountId ? known.current.get(key(row))?.file : null;
     if (file) files.set(row.id, file);
   }
   return files;
