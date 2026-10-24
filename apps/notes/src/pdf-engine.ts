@@ -7,6 +7,7 @@ import {
   type RenderTask,
 } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import { canvasScale } from "./pdf-canvas";
 import type { PdfPageText, PdfTextItem } from "./pdf-search";
 
 type TextContent = Awaited<ReturnType<PDFPageProxy["getTextContent"]>>;
@@ -29,7 +30,10 @@ type TextContent = Awaited<ReturnType<PDFPageProxy["getTextContent"]>>;
  *   pdf.js's own font, CMap and decoder files are fetched, from this app's
  *   origin (vite.config.ts copies them to /pdfjs/).
  * - a worker of our own: the bundled worker file, same origin, as a module
- *   worker; pdf.js never fetches a worker from elsewhere.
+ *   worker; pdf.js never fetches a worker from elsewhere. pdf.js does not end
+ *   a worker it was handed, so this module terminates it itself whenever the
+ *   document goes: closed, failed, or abandoned while opening (review round
+ *   1, F1).
  */
 
 /** A page's size in CSS pixels at scale 1. */
@@ -66,8 +70,6 @@ export interface OpenedPdf {
   destroy(): void;
 }
 
-/** A canvas never holds more than this many pixels (a large page on a dense screen). */
-const MAX_CANVAS_PIXELS = 4_000_000;
 /** Renders and text reads at a time. */
 const PARALLEL = 2;
 /** pdf.js's data files, from this origin (vite.config.ts). */
@@ -93,16 +95,44 @@ function placeText(content: TextContent, transform: number[]): PdfPageText {
   return { items };
 }
 
+const closed = () => new DOMException("The reader closed.", "AbortError");
+
+/** `promise`, or an AbortError as soon as `signal` aborts. */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal) {
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(closed());
+    if (signal.aborted) return abort();
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", abort);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
+}
+
 /**
  * Open a PDF from its bytes. pdf.js takes over (detaches) the buffer it is
  * given, so it gets its own copy: the cached bytes stay whole for the next
  * opening (Deltos's reopen bug).
+ *
+ * Aborting `signal` while it opens ends everything it started at once (the
+ * worker is terminated) and rejects with an AbortError; so does a failure
+ * (a damaged or encrypted file). Once open, `destroy` ends it.
  */
-export async function openPdf(bytes: Blob): Promise<OpenedPdf> {
-  const data = new Uint8Array(await bytes.arrayBuffer());
-  const worker = PDFWorker.create({
-    port: new Worker(workerUrl, { type: "module" }),
-  });
+export async function openPdf(
+  bytes: Blob,
+  signal: AbortSignal,
+): Promise<OpenedPdf> {
+  const data = new Uint8Array(await untilAborted(bytes.arrayBuffer(), signal));
+  if (signal.aborted) throw closed();
+  const port = new Worker(workerUrl, { type: "module" });
+  const worker = PDFWorker.create({ port });
   const parameters = {
     data,
     worker,
@@ -119,11 +149,21 @@ export async function openPdf(bytes: Blob): Promise<OpenedPdf> {
     stopAtErrors: false,
   };
   const loading = getDocument(parameters);
+  let ended = false;
+  /** The document, its loading and its worker, gone for good. */
+  const end = () => {
+    if (ended) return;
+    ended = true;
+    void loading.destroy().catch(() => undefined);
+    worker.destroy();
+    port.terminate();
+  };
   let doc: PDFDocumentProxy;
   try {
-    doc = await loading.promise;
+    doc = await untilAborted(loading.promise, signal);
   } catch (error) {
-    worker.destroy();
+    // Failed (a damaged or encrypted file), or abandoned while opening.
+    end();
     throw error;
   }
 
@@ -195,11 +235,14 @@ export async function openPdf(bytes: Blob): Promise<OpenedPdf> {
         if (cancelled) throw new Error("Render cancelled.");
         const proxy = await doc.getPage(page);
         if (cancelled || destroyed) throw new Error("Render cancelled.");
-        // Sharp on dense screens, within the pixel cap.
+        // Sharp on dense screens, within the pixel cap (F2).
         const css = proxy.getViewport({ scale });
-        const cap = Math.sqrt(MAX_CANVAS_PIXELS / (css.width * css.height));
         const viewport = proxy.getViewport({
-          scale: Math.min(scale * (window.devicePixelRatio || 1), cap),
+          scale: canvasScale(
+            proxy.getViewport({ scale: 1 }),
+            scale,
+            window.devicePixelRatio || 1,
+          ),
         });
         canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
@@ -227,8 +270,7 @@ export async function openPdf(bytes: Blob): Promise<OpenedPdf> {
       if (destroyed) return;
       destroyed = true;
       queue.length = 0;
-      void loading.destroy().catch(() => undefined);
-      worker.destroy();
+      end();
     },
   };
 }

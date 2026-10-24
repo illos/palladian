@@ -117,13 +117,15 @@ export function PdfReader({ name, data, onDownload }: PdfReaderProps) {
   const scroller = useRef<HTMLDivElement>(null);
   const reading = useRef(new Set<number>());
 
-  // Open the document; it, its worker and its pages go with the reader.
+  // Open the document; it, its worker and its pages go with the reader,
+  // even while it is still opening (review round 1, F1).
   useEffect(() => {
-    let alive = true;
+    const unmounted = new AbortController();
+    const alive = () => !unmounted.signal.aborted;
     let opened: OpenedPdf | null = null;
-    openPdf(data).then(
+    openPdf(data, unmounted.signal).then(
       (document) => {
-        if (!alive) return document.destroy();
+        if (!alive()) return document.destroy();
         opened = document;
         setPdf(document);
         setSizes(new Array<PdfPageSize | null>(document.pages).fill(null));
@@ -131,11 +133,11 @@ export function PdfReader({ name, data, onDownload }: PdfReaderProps) {
         setPhase("ready");
       },
       () => {
-        if (alive) setPhase("error");
+        if (alive()) setPhase("error");
       },
     );
     return () => {
-      alive = false;
+      unmounted.abort();
       opened?.destroy();
     };
   }, [data]);

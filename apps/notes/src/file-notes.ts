@@ -17,6 +17,18 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const OBJECT_ID = /^[a-z0-9]{16,64}$/;
 const ATTACHMENT = /^attachment:([a-z0-9]{16,64})$/;
 
+/**
+ * The blocks a file note's title line may be: every text block the schema
+ * has, whatever its style (the first line is the title, D80). The editor's
+ * rule uses this same set (review round 1, F5); a test checks it against
+ * the schema's text blocks.
+ */
+export const TITLE_BLOCKS: ReadonlySet<string> = new Set([
+  "paragraph",
+  "heading",
+  "code_block",
+]);
+
 /** The file a file note shows. */
 export interface FileNoteFile {
   /** A file block, or an image showing an uploaded picture. */
@@ -90,7 +102,8 @@ export function fileNoteFile(doc: unknown): FileNoteFile | null {
   const title = blocks[0];
   const second = blocks[1];
   if (!title || !second) return null;
-  if (title.type !== "paragraph" && title.type !== "heading") return null;
+  if (typeof title.type !== "string" || !TITLE_BLOCKS.has(title.type))
+    return null;
   const file = attachmentOf(second);
   if (!file || mediaCount(doc) !== 1) return null;
   return file;

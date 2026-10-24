@@ -106,9 +106,15 @@ const api = (page: Page) => ({
 
 /**
  * A small PDF: one page per entry, each line set in Helvetica. Generated
- * here (no private content); pdf.js parses it as any PDF.
+ * here (no private content); pdf.js parses it as any PDF. `size` is the
+ * page in PDF units; `encrypted` adds a standard security handler whose
+ * password is not empty, so pdf.js asks for a password.
  */
-function pdf(pages: string[][]): Buffer {
+function pdf(
+  pages: string[][],
+  options: { size?: [number, number]; encrypted?: boolean } = {},
+): Buffer {
+  const [width, height] = options.size ?? [612, 792];
   const objects: string[] = [];
   const escape = (text: string) => text.replace(/[\\()]/g, (c) => "\\" + c);
   objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
@@ -117,11 +123,11 @@ function pdf(pages: string[][]): Buffer {
     .join(" ")}] /Count ${pages.length} >>`;
   objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
   pages.forEach((lines, index) => {
-    const content = `BT /F1 18 Tf 24 TL 72 740 Td ${lines
+    const content = `BT /F1 18 Tf 24 TL ${Math.min(72, width / 4)} ${height - 52} Td ${lines
       .map((line) => `(${escape(line)}) '`)
       .join(" ")} ET`;
     objects[4 + index * 2] =
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ` +
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] ` +
       `/Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + index * 2} 0 R >>`;
     objects[5 + index * 2] =
       `<< /Length ${content.length} >>\nstream\n${content}\nendstream`;
@@ -139,7 +145,11 @@ function pdf(pages: string[][]): Buffer {
       .slice(1)
       .map((offset) => String(offset).padStart(10, "0") + " 00000 n \n")
       .join("") +
-    `trailer\n<< /Size ${objects.length} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+    `trailer\n<< /Size ${objects.length} /Root 1 0 R${
+      options.encrypted
+        ? ` /Encrypt << /Filter /Standard /V 1 /R 2 /O <${"ab".repeat(32)}> /U <${"cd".repeat(32)}> /P -4 >> /ID [<${"01".repeat(16)}> <${"01".repeat(16)}>]`
+        : ""
+    } >>\nstartxref\n${xref}\n%%EOF\n`;
   return Buffer.from(out, "latin1");
 }
 
@@ -1106,4 +1116,398 @@ test("with files on, file notes list with a type icon and their type and size; a
   await page.getByRole("searchbox").fill("");
   await setAppFiles(page, false);
   await expect(page.locator(".row-file, .row-file-visual")).toHaveCount(0);
+});
+
+// ---- Making file notes from the list: the app harness (harness/app.html:
+// the real app, notes cache and session, connected to a stand-in for the
+// Convex client; mocked) ----
+
+interface AppWindow {
+  __app: {
+    creates: { clientKey: string; account: unknown }[];
+    notes(): { id: string; blocks: string[] }[];
+    holdCreates: boolean;
+    releaseCreates(): void;
+    loseNextCreate: boolean;
+    holdNextContent: boolean;
+    releaseContent(): void;
+    setFiles(on: boolean): void;
+  };
+}
+const app = (page: Page) => ({
+  notes: () =>
+    page.evaluate(() => (window as unknown as AppWindow).__app.notes()),
+  creates: () =>
+    page.evaluate(() => (window as unknown as AppWindow).__app.creates),
+  set: (
+    values: Partial<
+      Record<"holdCreates" | "loseNextCreate" | "holdNextContent", boolean>
+    >,
+  ) =>
+    page.evaluate((values) => {
+      Object.assign((window as unknown as AppWindow).__app, values);
+    }, values),
+  releaseCreates: () =>
+    page.evaluate(() =>
+      (window as unknown as AppWindow).__app.releaseCreates(),
+    ),
+  releaseContent: () =>
+    page.evaluate(() =>
+      (window as unknown as AppWindow).__app.releaseContent(),
+    ),
+  setFiles: (on: boolean) =>
+    page.evaluate(
+      (on) => (window as unknown as AppWindow).__app.setFiles(on),
+      on,
+    ),
+});
+
+async function appHarness(page: Page) {
+  await serve(page);
+  await uploads(page);
+  await page.goto("/harness/app.html");
+  await expect(page.getByTestId("session-status")).toHaveText("Connected");
+}
+
+const phone = (info: { project: { name: string } }) =>
+  info.project.name.includes("mobile");
+
+/**
+ * Add a file from the list: Upload on phones, a drop on wide screens. The
+ * file is the same each time it is given the same name and bytes.
+ */
+async function addFile(
+  page: Page,
+  info: { project: { name: string } },
+  file: { name: string; mimeType: string; buffer: Buffer },
+) {
+  if (phone(info)) {
+    const chooser = page.waitForEvent("filechooser");
+    await page.getByRole("button", { name: "Upload a file" }).click();
+    await (await chooser).setFiles(file);
+    return;
+  }
+  await page.evaluate(
+    (file) => {
+      const list = document.querySelector(".note-list")!;
+      const data = new DataTransfer();
+      data.items.add(
+        new File(
+          [Uint8Array.from(atob(file.base64), (c) => c.charCodeAt(0))],
+          file.name,
+          { type: file.mimeType, lastModified: 1_700_000_000_000 },
+        ),
+      );
+      for (const type of ["dragover", "drop"])
+        list.dispatchEvent(
+          new DragEvent(type, {
+            dataTransfer: data,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+    },
+    {
+      name: file.name,
+      mimeType: file.mimeType,
+      base64: file.buffer.toString("base64"),
+    },
+  );
+}
+
+/** The server's notes whose title is `title`. */
+const notesTitled = async (page: Page, title: string) =>
+  (await app(page).notes()).filter((note) => note.blocks[0] === title);
+
+/** On phones the note covers the list; back to it. */
+async function backToList(page: Page, info: { project: { name: string } }) {
+  if (phone(info))
+    await page.getByRole("button", { name: "All notes" }).click();
+}
+
+test("with files on and a connection, the list takes a file (Upload on phones, a drop on wide screens) and makes a file note", async ({
+  page,
+}, info) => {
+  await appHarness(page);
+  const upload = page.getByRole("button", { name: "Upload a file" });
+  if (phone(info)) await expect(upload).toBeVisible();
+  else await expect(upload).toBeHidden();
+  await addFile(page, info, {
+    name: "report.pdf",
+    mimeType: "application/pdf",
+    buffer: REPORT,
+  });
+  await drawn(page);
+  await expect
+    .poll(async () => (await notesTitled(page, "report.pdf"))[0]?.blocks)
+    .toEqual(["report.pdf", "file:report.pdf"]);
+  // Files off: no Upload, and a drop is left alone.
+  await backToList(page, info);
+  await app(page).setFiles(false);
+  await expect(upload).toHaveCount(0);
+  if (!phone(info)) expect(await dropOnList(page)).toEqual([false, false]);
+});
+
+test("F3: a creation whose answer is lost keeps its key: the same file again, or Retry, makes no second note", async ({
+  page,
+}, info) => {
+  await appHarness(page);
+  const archive = {
+    name: "archive.zip",
+    mimeType: "application/zip",
+    buffer: ARCHIVE,
+  };
+  await app(page).set({ loseNextCreate: true });
+  await addFile(page, info, archive);
+  // The server made the note; its answer never came.
+  const pending = page.getByRole("group", { name: "New note for archive.zip" });
+  await expect(pending.getByRole("status")).toHaveText(
+    "No answer from the server. Retry to finish the note.",
+  );
+  await expect(pending.getByRole("button", { name: "Remove" })).toBeVisible();
+  expect(await notesTitled(page, "archive.zip")).toHaveLength(1);
+  // The same file again sends the same key: the server returns that note.
+  await addFile(page, info, archive);
+  await expect(page.locator(".note-file-large .file-name")).toHaveText(
+    "archive.zip",
+  );
+  await expect
+    .poll(async () => (await notesTitled(page, "archive.zip"))[0]?.blocks)
+    .toEqual(["archive.zip", "file:archive.zip"]);
+  expect(await notesTitled(page, "archive.zip")).toHaveLength(1);
+  const [first, second] = await app(page).creates();
+  expect(second!.clientKey).toBe(first!.clientKey);
+  expect(first!.account).toBe("harness-account");
+
+  // Retry does the same.
+  await backToList(page, info);
+  await app(page).set({ loseNextCreate: true });
+  await addFile(page, info, {
+    name: "harbour.png",
+    mimeType: "image/png",
+    buffer: PHOTO,
+  });
+  const photo = page.getByRole("group", { name: "New note for harbour.png" });
+  await photo.getByRole("button", { name: "Retry" }).click();
+  await expect(page.locator(".note-image.is-file-note img")).toBeVisible();
+  expect(await notesTitled(page, "harbour.png")).toHaveLength(1);
+  const keys = (await app(page).creates()).map((call) => call.clientKey);
+  expect(keys[3]).toBe(keys[2]);
+  expect(new Set(keys).size).toBe(2);
+});
+
+test("F3: while a creation's answer is awaited, the same file is not sent again", async ({
+  page,
+}, info) => {
+  await appHarness(page);
+  const archive = {
+    name: "archive.zip",
+    mimeType: "application/zip",
+    buffer: ARCHIVE,
+  };
+  await app(page).set({ holdCreates: true });
+  await addFile(page, info, archive);
+  const pending = page.getByRole("group", { name: "New note for archive.zip" });
+  await expect(pending.getByRole("status")).toHaveText("Making its note…");
+  await expect.poll(async () => (await app(page).creates()).length).toBe(1);
+  await addFile(page, info, archive);
+  await expect(page.locator(".toast")).toContainText(
+    "“archive.zip” is already on its way.",
+  );
+  await page.waitForTimeout(300);
+  expect(await app(page).creates()).toHaveLength(1);
+  await app(page).releaseCreates();
+  await expect
+    .poll(async () => (await notesTitled(page, "archive.zip"))[0]?.blocks)
+    .toEqual(["archive.zip", "file:archive.zip"]);
+  expect(await notesTitled(page, "archive.zip")).toHaveLength(1);
+});
+
+test("F4: files added one after another each reach their own note", async ({
+  page,
+}, info) => {
+  await appHarness(page);
+  // first.zip's note is made, and its opening held.
+  await app(page).set({ holdNextContent: true });
+  await addFile(page, info, {
+    name: "first.zip",
+    mimeType: "application/zip",
+    buffer: Buffer.from("PK first"),
+  });
+  await expect.poll(() => notesTitled(page, "first.zip")).toHaveLength(1);
+  // second.zip is made, opened and uploaded meanwhile.
+  await addFile(page, info, {
+    name: "second.zip",
+    mimeType: "application/zip",
+    buffer: Buffer.from("PK second"),
+  });
+  await expect
+    .poll(async () => (await notesTitled(page, "second.zip"))[0]?.blocks)
+    .toEqual(["second.zip", "file:second.zip"]);
+  // first.zip's note opens at last, and gets first.zip.
+  await app(page).releaseContent();
+  await expect
+    .poll(async () => (await notesTitled(page, "first.zip"))[0]?.blocks)
+    .toEqual(["first.zip", "file:first.zip"]);
+  await expect(page.locator(".file-note-operation")).toHaveCount(0);
+});
+
+// ---- Review round 1: PDF workers end with their reader (F1) ----
+
+/** Count the page's Workers and which of them were terminated. */
+async function countWorkers(page: Page) {
+  await page.addInitScript(() => {
+    const Native = window.Worker;
+    const made: { url: string; ended: boolean }[] = [];
+    class Counted extends Native {
+      readonly record: { url: string; ended: boolean };
+      constructor(url: string | URL, options?: WorkerOptions) {
+        super(url, options);
+        this.record = { url: String(url), ended: false };
+        made.push(this.record);
+      }
+      override terminate() {
+        this.record.ended = true;
+        super.terminate();
+      }
+    }
+    window.Worker = Counted;
+    Object.assign(window, { __workers: made });
+  });
+}
+/** pdf.js workers made so far: whether each was terminated. */
+const pdfWorkers = (page: Page) =>
+  page.evaluate(() =>
+    (
+      window as unknown as { __workers: { url: string; ended: boolean }[] }
+    ).__workers
+      .filter((worker) => /pdf\.worker/.test(worker.url))
+      .map((worker) => worker.ended),
+  );
+/** Every pdf.js worker made so far has ended. */
+const allEnded = async (page: Page) => {
+  const workers = await pdfWorkers(page);
+  return workers.length > 0 && workers.every(Boolean);
+};
+
+test("F1: closing the note or the full-screen reader ends the PDF's worker", async ({
+  page,
+}) => {
+  await countWorkers(page);
+  await serve(page);
+  const editor = await harness(page);
+  await api(page).load(PDF_NOTE);
+  await drawn(page);
+  expect(await pdfWorkers(page)).toEqual([false]);
+  await api(page).close();
+  await expect.poll(() => allEnded(page)).toBe(true);
+  // Full screen, closed with Escape.
+  await api(page).load(CHIP_NOTE);
+  await openChip(editor.locator(".file-chip"));
+  await drawn(page.getByRole("dialog", { name: "PDF: report.pdf" }));
+  expect((await pdfWorkers(page)).filter((ended) => !ended)).toHaveLength(1);
+  await page.keyboard.press("Escape");
+  await expect.poll(() => allEnded(page)).toBe(true);
+});
+
+for (const [kind, bytes] of [
+  ["damaged", Buffer.from("%PDF-1.7\nthis is not a document\n")],
+  ["encrypted", pdf([["Secret"]], { encrypted: true })],
+] as const)
+  test(`F1: a ${kind} PDF's worker ends with the failure`, async ({ page }) => {
+    await countWorkers(page);
+    await serve(page, { pdf: bytes });
+    const editor = await harness(page);
+    await api(page).load(PDF_NOTE);
+    await expect(editor.locator(".pdf-reader-error")).toContainText(
+      "This PDF could not be opened here.",
+    );
+    await expect.poll(() => allEnded(page)).toBe(true);
+  });
+
+for (const fence of FENCES)
+  test(`F1: ${fence} ends the workers of the inline and full-screen readers`, async ({
+    page,
+  }) => {
+    await countWorkers(page);
+    await serve(page);
+    const editor = await harness(page);
+    await api(page).setObjects([PDF_ID]);
+    await api(page).load(PDF_NOTE);
+    await drawn(page);
+    await editor
+      .getByRole("button", { name: "Open in full screen: report.pdf" })
+      .click();
+    await drawn(page.getByRole("dialog", { name: "PDF: report.pdf" }));
+    const before = (await pdfWorkers(page)).length;
+    expect(before).toBe(2);
+    await fenceNow(page, fence);
+    // Those two end; a reader that loads again has a worker of its own.
+    await expect
+      .poll(async () => (await pdfWorkers(page)).slice(0, before))
+      .toEqual([true, true]);
+  });
+
+test("F1: a reader closed while pdf.js is still starting leaves no worker", async ({
+  page,
+}) => {
+  await countWorkers(page);
+  await serve(page);
+  // pdf.js's worker script never arrives: the document stays opening.
+  let requested = 0;
+  await page.route(
+    // The worker's own script, not the module that gives its address.
+    (url) => url.pathname.endsWith("/pdf.worker.min.mjs") && !url.search,
+    async () => {
+      requested++;
+    },
+  );
+  const editor = await harness(page);
+  await api(page).load(PDF_NOTE);
+  await expect.poll(() => requested).toBe(1);
+  await expect(editor.locator(".pdf-status")).toHaveText("Opening…");
+  expect(await pdfWorkers(page)).toEqual([false]);
+  await api(page).close();
+  await expect.poll(() => pdfWorkers(page)).toEqual([true]);
+});
+
+// ---- Review round 1: canvas size (F2) ----
+
+test.describe("F2: a page's canvas", () => {
+  test.use({ viewport: { width: 1500, height: 900 }, deviceScaleFactor: 3 });
+
+  for (const [kind, size] of [
+    ["a 10,000-unit page", [10_000, 10_000]],
+    ["a one-inch page", [72, 72]],
+  ] as const)
+    test(`is sharp and within the pixel cap: ${kind} at DPR 3`, async ({
+      page,
+    }, info) => {
+      test.skip(phone(info), "a wide reader");
+      await serve(page, {
+        pdf: pdf([["Page 1 heading"]], { size: [...size] }),
+      });
+      const editor = await harness(page);
+      await api(page).load(CHIP_NOTE);
+      await openChip(editor.locator(".file-chip"));
+      const dialog = page.getByRole("dialog", { name: "PDF: report.pdf" });
+      const canvas = dialog.locator('.pdf-page[data-page="1"] canvas');
+      await expect(canvas).toBeVisible();
+      await expect
+        .poll(() =>
+          canvas.evaluate((element: HTMLCanvasElement) => element.width),
+        )
+        .toBeGreaterThan(0);
+      const { width, height, shown } = await canvas.evaluate(
+        (element: HTMLCanvasElement) => ({
+          width: element.width,
+          height: element.height,
+          shown: element.getBoundingClientRect().width,
+        }),
+      );
+      expect(shown).toBeGreaterThan(1_000);
+      expect(width * height).toBeLessThanOrEqual(4_000_000);
+      // At least one bitmap pixel for each CSS pixel shown.
+      expect(width).toBeGreaterThanOrEqual(Math.floor(shown));
+    });
 });

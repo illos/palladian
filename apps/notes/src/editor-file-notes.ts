@@ -3,6 +3,7 @@ import type { Node as ProseMirrorNode } from "prosemirror-model";
 import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
 import { fileWritesEnabled } from "./file-capability";
+import { TITLE_BLOCKS } from "./file-notes";
 
 /**
  * The file-note view in the editor (plan 08 B4, D103). When a note is a
@@ -31,7 +32,7 @@ function uploaded(node: ProseMirrorNode) {
 
 /**
  * Where the file of a file note is: the second block, if the first is a
- * text line, the second an uploaded file, and nothing else in the note is an
+ * title line (`TITLE_BLOCKS`, as for the list), the second an uploaded file, and nothing else in the note is an
  * image or file. Null for any other note. Cheap for ordinary notes: most
  * fail at the second block, before the walk.
  */
@@ -41,7 +42,7 @@ export function fileNoteBlock(
   if (doc.childCount < 2) return null;
   const title = doc.child(0);
   const file = doc.child(1);
-  if (!title.isTextblock || !uploaded(file)) return null;
+  if (!TITLE_BLOCKS.has(title.type.name) || !uploaded(file)) return null;
   let media = 0;
   doc.descendants((node) => {
     if (media > 1) return false;

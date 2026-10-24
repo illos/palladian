@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { notesSchema } from "@palladian/notes-core/schema";
+import { canvasScale, MAX_CANVAS_PIXELS } from "../../src/pdf-canvas";
 import {
+  TITLE_BLOCKS,
   fileNoteFile,
   fileNoteLabel,
   fileNoteOf,
@@ -159,6 +161,40 @@ describe("file notes (plan 08 B4)", () => {
     expect(fileNoteStart(big)).toEqual({
       refused: "Files can be at most 25 MB.",
     });
+  });
+});
+
+describe("review round 1", () => {
+  test("F5: the title blocks are every text block the schema has", () => {
+    const textblocks = Object.values(notesSchema.nodes)
+      .filter((type) => type.isTextblock)
+      .map((type) => type.name)
+      .sort();
+    expect([...TITLE_BLOCKS].sort()).toEqual(textblocks);
+  });
+
+  test("F2: a canvas is sharp up to the screen's pixel ratio and never over the pixel cap", () => {
+    const pixels = (page: { width: number; height: number }, scale: number) =>
+      Math.floor(page.width * scale) * Math.floor(page.height * scale);
+    // The reviewer's case: a 10,000-unit page fitted to 1,400 px at DPR 3.
+    const huge = { width: 10_000, height: 10_000 };
+    const big = canvasScale(huge, 1_400 / 10_000, 3);
+    expect(pixels(huge, big)).toBeLessThanOrEqual(MAX_CANVAS_PIXELS);
+    expect(pixels(huge, big)).toBeGreaterThan(0.99 * MAX_CANVAS_PIXELS);
+    // A small page shown at 1,152 px gets a 1,152 px bitmap (DPR 1)...
+    const card = { width: 72, height: 72 };
+    expect(Math.floor(card.width * canvasScale(card, 1_152 / 72, 1))).toBe(
+      1_152,
+    );
+    // ...and more on a dense screen, up to the cap.
+    const dense = canvasScale(card, 1_152 / 72, 3);
+    expect(card.width * dense).toBeGreaterThan(1_152);
+    expect(pixels(card, dense)).toBeLessThanOrEqual(MAX_CANVAS_PIXELS);
+    // A letter page fitted to 600 px at DPR 2: twice the pixels across.
+    const letter = { width: 612, height: 792 };
+    expect(Math.round(letter.width * canvasScale(letter, 600 / 612, 2))).toBe(
+      1_200,
+    );
   });
 });
 

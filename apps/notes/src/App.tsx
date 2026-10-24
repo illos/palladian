@@ -18,7 +18,7 @@ import type {
 } from "./cache";
 import { emptyDocument, validateCachedDocument } from "./document";
 import { smartDate } from "./dates";
-import { copyInSession } from "./in-session";
+import { copyInSession, serverAnswered } from "./in-session";
 import { CopyKeys, restoreCopy, type VersionCopies } from "./copy-keys";
 import { EditorSurface } from "./EditorSurface";
 import { Icon } from "./Icons";
@@ -77,12 +77,11 @@ import {
 } from "./file-capability";
 import { attachmentCache } from "./attachment-cache";
 import { liveAttachmentService } from "./attachments";
+import { fileNoteLabel, fileNoteRest, fileNoteStart } from "./file-notes";
 import {
-  fileNoteLabel,
-  fileNoteRest,
-  fileNoteStart,
-  type FileNoteUpload,
-} from "./file-notes";
+  FileNoteOperations,
+  type FileNoteOperation,
+} from "./file-note-operations";
 import { FileRowVisual, useFileNotes } from "./file-rows";
 import { watchNotebookCapability } from "./notebook-capability";
 import { liveStateSource, type LiveBox } from "./liveBox";
@@ -172,11 +171,6 @@ const SHEET_SWIPE = 40;
 
 /** The data type a note row carries when dragged onto a notebook (desktop). */
 const NOTE_DRAG = "application/x-palladian-note";
-/**
- * How long a new file note waits for its editor to start the upload (B4):
- * opening it and catching up with the server take moments.
- */
-const FILE_NOTE_WAIT_MS = 20_000;
 /** Whether a drag carries files from outside the app. */
 const carriesFiles = (event: React.DragEvent) =>
   event.dataTransfer.types.includes("Files");
@@ -429,10 +423,6 @@ export function App({
    * its rows look as before B4.
    */
   const filesOn = useSyncExternalStore(onFileWritesChange, fileWritesEnabled);
-  /** A new file note waiting for its editor to upload its file (B4). */
-  const [fileNoteUpload, setFileNoteUpload] = useState<FileNoteUpload | null>(
-    null,
-  );
   const fileNoteInput = useRef<HTMLInputElement>(null);
   const [fileDrop, setFileDrop] = useState(false);
 
@@ -2075,21 +2065,53 @@ export function App({
   );
 
   /**
+   * File notes being made from the list, one operation per file (review
+   * round 1, F3 and F4): each keeps its creation key until the server
+   * answers, and its file waits for its own note's editor.
+   */
+  const [fileNotes] = useState(
+    () =>
+      new FileNoteOperations({
+        lost: (operation) => {
+          // Told only in the session it began in.
+          if (
+            snapshotRef.current.accountId !== operation.accountId ||
+            snapshotRef.current.generation !== operation.generation
+          )
+            return;
+          toast(
+            operation.noteId
+              ? `“${operation.title}” was not uploaded. Its note is there; add the file with + File.`
+              : `“${operation.title}” was not uploaded.`,
+          );
+        },
+      }),
+  );
+  useSyncExternalStore(fileNotes.subscribe, fileNotes.version);
+  const fileNoteOperations = fileNotes.list(accountId, snapshot.generation);
+  // Operations of another account or session generation end quietly;
+  // turning files off ends them all.
+  useEffect(() => {
+    fileNotes.follow(permitted ? accountId : null, snapshot.generation);
+  }, [fileNotes, permitted, accountId, snapshot.generation]);
+  useEffect(() => {
+    if (!filesOn) fileNotes.clear();
+  }, [fileNotes, filesOn]);
+
+  /**
    * Make a file note: a note whose first line is the file's name, made
    * through `notes.create` as Duplicate is (in this account and session
    * only, `copyInSession`), then opened; its editor uploads the file after
    * the title through B3's uploads and their fences (FileNoteUpload). If
    * the upload fails, the open note keeps Retry and Remove; if it is
    * cancelled or the note closes first, the note stays with its title only.
+   * The same file again, while its note is on its way, sends nothing new.
    */
   async function makeFileNote(file: File) {
     if (!fileNotesOn || !accountId) return;
     if (fileNoteBlocked) return toast(fileNoteBlocked);
     const start = fileNoteStart(file);
     if ("refused" in start) return toast(start.refused);
-    const current = sessionTicket();
-    const account = accountId;
-    const generation = snapshotRef.current.generation;
     // Where New would put it: this notebook if you can add notes there,
     // otherwise your default notebook.
     const notebookId =
@@ -2099,8 +2121,20 @@ export function App({
       ) ??
       liveState.profile?.defaultNotebookId ??
       undefined;
-    await copyInSession(
-      current,
+    const begun = fileNotes.begin(
+      { accountId, generation: snapshotRef.current.generation },
+      file,
+      { title: start.title, document: start.document, notebookId },
+    );
+    if ("duplicate" in begun)
+      return toast(`“${start.title}” is already on its way.`);
+    await sendFileNote(begun.send);
+  }
+
+  /** Send an operation's `notes.create`, with its key, in its session. */
+  async function sendFileNote(operation: FileNoteOperation) {
+    const outcome = await copyInSession(
+      sessionTicket(),
       async () => {
         const { createFileNote } = await import("./note-tools");
         const client = liveRef.current?.client;
@@ -2110,61 +2144,42 @@ export function App({
           : null;
       },
       ({ createFileNote, client }) =>
-        createFileNote(client, account, start.document, notebookId),
+        createFileNote(
+          client,
+          operation.accountId,
+          operation.document,
+          operation.notebookId,
+          operation.key,
+        ),
       (id) => void openRemote(id),
       {
         made: (noteId, open) => {
-          let waiting: File | null = file;
-          const upload: FileNoteUpload = {
-            accountId: account,
-            generation,
-            noteId,
-            title: start.title,
-            take() {
-              const taken = waiting;
-              waiting = null;
-              if (taken)
-                setFileNoteUpload((now) => (now === upload ? null : now));
-              return taken;
-            },
-          };
-          setFileNoteUpload(upload);
-          open();
+          if (fileNotes.made(operation.id, noteId)) open();
         },
-        failed,
+        failed: (failure) => {
+          // A refusal is an answer: nothing was made, and the operation ends.
+          if (!serverAnswered({ failure })) return;
+          fileNotes.remove(operation.id);
+          failed(failure);
+        },
       },
     );
+    // Sent without an answer, or not sent: the key stays for Retry.
+    if (!serverAnswered(outcome))
+      fileNotes.unanswered(
+        operation.id,
+        "failure" in outcome
+          ? "No answer from the server. Retry to finish the note."
+          : "Not sent. Retry when connected.",
+      );
   }
 
-  // A new file note's file waits for its editor a short while, in its own
-  // session and while files are on; otherwise it is not uploaded, and the
-  // note keeps its title.
-  useEffect(() => {
-    const upload = fileNoteUpload;
-    if (!upload) return;
-    const lost = () => {
-      setFileNoteUpload((now) => (now === upload ? null : now));
-      if (
-        upload.take() &&
-        snapshotRef.current.accountId === upload.accountId &&
-        snapshotRef.current.generation === upload.generation
-      )
-        toast(
-          `“${upload.title}” was not uploaded. Its note is there; add the file with + File.`,
-        );
-    };
-    if (
-      upload.accountId !== accountId ||
-      upload.generation !== snapshot.generation
-    ) {
-      upload.take();
-      setFileNoteUpload(null);
-      return;
-    }
-    if (!filesOn) return lost();
-    const timer = setTimeout(lost, FILE_NOTE_WAIT_MS);
-    return () => clearTimeout(timer);
-  }, [fileNoteUpload, accountId, snapshot.generation, filesOn]);
+  function retryFileNote(id: string) {
+    if (!fileNotesOn) return;
+    if (fileNoteBlocked) return toast(fileNoteBlocked);
+    const operation = fileNotes.retry(id);
+    if (operation) void sendFileNote(operation);
+  }
 
   /** Files dropped on the list: one makes a file note. */
   function dropFileNote(files: File[]) {
@@ -2344,6 +2359,57 @@ export function App({
                 );
             }}
           >
+            {fileNoteOperations.length > 0 && (
+              <div className="file-note-operations">
+                {fileNoteOperations.map((operation) => (
+                  <div
+                    key={operation.id}
+                    className="file-note-operation"
+                    role="group"
+                    aria-label={`New note for ${operation.title}`}
+                    data-state={operation.state}
+                  >
+                    <Icon name="file" size={18} />
+                    <span className="file-note-operation-text">
+                      <strong>{operation.title}</strong>
+                      <span role="status">
+                        {operation.state === "creating"
+                          ? "Making its note…"
+                          : operation.state === "made"
+                            ? "Opening its note…"
+                            : operation.message}
+                      </span>
+                    </span>
+                    {operation.state === "unanswered" && (
+                      <span className="file-note-operation-actions">
+                        <button
+                          type="button"
+                          onClick={() => retryFileNote(operation.id)}
+                        >
+                          Retry
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => fileNotes.remove(operation.id)}
+                        >
+                          Remove
+                        </button>
+                      </span>
+                    )}
+                    {operation.state === "made" && operation.noteId && (
+                      <span className="file-note-operation-actions">
+                        <button
+                          type="button"
+                          onClick={() => void openRemote(operation.noteId!)}
+                        >
+                          Open
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
             {visibleRows.slice(0, rowLimit).map((row) => {
               const target = targetOf(row);
               const actions = noteActions(target, liveReady, liveConnected);
@@ -2736,14 +2802,11 @@ export function App({
                 text={currentOpen.text}
                 editable={editable}
                 binding={currentOpen.channel ?? undefined}
-                upload={
-                  fileNoteUpload &&
-                  fileNoteUpload.noteId === currentOpen.id &&
-                  fileNoteUpload.accountId === currentOpen.accountId &&
-                  fileNoteUpload.generation === snapshot.generation
-                    ? fileNoteUpload
-                    : undefined
-                }
+                upload={fileNotes.uploadFor(
+                  currentOpen.accountId,
+                  snapshot.generation,
+                  currentOpen.id,
+                )}
                 attachments={{
                   accountId: currentOpen.accountId,
                   noteId: isLocalNoteId(currentOpen.id) ? null : currentOpen.id,

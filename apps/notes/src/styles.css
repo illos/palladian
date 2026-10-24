@@ -2209,3 +2209,56 @@ ul.member-list {
   opacity: 0;
   pointer-events: none;
 }
+/* File notes on their way (review round 1, F3): creating, without an
+   answer (Retry, Remove), or waiting for their note to open. */
+.file-note-operations {
+  border-bottom: 1px solid var(--border);
+  background: var(--list);
+}
+.file-note-operation {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  color: var(--accent);
+}
+.file-note-operation + .file-note-operation {
+  border-top: 1px solid var(--border);
+}
+.file-note-operation-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  color: var(--secondary);
+  font-size: 12.5px;
+}
+.file-note-operation-text strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+}
+.file-note-operation-actions {
+  display: flex;
+  gap: 6px;
+}
+.file-note-operation-actions button {
+  min-height: 30px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 13px;
+}
+@media (max-width: 760px) {
+  .file-note-operation {
+    padding: 12px 20px;
+  }
+  .file-note-operation-actions button {
+    min-height: 40px;
+  }
+}
