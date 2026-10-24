@@ -410,7 +410,7 @@ Implemented 2026-10-22; accepted after six independent review rounds and release
 
 ### B3. Inline attachments (M)
 
-Implemented 2026-10-23 without backend or fundamentals changes, in review (`docs/reviews/notes-attachments-implementation.md`; round 1 answered, round 2 pending); the iPhone check is pending. It can ship with files off, but files must not be turned on until copied attachments carry their source note through the channel (review F4, a fundamentals change awaiting approval). In an editable note the first tap selects an attachment and a tap on the selected one opens it. Closing a note cancels its unfinished uploads. The byte cache holds 200 MB per device and only the shown account's bytes. "Attachment unavailable" is the placeholder (owner question 8's default).
+Implemented 2026-10-23 without backend or fundamentals changes, in review (`docs/reviews/notes-attachments-implementation.md`; rounds 1 and 2 answered, round 3 pending; while files are off the editor behaves exactly as before B3); the iPhone check is pending. It can ship with files off, but files must not be turned on until copied attachments carry their source note through the channel (review F4, a fundamentals change awaiting approval). In an editable note the first tap selects an attachment and a tap on the selected one opens it. Closing a note cancels its unfinished uploads. The byte cache holds 200 MB per device and only the shown account's bytes. "Attachment unavailable" is the placeholder (owner question 8's default).
 
 **Inserting**
 
