@@ -237,6 +237,24 @@ Review: [notes-attachments-round4-astra-review.md](notes-attachments-round4-astr
 
 Also changed: the harness follows a session change in the cache synchronously, as `App.tsx` does from its session listener, instead of while rendering; a clear keeps an object that is known to be gone unavailable instead of showing it as ready until the next list.
 
+## Review round 5 responses
+
+Report: `notes-attachments-round5-astra-review.md` (verbatim). **Accepted for release with files off.** The reviewer found no new visible behaviour, no reachable upload or byte-persistence path, and no other blocker while files stay off. Rendering matches main, and gate swaps keep the editor's state. R4-1 is resolved, and R4-2's generation fencing passes.
+
+The coordinator released B3 with files off and recorded the remaining findings as conditions for turning files on. While files are off, no attachment is read, downloaded or uploaded, so neither finding can occur.
+
+| Finding | Response |
+| --- | --- |
+| R5-1: pending downloads survive object invalidation | Deferred until before files are turned on. Downloads get an object-specific invalidation generation and an abort controller, so an authoritative removal permanently voids the attempt and access coming back requires a fresh activation. |
+| R5-2: Retry can strand an older admission | Deferred until before files are turned on. Tell the landed request apart from superseded admissions, and cancel a superseded admission through the service it came from. Add the reviewer's ordering as a regression. |
+| R5-3: F4, provenance for copied attachments | Unchanged. It needs owner approval and a fundamentals change. |
+
+**Before files are turned on**, all of these are required:
+
+- R5-1 and R5-2, with regressions and an independent review.
+- F4 (provenance for copied attachments): approved by the owner, built, and reviewed as a protected change.
+- The owner confirms every device runs a build with B3.
+
 ## Evidence
 
 | Check                                                                                                                                  | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Services                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
