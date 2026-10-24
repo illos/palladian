@@ -167,6 +167,22 @@ Also changed:
 - **The app harness** (`harness/app.html`, `src/harness/app.tsx`, test-only): the real `App`, notes cache and session, signed in and connected to a stand-in for the Convex client that keeps notes, step logs and file objects in the page, built as the unit tests' `fake-server.ts` builds a live layer. It also adds a mocked test of the entry points with files on: "with files on and a connection, the list takes a file (Upload on phones, a drop on wide screens) and makes a file note".
 - **One test** ("the inline reader leaves the page at once: session change") now expects the PDF to be read again under the new generation: the harness keeps its editor open across generations (the app opens a new one), so its old "nothing cached" check raced that re-read.
 
+## Release
+
+Released 2026-10-24 from `main` `1769838`, with **files off**, after review round 2 accepted it on that basis.
+
+**What was deployed**
+- Worker `palladian` version `37d98d47` is at 100% from 03:26 UTC.
+- The custom domain and the cron `23 4 * * *` were confirmed through the Cloudflare API, after the known "No access" message on the routes call.
+- No backend, Worker-source or shared-package code changed, so Convex was not redeployed.
+- Before deploying, the names of production's environment variables were listed: neither `FILES_WRITES_ENABLED` nor `NOTEBOOK_DELETE_ENABLED` is set.
+
+**Checks**
+- Before merging, these passed against dev Convex on `1769838`: `file-notes-e2e.mjs`, `attachments-e2e.mjs`, `history-e2e.mjs`, `actions-e2e.mjs`, `live-e2e.mjs`, `arrange-e2e.mjs` and `notebooks-e2e.mjs`.
+- After deploying, `live-e2e.mjs` and `apps/notes-edge/scripts/browser-e2e.mjs` passed against production.
+- The PDF reader chunk and the pdf.js worker module are served from production with status 200 and `text/javascript`. The app page sends no Content-Security-Policy that would restrict the worker; only the consent page and `/files` responses set one.
+- Still pending: WebKit and the iPhone checks.
+
 ## Review round 2 responses
 
 Report: `notes-file-notes-round2-astra-review.md` (verbatim). **Accepted for release with files off.** F1 to F5 are resolved, and B3's R5-1 and R5-2 fixes pass. This acceptance does not cover turning files on.

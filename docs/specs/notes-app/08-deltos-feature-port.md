@@ -433,7 +433,7 @@ Implemented 2026-10-23 without backend or fundamentals changes, accepted after f
 
 ### B4. File notes and the PDF reader (M)
 
-Implemented 2026-10-24 without backend or fundamentals changes; accepted for release with files off after two independent review rounds (`docs/reviews/notes-file-notes-implementation.md`). Upload (phones) and a drop on the list (wide screens) make the note through `notes.create`, as Duplicate does, and its editor uploads the file after the title through B3's uploads; a failed or cancelled upload leaves the note with its title. One file at a time. The reader is pdf.js 6.4.299, loaded only when a PDF shows. List labels come from the documents the device caches; no backend field. B3's R5-1 and R5-2 are fixed with it. While files are off the app is as before; files stay off until F4 lands. The iPhone check is pending.
+Implemented 2026-10-24 without backend or fundamentals changes; accepted after two independent review rounds and released to production on 2026-10-24 with files off (`docs/reviews/notes-file-notes-implementation.md`); the iPhone check is pending. Upload (phones) and a drop on the list (wide screens) make the note through `notes.create`, as Duplicate does, and its editor uploads the file after the title through B3's uploads; a failed or cancelled upload leaves the note with its title. One file at a time. The reader is pdf.js 6.4.299, loaded only when a PDF shows. List labels come from the documents the device caches; no backend field. B3's R5-1 and R5-2 are fixed with it. While files are off the app is as before; files stay off until F4 lands. The iPhone check is pending.
 
 Owner decision D103 adopts this model.
 
